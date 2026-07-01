@@ -1,0 +1,65 @@
+# Ground-truth evaluation set for RegIntel.
+# Each item: a question, expected keywords in the answer, and the docs
+# expected to surface in top-k retrieval. expected_sources must match the
+# filenames produced by scripts/download_corpus.py (exact-string intersection
+# in eval.py). Empty expected_sources = the model SHOULD refuse.
+
+questions:
+  # --- Liquidity Coverage Ratio (Regulation WW / Basel III LCR) ---
+  - question: "What minimum liquidity coverage ratio must a covered institution maintain?"
+    expected_keywords: ["100", "percent", "liquidity coverage ratio"]
+    expected_sources:
+      - "cfr_title12_part249_Regulation-WW-Liquidity-Coverage-Ratio.txt"
+      - "bis_basel_iii_lcr_bcbs238.pdf"
+
+  - question: "What qualifies as a high-quality liquid asset (HQLA) under the LCR?"
+    expected_keywords: ["HQLA", "level 1", "liquid"]
+    expected_sources:
+      - "cfr_title12_part249_Regulation-WW-Liquidity-Coverage-Ratio.txt"
+
+  # --- Capital adequacy (Regulation Q / Basel III) ---
+  - question: "What is the minimum common equity tier 1 (CET1) capital ratio?"
+    expected_keywords: ["4.5", "common equity tier 1", "risk-weighted"]
+    expected_sources:
+      - "cfr_title12_part217_Regulation-Q-Capital-Adequacy.txt"
+
+  - question: "What is the capital conservation buffer?"
+    expected_keywords: ["2.5", "buffer", "common equity tier 1"]
+    expected_sources:
+      - "cfr_title12_part217_Regulation-Q-Capital-Adequacy.txt"
+      - "bis_basel_iii_finalising_reforms_d424.pdf"
+
+  - question: "What minimum total capital ratio must a banking organization hold?"
+    expected_keywords: ["8", "percent", "total capital"]
+    expected_sources:
+      - "cfr_title12_part217_Regulation-Q-Capital-Adequacy.txt"
+
+  # --- Enhanced prudential standards (Regulation YY) ---
+  - question: "What does Regulation YY require for company-run stress testing?"
+    expected_keywords: ["stress test", "prudential", "covered company"]
+    expected_sources:
+      - "cfr_title12_part252_Regulation-YY-Enhanced-Prudential-Standards.txt"
+
+  # --- BSA / AML (31 CFR 1020, FinCEN) ---
+  - question: "When must a bank file a Suspicious Activity Report?"
+    expected_keywords: ["suspicious activity report", "SAR", "report"]
+    expected_sources:
+      - "cfr_title31_part1020_BSA-AML-Rules-for-Banks.txt"
+
+  - question: "What customer identification program requirements apply to banks?"
+    expected_keywords: ["customer identification", "CIP", "identity"]
+    expected_sources:
+      - "cfr_title31_part1020_BSA-AML-Rules-for-Banks.txt"
+
+  # --- Refusal cases — NOT covered by the bundled corpus ---
+  - question: "What is the net stable funding ratio (NSFR) requirement?"
+    expected_keywords: ["don't contain", "not", "sources"]
+    expected_sources: []   # NSFR (12 CFR 250 / Basel) not bundled → should refuse
+
+  - question: "What are the state-level money transmitter licensing rules in Texas?"
+    expected_keywords: ["don't contain", "not", "state"]
+    expected_sources: []   # state regulation not bundled → should refuse
+
+  - question: "How do I calculate my personal income tax?"
+    expected_keywords: ["don't contain", "not", "tax"]
+    expected_sources: []   # out of domain → should refuse

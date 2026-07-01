@@ -1,0 +1,15 @@
+.venv/
+__pycache__/
+*.pyc
+.env
+data/raw/
+data/chroma/
+data/bm25_index.pkl
+*.sqlite
+*.sqlite3
+.pytest_cache/
+.ipynb_checkpoints/
+.DS_Store
+*.egg-info/
+build/
+dist/
