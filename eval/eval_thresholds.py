@@ -2,9 +2,14 @@
 that are actually in the source text?
 
 Run: python -m eval.eval_thresholds
+Run as a CI gate: python -m eval.eval_thresholds --gate   (exits 1 on
+regression below the threshold below; --gate only changes the exit code,
+not the output, so `> eval/thresholds_results.md` still works.)
 """
 from __future__ import annotations
 
+import argparse
+import sys
 from pathlib import Path
 
 import yaml
@@ -13,8 +18,19 @@ from src.warehouse import lookup_threshold
 
 CHECKS_PATH = Path("eval/thresholds_questions.yaml")
 
+# CI gate threshold, set below the 5/5 this eval currently gets: extraction
+# is itself an LLM pass (scripts/extract_thresholds.py), so which candidate
+# chunks get captured can vary slightly run to run, not just query-time
+# generation. Tolerates one flake without masking a genuine regression.
+CHECKS_MIN_RATE = 0.8  # 4/5
+
 
 def main() -> None:
+    parser = argparse.ArgumentParser(description="Warehouse extraction eval (Phase 2).")
+    parser.add_argument("--gate", action="store_true",
+                         help="Exit 1 if results fall below the CI threshold.")
+    args = parser.parse_args()
+
     checks = yaml.safe_load(CHECKS_PATH.read_text())["checks"]
 
     results = []
@@ -46,6 +62,13 @@ def main() -> None:
             print(f"| {r['query']} | {expected_str} | {r['found_rows']} | ✅ | {citation} |")
         else:
             print(f"| {r['query']} | {expected_str} | {r['found_rows']} | ❌ | — |")
+
+    if args.gate:
+        rate = hits / len(results) if results else 1.0
+        if rate < CHECKS_MIN_RATE:
+            print(f"\nGATE FAILED: {hits}/{len(results)} = {rate:.0%} < {CHECKS_MIN_RATE:.0%}",
+                  file=sys.stderr)
+            sys.exit(1)
 
 
 if __name__ == "__main__":

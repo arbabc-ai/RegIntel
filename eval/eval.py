@@ -1,9 +1,14 @@
 """Eval harness: hit-rate@5 + Claude-as-judge faithfulness scoring.
 
 Run: python -m eval.eval
+Run as a CI gate: python -m eval.eval --gate   (exits 1 on regression below
+the thresholds below; prints the same report either way — --gate only
+changes the exit code, not the output, so `> eval/results.md` still works.)
 """
 from __future__ import annotations
 
+import argparse
+import sys
 from pathlib import Path
 
 import yaml
@@ -16,6 +21,16 @@ from src.retrieve import retrieve
 load_dotenv()
 
 QUESTIONS_PATH = Path("eval/questions.yaml")
+
+# CI gate thresholds. Set below the 8/8 and 3/3 this eval currently gets, not
+# at 100%: local LLM generation isn't perfectly deterministic run to run even
+# at temperature 0 (context caching, minor Ollama version drift), so a hard
+# 100% gate would occasionally fail CI for no real regression. These catch a
+# genuine break (e.g. the corpus failing to download, or a prompt change that
+# actually breaks grounding) without flaking on a single-question wobble.
+RETRIEVAL_HIT_RATE_MIN = 0.75  # 6/8
+REFUSAL_ACCURACY_MIN = 0.66    # 2/3
+MEAN_FAITHFULNESS_MIN = 1.5    # observed 2.00; half the 0-3 scale as a floor
 
 JUDGE_SYSTEM = "You are a strict faithfulness judge. Respond with ONLY a single digit."
 
@@ -58,6 +73,11 @@ def _is_refusal(ans_text: str) -> bool:
 
 
 def main() -> None:
+    parser = argparse.ArgumentParser(description="RAG eval (Phase 1).")
+    parser.add_argument("--gate", action="store_true",
+                         help="Exit 1 if results fall below the CI thresholds.")
+    args = parser.parse_args()
+
     questions = yaml.safe_load(QUESTIONS_PATH.read_text())["questions"]
 
     results: list[dict] = []
@@ -122,6 +142,20 @@ def main() -> None:
             f"| {i} | {qtype} | {'✅' if r['hit_at_5'] else '❌'} | {r['faithfulness']} | "
             f"{r['question'][:60]} | {retrieved_str[:50]} | {expected_str[:40]} |"
         )
+
+    if args.gate:
+        retrieval_rate = r_hits / len(retrieval_rows) if retrieval_rows else 1.0
+        refusal_rate = refusal_hits / len(refusal_rows) if refusal_rows else 1.0
+        failures = []
+        if retrieval_rate < RETRIEVAL_HIT_RATE_MIN:
+            failures.append(f"retrieval hit-rate {retrieval_rate:.0%} < {RETRIEVAL_HIT_RATE_MIN:.0%}")
+        if refusal_rate < REFUSAL_ACCURACY_MIN:
+            failures.append(f"refusal accuracy {refusal_rate:.0%} < {REFUSAL_ACCURACY_MIN:.0%}")
+        if avg_faith < MEAN_FAITHFULNESS_MIN:
+            failures.append(f"mean faithfulness {avg_faith:.2f} < {MEAN_FAITHFULNESS_MIN:.2f}")
+        if failures:
+            print(f"\nGATE FAILED: {'; '.join(failures)}", file=sys.stderr)
+            sys.exit(1)
 
 
 if __name__ == "__main__":

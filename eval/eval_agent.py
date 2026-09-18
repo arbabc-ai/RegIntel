@@ -34,9 +34,14 @@ clean), so the difference here is spelling out the WHY once, so it doesn't
 need rediscovering next time.
 
 Run: python -m eval.eval_agent
+Run as a CI gate: python -m eval.eval_agent --gate   (exits 1 on regression
+below the thresholds below; --gate only changes the exit code, not the
+output, so `> eval/agent_results.md` still works.)
 """
 from __future__ import annotations
 
+import argparse
+import sys
 from pathlib import Path
 
 import yaml
@@ -50,12 +55,23 @@ CHECKS_PATH = Path("eval/agent_questions.yaml")
 CANONICAL_REFUSAL = "The provided sources don't contain enough information to answer that."
 assert CANONICAL_REFUSAL in FINAL_SYSTEM, "FINAL_SYSTEM's wording changed; update CANONICAL_REFUSAL to match."
 
+# CI gate thresholds, set below the 5/5 + 5/5 this eval currently gets:
+# both the router's tool choice and the final compose step are separate LLM
+# calls, so a single flaky question shouldn't fail the build on its own.
+TOOL_ROUTING_MIN_RATE = 0.8   # 4/5
+BEHAVIOR_MIN_RATE = 0.8       # 4/5
+
 
 def _is_refusal(text: str) -> bool:
     return CANONICAL_REFUSAL.lower() in text.lower()
 
 
 def main() -> None:
+    parser = argparse.ArgumentParser(description="Routing agent eval (Phase 3).")
+    parser.add_argument("--gate", action="store_true",
+                         help="Exit 1 if results fall below the CI thresholds.")
+    args = parser.parse_args()
+
     checks = yaml.safe_load(CHECKS_PATH.read_text())["checks"]
 
     results = []
@@ -104,6 +120,18 @@ def main() -> None:
             f"{'✅' if r['tool_ok'] else '❌'} | {'✅' if r['behavior_ok'] else '❌'} | "
             f"{r['answer'][:100]} |"
         )
+
+    if args.gate:
+        tool_rate = tool_hits / len(results) if results else 1.0
+        behavior_rate = behavior_hits / len(results) if results else 1.0
+        failures = []
+        if tool_rate < TOOL_ROUTING_MIN_RATE:
+            failures.append(f"tool routing {tool_rate:.0%} < {TOOL_ROUTING_MIN_RATE:.0%}")
+        if behavior_rate < BEHAVIOR_MIN_RATE:
+            failures.append(f"behavior {behavior_rate:.0%} < {BEHAVIOR_MIN_RATE:.0%}")
+        if failures:
+            print(f"\nGATE FAILED: {'; '.join(failures)}", file=sys.stderr)
+            sys.exit(1)
 
 
 if __name__ == "__main__":

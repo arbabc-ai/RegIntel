@@ -1,0 +1,37 @@
+name: CI (fast)
+
+# Runs on every push/PR: install + compile + import sanity. No Ollama, no
+# network fetch of the regulatory corpus, no LLM calls — this is a syntax/
+# wiring check, not the eval gate. See full-eval.yml for the real thing.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  sanity:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install package
+        run: pip install -e .
+
+      - name: Compile all modules
+        run: python -m compileall -q src scripts eval
+
+      - name: Import every entry point
+        run: |
+          python -c "
+          import src.agent, src.cli, src.embeddings, src.generate, src.ingest
+          import src.lookup, src.retrieve, src.warehouse
+          import scripts.download_corpus, scripts.extract_thresholds
+          import eval.eval, eval.eval_agent, eval.eval_thresholds
+          print('all modules import cleanly')
+          "
