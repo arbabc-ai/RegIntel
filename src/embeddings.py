@@ -19,6 +19,9 @@ USE_BEDROCK = os.environ.get("USE_BEDROCK_EMBEDDINGS", "").lower() in ("1", "tru
 EMBED_MODEL = os.environ.get("EMBED_MODEL", "sentence-transformers/all-MiniLM-L6-v2")
 TITAN_MODEL_ID = os.environ.get("TITAN_MODEL_ID", "amazon.titan-embed-text-v2:0")
 AWS_REGION = os.environ.get("AWS_REGION", "us-east-1")
+EMBED_PROVIDER = os.environ.get("EMBED_PROVIDER", "").lower()
+OLLAMA_EMBED_MODEL = os.environ.get("OLLAMA_EMBED_MODEL", "nomic-embed-text")
+OLLAMA_HOST = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
 
 
 class BedrockTitanEmbeddingFunction:
@@ -48,10 +51,34 @@ class BedrockTitanEmbeddingFunction:
         return embeddings
 
 
+class OllamaEmbeddingFunction:
+    """Chroma-compatible embedding function backed by a local Ollama model (free, offline)."""
+
+    def __init__(self, model: str = OLLAMA_EMBED_MODEL, host: str = OLLAMA_HOST) -> None:
+        self._model = model
+        self._host = host
+
+    def name(self) -> str:
+        return f"ollama:{self._model}"
+
+    def __call__(self, input):  # noqa: A002 (Chroma's required param name)
+        import httpx
+
+        resp = httpx.post(
+            f"{self._host}/api/embed",
+            json={"model": self._model, "input": list(input), "truncate": True},
+            timeout=300.0,
+        )
+        resp.raise_for_status()
+        return resp.json()["embeddings"]
+
+
 def get_embedding_function():
-    """Return the active embedding function (Titan if USE_BEDROCK_EMBEDDINGS, else MiniLM)."""
+    """Return the active embedding function: Titan, Ollama, or local MiniLM (default)."""
     if USE_BEDROCK:
         return BedrockTitanEmbeddingFunction()
+    if EMBED_PROVIDER == "ollama":
+        return OllamaEmbeddingFunction()
     from chromadb.utils.embedding_functions import SentenceTransformerEmbeddingFunction
 
     return SentenceTransformerEmbeddingFunction(model_name=EMBED_MODEL)

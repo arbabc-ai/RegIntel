@@ -16,15 +16,48 @@ from src.retrieve import retrieve
 
 load_dotenv()
 
-# Provider routing: if BEDROCK_INFERENCE_PROFILE is set, route via AWS Bedrock (boto3);
-# otherwise fall back to the Anthropic SDK with ANTHROPIC_API_KEY.
+# Provider routing (first match wins):
+#   LLM_PROVIDER=ollama          -> local Ollama (free, offline, no data leaves the machine)
+#   BEDROCK_INFERENCE_PROFILE    -> AWS Bedrock (boto3)
+#   otherwise                    -> Anthropic SDK with ANTHROPIC_API_KEY
+LLM_PROVIDER = os.environ.get("LLM_PROVIDER", "").lower()
+OLLAMA_HOST = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
+OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "qwen2.5:7b-instruct-q4_K_M")
 BEDROCK_PROFILE = os.environ.get("BEDROCK_INFERENCE_PROFILE")
 AWS_REGION = os.environ.get("AWS_REGION", "us-east-1")
 ANTHROPIC_MODEL = os.environ.get("ANTHROPIC_MODEL", "claude-sonnet-4-6")
 MAX_TOKENS = 1024
 
 
+def active_model() -> str:
+    """Human-readable name of the generation backend, for CLI/eval output."""
+    if LLM_PROVIDER == "ollama":
+        return f"ollama:{OLLAMA_MODEL}"
+    if BEDROCK_PROFILE:
+        return f"bedrock:{BEDROCK_PROFILE}"
+    return f"anthropic:{ANTHROPIC_MODEL}"
+
+
 def llm_call(system_prompt: str, user_content: str, max_tokens: int = MAX_TOKENS) -> str:
+    if LLM_PROVIDER == "ollama":
+        import httpx
+
+        resp = httpx.post(
+            f"{OLLAMA_HOST}/api/chat",
+            json={
+                "model": OLLAMA_MODEL,
+                "stream": False,
+                "options": {"temperature": 0, "num_predict": max_tokens, "num_ctx": 8192},
+                "messages": [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_content},
+                ],
+            },
+            timeout=300.0,
+        )
+        resp.raise_for_status()
+        return resp.json()["message"]["content"]
+
     if BEDROCK_PROFILE:
         import boto3
 

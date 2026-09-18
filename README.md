@@ -41,8 +41,8 @@ Risk and compliance teams at banks and fintechs work across overlapping regulato
 
 | Concern | This repo (Phase 1, runnable locally) | Production target (AWS-native) |
 |---|---|---|
-| Embeddings | Amazon **Titan Text Embeddings** via `bedrock-runtime` (local sentence-transformers fallback for offline dev) | Titan v2 on Bedrock |
-| Generation | **Claude on Bedrock** via the **Converse API** | Claude on Bedrock + Knowledge Base |
+| Embeddings | **Ollama `nomic-embed-text`** (local, free) · or Amazon **Titan Text Embeddings** via `bedrock-runtime` · or sentence-transformers MiniLM | Titan v2 on Bedrock |
+| Generation | **Ollama `qwen2.5:7b-instruct`** (local, free) · or **Claude on Bedrock** · or the Anthropic API — one env var switches | Claude on Bedrock + Knowledge Base |
 | Vector store | Local index + BM25 hybrid retrieval (Reciprocal Rank Fusion) | **Bedrock Knowledge Base over OpenSearch Serverless** |
 | Guardrails | System-prompt citation enforcement + explicit refusal | **Bedrock Guardrails** (denied topics, contextual grounding, PII redaction) |
 | Eval | Claude-as-judge faithfulness harness (`eval/`) | Pinned-judge eval gate in CI |
@@ -51,32 +51,39 @@ This deliberately reuses the AIF-C01 hands-on work (Bedrock Converse, inference 
 
 ---
 
-## Quickstart
+## Quickstart — free and fully local (Ollama)
+
+No API keys, no cloud spend, and no document or question ever leaves the machine — the deployment shape a bank's data-governance team will actually approve for a pilot.
 
 ```bash
-cd ~/projects/regintel
+ollama pull qwen2.5:7b-instruct-q4_K_M && ollama pull nomic-embed-text
+
 python -m venv .venv && source .venv/bin/activate
 pip install -e .
-cp .env.example .env          # fill in AWS creds / region (us-east-1)
+cp .env.example .env          # uncomment the LLM_PROVIDER=ollama / EMBED_PROVIDER=ollama block
 
-python -m scripts.download_corpus     # fetch the public regulatory corpus
-python -m src.cli ingest              # chunk → embed → index
-python -m src.cli ask "What is the minimum LCR a covered institution must maintain?"
-python -m eval.eval                   # run the faithfulness eval harness
+python -m scripts.download_corpus     # fetch the public regulatory corpus (eCFR)
+python -m src.ingest                  # chunk → embed → Chroma + BM25 index
+python -m src.cli "What minimum liquidity coverage ratio must a covered institution maintain?"
+python -m eval.eval > eval/results.md # run the eval harness → report
 ```
+
+**Switching to AWS Bedrock** is configuration only: set `BEDROCK_INFERENCE_PROFILE` (Claude on Bedrock) and `USE_BEDROCK_EMBEDDINGS=1` (Titan) instead of the Ollama variables, then re-run `python -m src.ingest`. Same retrieval, prompts, citations, and eval.
 
 ---
 
 ## Corpus (Phase 1)
 
-Public-domain regulatory sources only (no licensed/paywalled rulebooks):
-- **Basel III** framework documents (BIS, public)
-- **FFIEC** examination handbooks
-- **Federal Reserve** SR / CA guidance letters
-- **OCC / FDIC** public bulletins
-- **SEC / SOX** public rule text
+Public-domain U.S. federal regulation, pulled live from the **eCFR API**:
 
-*(Exact source list + retrieval scripts in [`scripts/download_corpus.py`](scripts/download_corpus.py).)*
+| Document | What it covers |
+|---|---|
+| 12 CFR Part 217 — **Regulation Q** | Capital adequacy (Basel III capital rules as implemented in the U.S.): CET1 / Tier 1 / total capital ratios, buffers, risk weights |
+| 12 CFR Part 249 — **Regulation WW** | Liquidity Coverage Ratio (U.S. Basel III LCR): HQLA, outflow rates, the 100% minimum |
+| 12 CFR Part 252 — **Regulation YY** | Enhanced prudential standards: stress testing, risk management, liquidity for large bank holding companies |
+| 31 CFR Part 1020 — **BSA/AML** (FinCEN) | Bank Secrecy Act / anti-money-laundering: SAR filing, customer identification program |
+
+~1.8 MB of regulatory text. The BIS Basel framework PDFs are also listed in [`scripts/download_corpus.py`](scripts/download_corpus.py), but bis.org answers scripted downloads with a bot-challenge page — the downloader detects that and skips them rather than indexing HTML as a "PDF". To include them (or FFIEC handbooks, Fed SR letters), drop the files into `data/raw/` and re-run `python -m src.ingest`.
 
 ---
 
