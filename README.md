@@ -68,6 +68,25 @@ python -m src.cli "What minimum liquidity coverage ratio must a covered institut
 python -m eval.eval > eval/results.md # run the eval harness → report
 ```
 
+### Real output (local Ollama run, CPU-only laptop)
+
+```
+$ python -m src.cli "What minimum liquidity coverage ratio must a covered institution maintain?"
+
+=== ANSWER ===
+The minimum liquidity coverage ratio that a covered institution must maintain is 1.0. This requirement
+applies on each business day (or, in the case of a Category IV Board-regulated institution, on the last
+business day of the applicable month) [source: cfr_title12_part249_Regulation-WW-Liquidity-Coverage-Ratio.txt].
+
+=== SOURCES ===
+  - cfr_title12_part249_Regulation-WW-Liquidity-Coverage-Ratio.txt
+
+[retrieval mode: hybrid, top-k: 5, chunks used: 5]
+```
+
+Index: 4 regulations → 3,050 chunks (800 chars, 100 overlap) in Chroma + BM25. On a CPU-only machine a
+7B local model answers in ~1.5 min; on a GPU, or on Claude via Bedrock, it's a few seconds.
+
 **Switching to AWS Bedrock** is configuration only: set `BEDROCK_INFERENCE_PROFILE` (Claude on Bedrock) and `USE_BEDROCK_EMBEDDINGS=1` (Titan) instead of the Ollama variables, then re-run `python -m src.ingest`. Same retrieval, prompts, citations, and eval.
 
 ---

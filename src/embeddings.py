@@ -50,6 +50,9 @@ class BedrockTitanEmbeddingFunction:
             embeddings.append(payload["embedding"])
         return embeddings
 
+    def embed_query(self, input):  # noqa: A002 (Chroma >=1.0 embeds queries through this)
+        return self(input)
+
 
 class OllamaEmbeddingFunction:
     """Chroma-compatible embedding function backed by a local Ollama model (free, offline)."""
@@ -71,6 +74,9 @@ class OllamaEmbeddingFunction:
         )
         resp.raise_for_status()
         return resp.json()["embeddings"]
+
+    def embed_query(self, input):  # noqa: A002 (Chroma >=1.0 embeds queries through this)
+        return self(input)
 
 
 def get_embedding_function():
