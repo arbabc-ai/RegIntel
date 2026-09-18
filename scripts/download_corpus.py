@@ -103,6 +103,12 @@ def fetch_bis(client: httpx.Client) -> tuple[int, list[tuple[str, str]]]:
             if r.status_code != 200:
                 failed.append((fname, f"HTTP {r.status_code}"))
                 continue
+            if not r.content.startswith(b"%PDF"):
+                # bis.org answers headless clients with an HTML bot-challenge page (HTTP 200).
+                # Never save that as a .pdf — download the file in a browser into data/raw/ instead.
+                failed.append((fname, f"not a PDF (got {r.headers.get('content-type', '?')}); "
+                                      f"download {url} in a browser into data/raw/"))
+                continue
             dst.write_bytes(r.content)
             ok += 1
         except Exception as e:  # noqa: BLE001

@@ -10,7 +10,6 @@ questions:
     expected_keywords: ["100", "percent", "liquidity coverage ratio"]
     expected_sources:
       - "cfr_title12_part249_Regulation-WW-Liquidity-Coverage-Ratio.txt"
-      - "bis_basel_iii_lcr_bcbs238.pdf"
 
   - question: "What qualifies as a high-quality liquid asset (HQLA) under the LCR?"
     expected_keywords: ["HQLA", "level 1", "liquid"]
@@ -27,7 +26,6 @@ questions:
     expected_keywords: ["2.5", "buffer", "common equity tier 1"]
     expected_sources:
       - "cfr_title12_part217_Regulation-Q-Capital-Adequacy.txt"
-      - "bis_basel_iii_finalising_reforms_d424.pdf"
 
   - question: "What minimum total capital ratio must a banking organization hold?"
     expected_keywords: ["8", "percent", "total capital"]

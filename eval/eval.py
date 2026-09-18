@@ -9,7 +9,8 @@ from pathlib import Path
 import yaml
 from dotenv import load_dotenv
 
-from src.generate import answer, llm_call
+from src.embeddings import get_embedding_function
+from src.generate import active_model, answer, llm_call
 from src.retrieve import retrieve
 
 load_dotenv()
@@ -99,6 +100,8 @@ def main() -> None:
 
     # Emit markdown report
     print("# RAG Eval Report\n")
+    print(f"- **Generation + judge model:** `{active_model()}`")
+    print(f"- **Embeddings:** `{get_embedding_function().name()}`")
     print(f"- **Total questions:** {len(results)} "
           f"({len(retrieval_rows)} retrieval, {len(refusal_rows)} refusal)")
     if retrieval_rows:
