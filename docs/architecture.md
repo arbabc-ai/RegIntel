@@ -4,7 +4,7 @@ This doc complements the README with the math + reasoning behind the choices, th
 
 ## The full value chain (DE → Data → RAG → Agent)
 
-RegIntel is built as four phases; **Phases 1 and 2 (the RAG layer and the DE/warehouse layer) are in this repo**, runnable locally. Phase 3 (the routing agent) is designed below but not yet implemented.
+RegIntel is built as three phases (DE/warehouse, RAG, and the routing agent that sits over both); **all three are in this repo**, runnable locally.
 
 ### Phase 2 — DE + Data layer — **built**, runs locally against `data/raw/`
 
@@ -33,20 +33,24 @@ dim_regulations, dim_institution_tiers, dim_metrics   (conformed dimensions)
 
 **Why a warehouse beside the vector store:** "What's the minimum CET1 ratio for an advanced-approaches bank?" is a **lookup**, not a semantic search. Structured thresholds belong in a fact table with an `effective_date` so you can answer *as-of* questions and keep an audit trail of rule changes — exactly what a bank's model-risk and compliance functions expect.
 
-### Phase 3 — Agent layer
+### Phase 3 — Agent layer — **built**, real tool-calling via Ollama
+
+What's implemented (`src/agent.py`) is the same shape as the Bedrock design below, at demo scale: Ollama's native `/api/chat` `tools` parameter instead of Bedrock Converse tool-use, two tools instead of four, and a direct Python function call instead of a Lambda action group — but the same core move (an LLM decides which tool(s) a question needs, tools run deterministically with no LLM in the loop, a second LLM turn composes the grounded, refusal-capable final answer). See the README's Phase 3 section for real routing output on three different question shapes, and `eval/agent_results.md` for the eval run.
 
 **The agent problem:** Real regulatory queries mix structured + unstructured. *"What LCR must my institution hold, and what's the supervisory rationale?"* — the first half is a structured threshold lookup; the second is RAG over guidance text.
 
-**The agent shape (Bedrock Agent + action groups):**
+**The agent shape (Bedrock Agent + action groups) — the production target:**
 - An LLM router (Claude tool-use via Bedrock) inspects the query and decides which tools to call.
 - Tool definitions (Lambda action groups):
-  - `lookup_threshold(regulation, institution_tier, metric) → dict` — warehouse SQL query
-  - `lookup_deadline(filing, institution_tier) → dict` — warehouse SQL query
-  - `search_guidance(query, k=5) → list[chunk]` — the RAG pipeline in this repo
-  - `check_applicability(institution_profile) → dict` — deterministic Python over the warehouse
-- Final compose step: the agent receives all tool outputs, composes a grounded answer with citations from both sources, and **refuses when support is incomplete**.
+  - `lookup_threshold(regulation, institution_tier, metric) → dict` — warehouse SQL query. **Built** in `src/agent.py` as `lookup_threshold(metric)` (a single-argument simplification of the same idea — `src/warehouse.lookup_threshold` fuzzy-matches on metric text rather than taking regulation/tier as separate structured args).
+  - `lookup_deadline(filing, institution_tier) → dict` — warehouse SQL query. **Not built as a separate tool**: `fct_regulatory_thresholds` already stores day-count thresholds (unit `"days"`) alongside ratios, so the built `lookup_threshold` tool answers deadline questions too; a dedicated tool would only matter if deadline lookups needed different arguments (e.g. filing name) than a metric-text search covers.
+  - `search_guidance(query, k=5) → list[chunk]` — the RAG pipeline in this repo. **Built** as `search_guidance(question)`, calling `src/retrieve.retrieve` directly.
+  - `check_applicability(institution_profile) → dict` — deterministic Python over the warehouse. **Not built**: this needs a structured caller-supplied institution profile (asset size, charter type, etc.) that this demo has no input surface for; the two lookup tools above are sufficient to exercise real routing.
+- Final compose step: the agent receives all tool outputs, composes a grounded answer with citations from both sources, and **refuses when support is incomplete**. **Built**, same citation/refusal discipline as `src/generate.py`'s Phase 1 system prompt.
 
 **Why this shape:** Pure RAG can't answer a threshold question reliably ("what's the ratio?" is a lookup). Pure SQL can't answer an unstructured guidance question. The agent routes — and in a regulated domain, the routing + grounding + refusal discipline *is* the product value.
+
+**Why Ollama tool-calling and not Bedrock Converse here:** `src/generate.py`'s existing Bedrock branch calls `bedrock-runtime`'s raw `invoke_model`, which has no tool-use support — only the separate Converse API does. Wiring Phase 3 onto Bedrock would mean a second, different Bedrock call shape living alongside the first, which is real scope, not a one-line env var swap the way Phases 1 and 2's provider routing is. Left as the concrete next step in "What's missing for production" below rather than half-built.
 
 ## AWS Bedrock-native mapping
 
@@ -118,3 +122,6 @@ This is a soft pattern (the model can violate it), but Claude Sonnet follows it 
 | Scope creep into legal advice | Position as a *research/retrieval* aid, not regulatory counsel; refusal-by-default on un-sourced questions |
 | Formulaic/conditional thresholds read as flat numbers | Caught live: `"the lesser of 1.0 percent or 50 percent of [another value]"` was extracted as a flat 50% requirement (see the README's Phase 2 section for the exact row + citation). The extraction prompt has no notion of a threshold defined *relative to* another value. Production fix: a second extraction pass that classifies each candidate as flat / formulaic / cross-referential before pulling a number, and stores formulaic ones as an unevaluated expression rather than a number. |
 | Extraction coverage is document-order, not importance-order | `scripts/extract_thresholds.py` caps candidates per source and takes the first N in document position — cheap, but means recency- or relevance-ranked passages (e.g. the steady-state minimums vs. an old transitional schedule) aren't preferentially chosen. Production fix: rank candidates by passage distinctiveness (TF-IDF against the corpus) or known-important section headers before capping. |
+| Agent tool-calling is Ollama-only | `src/agent.py` uses Ollama's native `/api/chat` `tools` param; `src/generate.py`'s Bedrock branch calls the raw `invoke_model` API, which has no tool-use support. Production fix: a second Bedrock code path using the Converse API's tool-use blocks, mirroring the Ollama tool-call/tool-result loop shape. |
+| Agent has no multi-step tool loop | The router gets exactly one turn to call tools, then composes; it can't call a tool, read the result, and decide to call a second different tool based on what it learned (a real Bedrock Agent action-group loop can). Fine for the two-tool, single-hop questions this repo's corpus supports; would matter once `check_applicability`-style tools depend on an earlier tool's output. |
+| A small local model is unreliable as an eval judge for nuanced classification | Tried live for Phase 3's agent eval: qwen2.5:7b, given real tool evidence and asked to classify an answer as CORRECT/REFUSED/WRONG, called a textbook-perfect one-sentence refusal "WRONG" and a fully correct multi-part cited answer "WRONG" too — on the same evidence, a direct human read of both was unambiguous. Phase 1's faithfulness judge (a looser 0–3 score, not a strict tri-state classification) held up fine on the same model; the harder task didn't. `eval/eval_agent.py` replaced the judge with a plain substring check for the *exact* refusal sentence instead. Production fix: a stronger/larger judge model, or a judge fine-tuned for this specific classification, gated in CI — not a small local model asked to freelance a nuanced call in a handful of tokens. |
