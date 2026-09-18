@@ -53,7 +53,7 @@ def llm_call(system_prompt: str, user_content: str, max_tokens: int = MAX_TOKENS
                     {"role": "user", "content": user_content},
                 ],
             },
-            timeout=300.0,
+            timeout=900.0,  # local CPU inference on a large batch prompt can be slow
         )
         resp.raise_for_status()
         return resp.json()["message"]["content"]
