@@ -1,0 +1,46 @@
+# Ground-truth check for the Phase 3 routing agent (src/agent.py).
+#
+# expected_tools: acceptable tool name(s) for this question — the eval passes
+#   if the router called ANY of them (routing is a judgment call; a mixed
+#   question calling just one tool that happens to cover the answer is fine).
+# expected_keywords: substrings (case-insensitive) that should appear in the
+#   final answer if it isn't a refusal.
+# expect_refusal: true if the corpus genuinely doesn't cover this and the
+#   agent should say so rather than guess.
+
+checks:
+  - question: "What is the minimum common equity tier 1 (CET1) capital ratio?"
+    expected_tools: ["lookup_threshold"]
+    expected_keywords: ["4.5"]
+    expect_refusal: false
+
+  - question: "What does Regulation YY require for company-run stress testing?"
+    expected_tools: ["search_guidance"]
+    expected_keywords: ["stress test"]
+    expect_refusal: false
+
+  - question: "What minimum liquidity coverage ratio must a covered institution maintain, and why does that requirement exist?"
+    expected_tools: ["lookup_threshold", "search_guidance"]
+    expected_keywords: ["1.0", "liquidity"]
+    expect_refusal: false
+
+  # NOT a refusal case, despite Phase 1's eval/questions.yaml assuming otherwise
+  # ("NSFR (12 CFR 250 / Basel) not bundled -> should refuse", unverified). It IS
+  # bundled: 12 CFR Part 249 (Regulation WW) covers both the LCR and the NSFR —
+  # verified directly in data/raw/cfr_title12_part249_...: "§ 249.100 Net stable
+  # funding ratio. (a) Minimum net stable funding ratio requirement. A
+  # Board-regulated institution must maintain a net stable funding ratio that is
+  # equal t[o or greater than] 1.0 on an ongoing basis." Phase 3's agent answered
+  # this correctly and cited that exact section; this eval originally copied
+  # Phase 1's wrong assumption without re-checking, and the agent's correct
+  # answer being flagged as a "failure" is what caught it. See eval/agent_results.md.
+  - question: "What is the net stable funding ratio (NSFR) requirement?"
+    expected_tools: ["lookup_threshold", "search_guidance"]
+    expected_keywords: ["1.0"]
+    expect_refusal: false
+
+  # --- Refusal case: genuinely out of domain ---
+  - question: "How do I calculate my personal income tax?"
+    expected_tools: ["lookup_threshold", "search_guidance"]
+    expected_keywords: []
+    expect_refusal: true   # out of domain entirely

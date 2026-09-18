@@ -32,7 +32,7 @@ Risk and compliance teams at banks and fintechs work across overlapping regulato
   pipeline              Serverless         Serverless          groups + Guardrails
 ```
 
-**Phases 1 and 2 (this repo) are built and runnable**: the RAG retrieval + citation/refusal + eval layer, and the DE/warehouse layer of LLM-extracted regulatory thresholds. **Phase 3 is designed** (see [`docs/architecture.md`](docs/architecture.md)) — the structured-vs-unstructured routing agent that would call both.
+**All three phases (this repo) are built and runnable**: the RAG retrieval + citation/refusal + eval layer, the DE/warehouse layer of LLM-extracted regulatory thresholds, and the routing agent that decides which one a question needs.
 
 ---
 
@@ -153,6 +153,51 @@ Three rows, not one — and that's correct, not noisy. Reg Q's capital rules pha
 
 ---
 
+## Phase 3 — routing agent
+
+Phase 1 (RAG) and Phase 2 (the warehouse) each answer a different shape of question well and the other shape badly. "What's the minimum CET1 ratio" is a lookup — RAG will retrieve a paraphrase and an LLM will compose an approximate answer where an exact one exists. "What does Regulation YY require for stress testing, and why" is guidance — the warehouse has no row for it. Phase 3 is the router: an LLM sees the question and two tools, `lookup_threshold` (Phase 2) and `search_guidance` (Phase 1's `retrieve()`), decides which to call — via real tool-calling, not a keyword heuristic — and a second LLM turn composes the final answer strictly from what the tools returned, under the same citation/refusal discipline as Phase 1.
+
+```bash
+python -m src.agent "What minimum liquidity coverage ratio must a covered institution maintain?"
+python -m eval.eval_agent > eval/agent_results.md   # routing + behavior check across 5 real questions
+```
+
+### Real output — three different questions, three different routes
+
+```
+$ python -m src.agent "What minimum liquidity coverage ratio must a covered institution maintain?"
+=== TOOLS CALLED ===
+  - lookup_threshold({'metric': 'liquidity coverage ratio'})
+=== ANSWER ===
+The minimum liquidity coverage ratio that a covered institution must maintain is 1.0 ratio, as
+specified for Board-regulated institutions [source: cfr_title12_part249_Regulation-WW-Liquidity-
+Coverage-Ratio.txt::chunk-0086].
+
+$ python -m src.agent "What does Regulation YY require for company-run stress testing?"
+=== TOOLS CALLED ===
+  - search_guidance({'question': 'What does Regulation YY require for company-run stress testing?'})
+=== ANSWER ===
+[grounded answer citing cfr_title12_part252_Regulation-YY-Enhanced-Prudential-Standards.txt —
+correctly routed to guidance search, not a threshold lookup, since there's no single number to return]
+
+$ python -m src.agent "How do I calculate my personal income tax?"
+=== TOOLS CALLED ===
+  - search_guidance({'question': 'How do I calculate my personal income tax?'})
+=== ANSWER ===
+The provided sources don't contain enough information to answer that.
+```
+
+The third case is the one that matters most: `search_guidance` still ran (the router doesn't know in advance that nothing relevant exists) and returned its nearest chunks anyway — retrieval always returns *something*. The final-compose step correctly refused rather than stretching those unrelated chunks into an answer.
+
+**A real bug this eval caught, three levels deep — the eval itself needed debugging as much as the agent did.** `eval/agent_results.md` (now **5/5 tool routing, 5/5 behavior**) runs 5 real questions: two lookups, one mixed, and two questions expected to be refused. One of those two was originally "What is the net stable funding ratio (NSFR) requirement?", copied from Phase 1's refusal set on the assumption *"NSFR not bundled → should refuse."* The agent answered it correctly, and a first version of this eval flagged that correct answer as a failure — chasing why took three fixes, not one:
+1. **The ground-truth assumption was never checked.** 12 CFR Part 249 (Regulation WW) covers *both* the LCR and the NSFR — grep `data/raw/cfr_title12_part249_...` for `§ 249.100` and you'll find "A Board-regulated institution must maintain a net stable funding ratio that is equal to or greater than 1.0." Phase 1's `eval/questions.yaml` carried the same wrong assumption; both are now fixed (Phase 3's NSFR check flipped to expect a real answer; Phase 1's swapped to the Volcker Rule, verified genuinely absent from the bundled corpus) and `eval/results.md` regenerated — Phase 1's own refusal accuracy went from 2/3 to **3/3** as a direct result.
+2. **A loose keyword check was too crude.** It flagged any answer containing `"don't contain enough information"` as a refusal — but `src/agent.py`'s final-compose step sometimes opens with that exact phrase as a rhetorical hedge, then gives a fully correct, grounded answer anyway (*"...don't contain enough information to answer that, as the minimum CET1 ratio varies depending on..."* — followed by the real, correct, cited numbers). A substring match can't tell a genuine refusal from a hedge-then-answer.
+3. **The fix for #2 — an LLM judge — was tried and made things worse, not better.** Same technique as Phase 1's `eval/eval.py` faithfulness scoring: ask a judge model to classify each answer as CORRECT / REFUSED / WRONG against the real tool evidence. On this local 7B model it called a textbook-perfect, one-sentence refusal *"WRONG"*, and a fully correct, well-cited multi-part answer *"WRONG"* too. Tightening the generation prompt to forbid the hedge phrasing was tried next and overcorrected the other way — the model started refusing questions it could actually answer. **What actually worked:** check for the *exact* canonical refusal sentence (the one literally in `FINAL_SYSTEM`, with its period) as a substring, not a loose phrase or an LLM's judgment call. The hedge pattern always continues past "...that" with a comma or the next word, never that exact period; a genuine refusal has the period right there regardless of what it adds afterward. Simpler than an LLM judge, and it's the one that actually holds up against real model output — see `eval/eval_agent.py`'s docstring for the full trail.
+
+**What's demo-scale here, not production:** this only wires up Ollama's native tool-calling. The documented production target — Bedrock Agent with Claude tool-use via the Converse API and Lambda action groups — is designed in `docs/architecture.md` but not implemented; `src/generate.py`'s existing Bedrock branch uses the raw `invoke_model` call, which doesn't support tool use, so swapping providers here isn't a one-line env var change the way Phases 1 and 2 are.
+
+---
+
 ## What this demonstrates (interview-ready)
 
 - **Data engineering over messy real-world documents:** ingestion, recursive chunking with overlap, metadata tagging, incremental indexing — the same skills as regulated-data ETL, retargeted at unstructured regulatory text.
@@ -160,5 +205,6 @@ Three rows, not one — and that's correct, not noisy. Reg Q's capital rules pha
 - **Responsible AI in a regulated domain:** grounding checks, refusal-aware evaluation, no hallucinated compliance advice — the exact discipline a bank's model-risk function expects.
 - **An auditable eval harness:** faithfulness scored per answer, results tracked over prompt changes.
 - **Structured extraction from unstructured text (Phase 2):** LLM-assisted extraction of numeric thresholds into a queryable star schema, every value traceable to a source excerpt — the DE half of the value chain, not just the RAG half.
+- **Tool-calling agent routing (Phase 3):** real function-calling, not a keyword heuristic, deciding between a structured lookup and a semantic search per question, with a grounded, refusal-capable final compose step over whichever tool(s) fired.
 
 Author: Arbab Chowdhury — regulated financial-data modernization (Basel III / LCR) + GenAI. [github.com/arbabc-ai](https://github.com/arbabc-ai)

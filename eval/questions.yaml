@@ -50,9 +50,18 @@ questions:
       - "cfr_title31_part1020_BSA-AML-Rules-for-Banks.txt"
 
   # --- Refusal cases — NOT covered by the bundled corpus ---
-  - question: "What is the net stable funding ratio (NSFR) requirement?"
+  # NOTE: this question used to be NSFR, on the assumption "12 CFR 250 / Basel
+  # not bundled -> should refuse" — that assumption was never actually checked
+  # and turned out to be wrong. 12 CFR Part 249 (Regulation WW), which IS
+  # bundled, covers both the LCR and the NSFR (§ 249.100: "A Board-regulated
+  # institution must maintain a net stable funding ratio that is equal to or
+  # greater than 1.0"). Caught by Phase 3's agent eval (see eval/agent_results.md)
+  # answering an NSFR question correctly and getting flagged as a "failure"
+  # against this stale assumption. Swapped for a topic actually outside all
+  # four bundled regulations (Reg Q/WW/YY, BSA/AML): the Volcker Rule.
+  - question: "What is the Volcker Rule's de minimis threshold for proprietary trading?"
     expected_keywords: ["don't contain", "not", "sources"]
-    expected_sources: []   # NSFR (12 CFR 250 / Basel) not bundled → should refuse
+    expected_sources: []   # Volcker Rule (12 CFR 248) not bundled → should refuse
 
   - question: "What are the state-level money transmitter licensing rules in Texas?"
     expected_keywords: ["don't contain", "not", "state"]

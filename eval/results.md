@@ -4,8 +4,8 @@
 - **Embeddings:** `ollama:nomic-embed-text`
 - **Total questions:** 11 (8 retrieval, 3 refusal)
 - **Retrieval hit-rate@5:** 8/8 = 100%
-- **Refusal accuracy:** 2/3 = 67%
-- **Mean faithfulness (0-3):** 2.09
+- **Refusal accuracy:** 3/3 = 100%
+- **Mean faithfulness (0-3):** 2.00
 
 | # | Type | Hit | Faith | Question | Retrieved | Expected |
 |---|---|---|---|---|---|---|
@@ -17,6 +17,6 @@
 | 6 | retrieval | ✅ | 3 | What does Regulation YY require for company-run stress testi | cfr_title12_part252_Regulation-YY-Enhanced-Prudent | cfr_title12_part252_Regulation-YY-Enhanc |
 | 7 | retrieval | ✅ | 3 | When must a bank file a Suspicious Activity Report? | cfr_title31_part1020_BSA-AML-Rules-for-Banks.txt | cfr_title31_part1020_BSA-AML-Rules-for-B |
 | 8 | retrieval | ✅ | 3 | What customer identification program requirements apply to b | cfr_title31_part1020_BSA-AML-Rules-for-Banks.txt | cfr_title31_part1020_BSA-AML-Rules-for-B |
-| 9 | refusal | ❌ | 3 | What is the net stable funding ratio (NSFR) requirement? | cfr_title12_part249_Regulation-WW-Liquidity-Covera | (refuse) |
+| 9 | refusal | ✅ | 2 | What is the Volcker Rule's de minimis threshold for propriet | cfr_title12_part217_Regulation-Q-Capital-Adequacy. | (refuse) |
 | 10 | refusal | ✅ | 0 | What are the state-level money transmitter licensing rules i | cfr_title12_part252_Regulation-YY-Enhanced-Prudent | (refuse) |
 | 11 | refusal | ✅ | 0 | How do I calculate my personal income tax? | cfr_title12_part217_Regulation-Q-Capital-Adequacy. | (refuse) |
