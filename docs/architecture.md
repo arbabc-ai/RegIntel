@@ -61,7 +61,7 @@ What's implemented (`src/agent.py`) is the same shape as the Bedrock design belo
 | Vector store | local Chroma + BM25 hybrid (RRF) | **Bedrock Knowledge Base over OpenSearch Serverless** |
 | Generation | **Claude on Bedrock** (`bedrock-runtime`), Anthropic SDK fallback | Claude on Bedrock + Knowledge Base retrieval |
 | Guardrails | system-prompt citation enforcement + explicit refusal | **Bedrock Guardrails** (denied topics, contextual grounding, PII redaction) |
-| Eval | Claude-as-judge faithfulness harness (`eval/`) | pinned-judge eval gate in CI |
+| Eval | Claude-as-judge faithfulness harness (`eval/`), CI-gated (`.github/workflows/full-eval.yml`) | same gate, Bedrock-hosted judge |
 
 This reuses the AIF-C01 hands-on work (Bedrock Converse/InvokeModel, inference profiles, model-access grants) — RegIntel is the portfolio proof those cert concepts are real.
 
@@ -118,7 +118,7 @@ This is a soft pattern (the model can violate it), but Claude Sonnet follows it 
 | Auditability | S3 versioning + warehouse time-travel = an audit log of which rule version answered which query (model-risk requirement) |
 | Cold-start latency | Pre-warm the vector client; cache BM25 in process |
 | Access control | IAM least-privilege on `bedrock-runtime` (data plane) vs `bedrock` (control plane); CloudTrail on every inference |
-| Eval drift | Pin the judge model version; re-run the eval gate on every prompt change |
+| Eval drift | **Built**: `.github/workflows/full-eval.yml` re-runs all three eval suites with `--gate` (weekly + on-demand), failing the build below a set threshold — see the README's "Continuous integration" section for the two-workflow split and why the gate thresholds sit a couple of questions below the current perfect scores rather than at 100%. The judge model itself is pinned by `OLLAMA_MODEL` in that workflow's env, not floating; a version bump is a deliberate one-line change, not silent drift. |
 | Scope creep into legal advice | Position as a *research/retrieval* aid, not regulatory counsel; refusal-by-default on un-sourced questions |
 | Formulaic/conditional thresholds read as flat numbers | Caught live: `"the lesser of 1.0 percent or 50 percent of [another value]"` was extracted as a flat 50% requirement (see the README's Phase 2 section for the exact row + citation). The extraction prompt has no notion of a threshold defined *relative to* another value. Production fix: a second extraction pass that classifies each candidate as flat / formulaic / cross-referential before pulling a number, and stores formulaic ones as an unevaluated expression rather than a number. |
 | Extraction coverage is document-order, not importance-order | `scripts/extract_thresholds.py` caps candidates per source and takes the first N in document position — cheap, but means recency- or relevance-ranked passages (e.g. the steady-state minimums vs. an old transitional schedule) aren't preferentially chosen. Production fix: rank candidates by passage distinctiveness (TF-IDF against the corpus) or known-important section headers before capping. |

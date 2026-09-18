@@ -1,5 +1,8 @@
 # RegIntel — Regulatory Intelligence Platform
 
+[![CI (fast)](https://github.com/arbabc-ai/RegIntel/actions/workflows/ci.yml/badge.svg)](https://github.com/arbabc-ai/RegIntel/actions/workflows/ci.yml)
+[![Full eval (Ollama, weekly)](https://github.com/arbabc-ai/RegIntel/actions/workflows/full-eval.yml/badge.svg)](https://github.com/arbabc-ai/RegIntel/actions/workflows/full-eval.yml)
+
 **A grounded, citation-enforced Q&A assistant over banking & financial regulation — answers with sources, or refuses when the regulations don't cover it.**
 
 Risk and compliance teams at banks and fintechs work across overlapping regulatory layers — federal *(FFIEC, OCC, FDIC, Federal Reserve SR/CA guidance, Dodd-Frank, SOX)*, prudential *(Basel III capital + LCR/NSFR liquidity)*, and financial-crime *(BSA/AML, OFAC)*. The authoritative text lives across thousands of public PDFs and rulebooks that update on independent cadences. Analysts burn hours answering *"what does the rule require for **this** institution, **this** exposure, **this** scenario — and where exactly does it say so?"*
@@ -44,7 +47,7 @@ Risk and compliance teams at banks and fintechs work across overlapping regulato
 | Generation | **Ollama `qwen2.5:7b-instruct`** (local, free) · or **Claude on Bedrock** · or the Anthropic API — one env var switches | Claude on Bedrock + Knowledge Base |
 | Vector store | Local index + BM25 hybrid retrieval (Reciprocal Rank Fusion) | **Bedrock Knowledge Base over OpenSearch Serverless** |
 | Guardrails | System-prompt citation enforcement + explicit refusal | **Bedrock Guardrails** (denied topics, contextual grounding, PII redaction) |
-| Eval | Claude-as-judge faithfulness harness (`eval/`) | Pinned-judge eval gate in CI |
+| Eval | Claude-as-judge faithfulness harness (`eval/`), CI-gated (`.github/workflows/full-eval.yml`) | Same gate, Bedrock-hosted judge |
 
 This deliberately reuses the AIF-C01 hands-on work (Bedrock Converse, inference profiles, model-access grants) — RegIntel *is* the portfolio proof that the cert concepts are real.
 
@@ -198,6 +201,23 @@ The third case is the one that matters most: `search_guidance` still ran (the ro
 
 ---
 
+## Continuous integration
+
+`docs/architecture.md` names two "what's missing for production" items directly: *"pinned-judge eval gate in CI"* and *"re-run the eval gate on every prompt change."* Both are built, split into two workflows for a real reason, not decoration:
+
+| Workflow | Runs on | What it does |
+|---|---|---|
+| [`ci.yml`](.github/workflows/ci.yml) ("CI (fast)") | Every push / PR to `main` | Installs the package, compiles every module, imports every entry point. No Ollama, no corpus download, no LLM calls — a wiring check, not the eval gate. Runs in under a couple of minutes. |
+| [`full-eval.yml`](.github/workflows/full-eval.yml) ("Full eval") | Manual (`workflow_dispatch`) + weekly (Monday 06:00 UTC) | The real gate: installs Ollama, pulls both models, downloads the corpus, ingests, runs `scripts.extract_thresholds`, then all three eval suites with `--gate`, which exits 1 on a genuine regression. Uploads `eval/*.md` as artifacts either way. |
+
+**Why not run the full eval on every push:** the full pipeline — corpus fetch, chunk embedding, LLM threshold extraction, then 21 real LLM-generated answers across three eval suites — takes 45–70+ minutes on a CPU-only GitHub runner, the same shape of cost this README's own quickstarts show by hand. Blocking every PR on that is the wrong trade for a repo this size; a fast wiring check on every push plus a real, scheduled/on-demand gate is the standard split (this repo is public, so Actions minutes are free here — the constraint is wall-clock and reviewer attention, not cost).
+
+**Why the gate thresholds aren't 100%**, even though every eval currently scores it: local LLM generation isn't perfectly deterministic run to run, even at `temperature=0` (context caching, minor Ollama version drift), and Phase 2's extraction is itself a separate LLM pass whose candidate coverage can vary slightly. `eval.eval --gate`, `eval.eval_thresholds --gate`, and `eval.eval_agent --gate` each set their threshold a couple of questions below the current perfect score — high enough to catch a genuine break (the corpus failing to download, a prompt change that actually breaks grounding), low enough to not flake the build on a single-question wobble. Every threshold and the reasoning behind it is a comment right next to the constant in each eval file.
+
+`--gate` only changes the exit code; the printed report is identical either way, so the exact same `python -m eval.eval > eval/results.md` commands in this README's quickstarts still work unchanged — the CI workflow adds `--gate` on top of them, not a different code path.
+
+---
+
 ## What this demonstrates (interview-ready)
 
 - **Data engineering over messy real-world documents:** ingestion, recursive chunking with overlap, metadata tagging, incremental indexing — the same skills as regulated-data ETL, retargeted at unstructured regulatory text.
@@ -206,5 +226,6 @@ The third case is the one that matters most: `search_guidance` still ran (the ro
 - **An auditable eval harness:** faithfulness scored per answer, results tracked over prompt changes.
 - **Structured extraction from unstructured text (Phase 2):** LLM-assisted extraction of numeric thresholds into a queryable star schema, every value traceable to a source excerpt — the DE half of the value chain, not just the RAG half.
 - **Tool-calling agent routing (Phase 3):** real function-calling, not a keyword heuristic, deciding between a structured lookup and a semantic search per question, with a grounded, refusal-capable final compose step over whichever tool(s) fired.
+- **CI that actually gates, split by real cost:** a fast wiring check on every push, a real scheduled/on-demand eval gate that fails the build on regression — with the trade-offs (why split, why the thresholds aren't 100%) written down next to the code, not just asserted.
 
 Author: Arbab Chowdhury — regulated financial-data modernization (Basel III / LCR) + GenAI. [github.com/arbabc-ai](https://github.com/arbabc-ai)

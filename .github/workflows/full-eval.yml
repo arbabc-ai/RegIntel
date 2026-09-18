@@ -1,0 +1,84 @@
+name: Full eval (Ollama, weekly)
+
+# The real gate: download the corpus, ingest, extract thresholds, then run
+# all three eval suites with --gate so a genuine regression fails the build.
+# Not run on every push — the full pipeline (corpus fetch, chunk embedding,
+# LLM threshold extraction, 21 real LLM-generated answers across three
+# evals) runs 45-70+ minutes on a CPU-only GitHub runner. See
+# docs/architecture.md's "Eval drift" row for why this is scheduled/manual
+# rather than blocking every PR, and .github/workflows/ci.yml for the fast
+# check that does run on every push.
+#
+# Public repo -> GitHub Actions minutes are free and unmetered here; the
+# constraint is wall-clock and reviewer attention, not cost.
+
+on:
+  workflow_dispatch: {}
+  schedule:
+    - cron: "0 6 * * 1"  # weekly, Monday 06:00 UTC
+
+jobs:
+  full-eval:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      LLM_PROVIDER: ollama
+      EMBED_PROVIDER: ollama
+      OLLAMA_MODEL: qwen2.5:7b-instruct-q4_K_M
+      OLLAMA_EMBED_MODEL: nomic-embed-text
+    steps:
+      - uses: actions/checkout@v7.0.1
+
+      - uses: actions/setup-python@v7.0.0
+        with:
+          python-version: "3.11"
+
+      - name: Install package
+        run: pip install -e .
+
+      - name: Install Ollama
+        run: curl -fsSL https://ollama.com/install.sh | sh
+
+      - name: Start Ollama and wait for it to be ready
+        run: |
+          ollama serve > /tmp/ollama.log 2>&1 &
+          for i in $(seq 1 30); do
+            curl -sf http://localhost:11434/api/tags > /dev/null && break
+            sleep 2
+          done
+          curl -sf http://localhost:11434/api/tags > /dev/null || {
+            echo "Ollama never came up"; cat /tmp/ollama.log; exit 1;
+          }
+
+      - name: Pull models
+        run: |
+          ollama pull "$OLLAMA_MODEL"
+          ollama pull "$OLLAMA_EMBED_MODEL"
+
+      - name: Download the regulatory corpus
+        run: python -m scripts.download_corpus
+
+      - name: Ingest (chunk + embed + index)
+        run: python -m src.ingest
+
+      - name: Extract regulatory thresholds (Phase 2 warehouse)
+        run: python -m scripts.extract_thresholds
+
+      - name: Phase 1 eval (RAG) — gated
+        run: python -m eval.eval --gate | tee eval/results.md
+
+      - name: Phase 2 eval (warehouse) — gated
+        run: python -m eval.eval_thresholds --gate | tee eval/thresholds_results.md
+
+      - name: Phase 3 eval (agent) — gated
+        run: python -m eval.eval_agent --gate | tee eval/agent_results.md
+
+      - name: Upload eval reports
+        if: always()
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: eval-reports
+          path: |
+            eval/results.md
+            eval/thresholds_results.md
+            eval/agent_results.md
