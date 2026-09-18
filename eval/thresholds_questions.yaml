@@ -1,0 +1,35 @@
+# Ground-truth check for the Phase 2 warehouse (src/warehouse.py, populated by
+# scripts/extract_thresholds.py). Every expected value below was verified by
+# grepping the raw eCFR text directly (see the extraction PR description /
+# commit message for the grep evidence), not assumed — this eval is checking
+# whether LLM-assisted extraction reproduces numbers that are actually in the
+# source, using the warehouse's own citation_excerpt as the audit trail.
+#
+# tolerance: absolute difference allowed between expected and any matching
+# warehouse row's value (0 = exact match required).
+
+checks:
+  - query: "common equity tier 1"
+    expected_value: 4.5
+    expected_unit: percent
+    tolerance: 0
+
+  - query: "tier 1 capital ratio"
+    expected_value: 6
+    expected_unit: percent
+    tolerance: 0
+
+  - query: "total capital ratio"
+    expected_value: 8
+    expected_unit: percent
+    tolerance: 0
+
+  - query: "capital conservation buffer"
+    expected_value: 2.5
+    expected_unit: percent
+    tolerance: 0
+
+  - query: "liquidity coverage ratio"
+    expected_value: 1.0
+    expected_unit: ratio
+    tolerance: 0

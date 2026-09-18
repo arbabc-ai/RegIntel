@@ -4,9 +4,11 @@ This doc complements the README with the math + reasoning behind the choices, th
 
 ## The full value chain (DE → Data → RAG → Agent)
 
-RegIntel is built as four phases; only **Phase 1 (the RAG layer)** is in this repo.
+RegIntel is built as four phases; **Phases 1 and 2 (the RAG layer and the DE/warehouse layer) are in this repo**, runnable locally. Phase 3 (the routing agent) is designed below but not yet implemented.
 
-### Phase 2 — DE + Data layer
+### Phase 2 — DE + Data layer — **built**, runs locally against `data/raw/`
+
+The design below describes the production (S3-native, medallion-pattern, scheduled) shape. What's actually implemented in this repo (`src/warehouse.py`, `scripts/extract_thresholds.py`, `src/lookup.py`) is the same idea at demo scale: local files instead of S3, a single SQLite star schema instead of a warehouse with medallion layers, and a one-shot script instead of a scheduled job — but the same core move (LLM-assisted extraction of numeric thresholds into a queryable fact table, every value traceable to its source chunk) and the same reason for doing it, below.
 
 **The DE problem:** Banking regulation comes from many sources on independent cadences — the Federal Reserve (Regulations Q/WW/YY), OCC and FDIC bulletins, FFIEC examination handbooks, the Basel Committee (BIS) framework, and BSA/AML rules under FinCEN. Thresholds (capital ratios, LCR/NSFR buffers, reporting deadlines) are scattered across thousands of pages of rule text and guidance. Manual tracking doesn't scale, and stale thresholds are a compliance risk.
 
@@ -114,3 +116,5 @@ This is a soft pattern (the model can violate it), but Claude Sonnet follows it 
 | Access control | IAM least-privilege on `bedrock-runtime` (data plane) vs `bedrock` (control plane); CloudTrail on every inference |
 | Eval drift | Pin the judge model version; re-run the eval gate on every prompt change |
 | Scope creep into legal advice | Position as a *research/retrieval* aid, not regulatory counsel; refusal-by-default on un-sourced questions |
+| Formulaic/conditional thresholds read as flat numbers | Caught live: `"the lesser of 1.0 percent or 50 percent of [another value]"` was extracted as a flat 50% requirement (see the README's Phase 2 section for the exact row + citation). The extraction prompt has no notion of a threshold defined *relative to* another value. Production fix: a second extraction pass that classifies each candidate as flat / formulaic / cross-referential before pulling a number, and stores formulaic ones as an unevaluated expression rather than a number. |
+| Extraction coverage is document-order, not importance-order | `scripts/extract_thresholds.py` caps candidates per source and takes the first N in document position — cheap, but means recency- or relevance-ranked passages (e.g. the steady-state minimums vs. an old transitional schedule) aren't preferentially chosen. Production fix: rank candidates by passage distinctiveness (TF-IDF against the corpus) or known-important section headers before capping. |
