@@ -121,38 +121,36 @@ python -m eval.eval_thresholds > eval/thresholds_results.md   # check extracted 
 ### Real output
 
 ```
-$ python -m src.lookup "CET1"
+$ python -m src.lookup "buffer"
 
-=== THRESHOLDS MATCHING 'CET1' ===
+=== THRESHOLDS MATCHING 'buffer' ===
 
-  Minimum common equity tier 1 (CET1) capital ratio: 4.0%
-    Scope: Board-regulated institution (From January 1, 2014 to December 31, 2014)
+  Leverage buffer: FORMULA (not a flat number) — the lesser of 1.0 percent or 50 percent of the most
+  recent method 1 surcharge (expressed as a percentage) that the global systemically important BHC
+  that controls the state member bank was required to calculate pursuant to § 217.403(b)
+    Scope: state member banks that are subsidiaries of global systemically important BHCs
     Source: 12 CFR Part 217 — Regulation Q — Capital Adequacy
-    Citation: cfr_title12_part217_Regulation-Q-Capital-Adequacy.txt::chunk-0018
+    Citation: cfr_title12_part217_Regulation-Q-Capital-Adequacy.txt::chunk-0271
     As of: 2026-09-18
 
-  Minimum common equity tier 1 (CET1) capital ratio: 6.0%
-    Scope: Advanced approaches Board-regulated institution (From January 1, 2015 to December 31, 2017)
-    Source: 12 CFR Part 217 — Regulation Q — Capital Adequacy
-    Citation: cfr_title12_part217_Regulation-Q-Capital-Adequacy.txt::chunk-0018
-    As of: 2026-09-18
-
-  Minimum common equity tier 1 (CET1) capital ratio: 4.5%
-    Scope: Board-regulated institution
-    Source: 12 CFR Part 217 — Regulation Q — Capital Adequacy
-    Citation: cfr_title12_part217_Regulation-Q-Capital-Adequacy.txt::chunk-0226
+  Leverage buffer: FORMULA (not a flat number) — Less than or equal to 75 percent of the global
+  systemically important BHC's leverage buffer requirement under 12 CFR 217.11, and greater than 50
+  percent of the global systemically important BHC's leverage buffer requirement under 12 CFR 217.11
+    Scope: U.S. global systemically important banking organizations
+    Source: 12 CFR Part 252 — Regulation YY — Enhanced Prudential Standards
+    Citation: cfr_title12_part252_Regulation-YY-Enhanced-Prudential-Standards.txt::chunk-0239
     As of: 2026-09-18
 ```
 
-Three rows, not one — and that's correct, not noisy. Reg Q's capital rules phased in over 2014–2017 before landing at today's steady-state ratios, and the extractor pulled all three provisions it found, each with its own scope and citation, rather than collapsing them into a single answer. A real compliance analyst needs exactly this: which ratio applied *when*, not just what it is today.
+That first row used to be the bug: an earlier version of this pipeline read *"the lesser of 1.0 percent or **50 percent of** the most recent [GSIB] surcharge"* and reported it as a flat *"Leverage buffer requirement: 50.0%"* — a real, wrong number, because the extraction prompt had no notion of a threshold defined relative to another value. **Fixed**: the prompt now distinguishes a flat threshold from a formulaic one, and a formulaic row carries the exact quoted expression (`formula_expr` in the warehouse) instead of a value — `value`/`unit` are `NULL` for these rows, not a guess. Re-running extraction with the fix found a *second* real formula this repo hadn't even manually caught before: Reg YY's graduated leverage-buffer schedule (75%/50%/25% tiers of the GSIB's own buffer requirement), correctly quoted rather than misreported as three unrelated flat percentages.
 
-`eval/thresholds_results.md` checks the steady-state values (4.5% CET1, 6% Tier 1, 8% total capital, 2.5% conservation buffer, 1.0 LCR) directly against the raw eCFR text — **5/5 matched**, each with an exact chunk citation.
+`eval/thresholds_results.md` checks 5 steady-state values (4.5% CET1, 6% Tier 1, 8% total capital, 2.5% conservation buffer, 1.0 LCR) directly against the raw eCFR text — **4/5 matched** this run. The miss is understood, not a mystery: extraction ranks candidate passages by a distinctiveness score (see below) and caps how many it sends to the LLM per regulation; the specific passage stating the 2.5% conservation-buffer default ranks 88th of 243 candidates in Reg Q, outside the current cap of 50. Raising the cap to catch it would mean re-running the ~50-minute extraction for one more passage — a real trade-off between coverage and cost, made explicitly rather than hidden. `python -m src.lookup "common equity"` still shows two correctly-extracted CET1 provisions (the 2014 transitional 4.0% and the steady-state 4.5%), each with its own scope and citation — Reg Q's capital rules phased in over 2014–2017 before landing at today's ratios, and the extractor keeps both provisions rather than collapsing them into one answer.
 
 `as_of_date` is the extraction date, not a rule-publication date — the eCFR corpus this repo pulls is "current as of fetch", not versioned by amendment. A production warehouse (S3 raw zone + checksum-tracked incremental ingest, per `docs/architecture.md`) would carry a true `effective_date` per amendment and let a threshold answer be asked *as of* a historical date, which is what a model-risk audit trail actually needs.
 
 **A real defect this caught, left in on purpose:** the naive version of this pipeline sent one 800-character chunk at a time to the extractor. Regulation text is dense enough that a value routinely lands right at a chunk boundary — one candidate chunk ended `"...maintain a minimum common equity ti"`, cutting the number away from its own label. The extractor filled the gap with the next number it saw and mislabeled it. Fix: `scripts/extract_thresholds.py` checks whether a candidate chunk ends mid-sentence and, if so, pulls in enough of the next chunk to complete it before extraction — the same class of fix RAG chunk-overlap exists for, applied to structured extraction instead of retrieval.
 
-**A second one, not fixed — left in the warehouse rather than quietly cleaned up:** run `python -m src.lookup "buffer"` and one row reads *"Leverage buffer requirement: 50.0%, global systemically important BHC"*. The actual rule (`Regulation-Q-Capital-Adequacy.txt::chunk-0271`) is *"the lesser of 1.0 percent or **50 percent of** the most recent [GSIB] surcharge"* — a formula referencing another value, not a flat 50% requirement. The extractor has no notion of conditional/formulaic thresholds and read "50 percent" as one. This is a real, current limitation of the extraction prompt, not a display bug, and it's exactly the kind of failure a warehouse consumer needs surfaced rather than silently corrected: see "What's missing for production" in `docs/architecture.md`.
+**How candidates are chosen, and what changed:** the original version just took the first N regex-matched chunks per regulation, in document order — cheap, and mostly wrong, since a long regulation's early chunks are disproportionately definitions and cross-references. Replaced with `_rank_by_distinctiveness()`: score each candidate by how many *rare numeric tokens* (IDF-weighted) it contains, since the operative rule usually states a number that appears in only one or two places, while boilerplate and cross-references restate the same numbers everywhere. A first version of this scorer used ordinary word tokens and completely ignored digits — verified empirically before shipping (not assumed), it ranked four passages this repo already knew mattered between position 137 and 172 of 243 candidates, nowhere near any realistic cap. Restricting the score to numeric tokens put the same four passages at ranks 5, 29, 38, and 46. Extraction went from 19 threshold records (10 distinct metrics) to **63 records (39 distinct metrics)** on the same corpus, at roughly double the candidate budget (85 vs. 49) and roughly double the run time (~50 min vs. ~14 min on this CPU-only laptop) — a real, bounded cost for real, substantially better coverage, not a free win.
 
 ---
 

@@ -9,8 +9,15 @@ Schema:
     dim_regulations(regulation_id, source_file, citation, title)
     dim_metrics(metric_id, metric_key, metric_label)
     fct_regulatory_thresholds(threshold_id, regulation_id, metric_id,
-        institution_tier, value, unit, condition_text,
+        institution_tier, value, unit, is_formula, formula_expr, condition_text,
         chunk_source, chunk_index, citation_excerpt, as_of_date, extracted_at)
+
+`value`/`unit` are nullable: a threshold defined RELATIVE to another value
+(e.g. "the lesser of 1.0 percent or 50 percent of the most recent GSIB
+surcharge") has no single flat number, and extraction used to guess one
+anyway — that's the defect documented in the README's Phase 2 section. Such
+rows carry `is_formula=1` and the exact quoted expression in `formula_expr`
+instead, with `value`/`unit` left NULL rather than a misleading number.
 
 `as_of_date` is the ingest/extraction date, not a rule-published date — the
 eCFR corpus this repo pulls is "current as of fetch", not versioned by date.
@@ -46,8 +53,10 @@ CREATE TABLE IF NOT EXISTS fct_regulatory_thresholds (
     regulation_id     INTEGER NOT NULL REFERENCES dim_regulations(regulation_id),
     metric_id         INTEGER NOT NULL REFERENCES dim_metrics(metric_id),
     institution_tier  TEXT NOT NULL DEFAULT 'all covered institutions',
-    value             REAL NOT NULL,
-    unit              TEXT NOT NULL,
+    value             REAL,
+    unit              TEXT,
+    is_formula        INTEGER NOT NULL DEFAULT 0,
+    formula_expr      TEXT NOT NULL DEFAULT '',
     condition_text    TEXT NOT NULL DEFAULT '',
     chunk_source      TEXT NOT NULL,
     chunk_index       INTEGER NOT NULL,
@@ -125,22 +134,24 @@ def insert_threshold(
     regulation_id: int,
     metric_id: int,
     institution_tier: str,
-    value: float,
-    unit: str,
+    value: float | None,
+    unit: str | None,
     condition_text: str,
     chunk_source: str,
     chunk_index: int,
     citation_excerpt: str,
+    is_formula: bool = False,
+    formula_expr: str = "",
 ) -> None:
     now = datetime.now(timezone.utc).isoformat()
     conn.execute(
         """INSERT INTO fct_regulatory_thresholds
-           (regulation_id, metric_id, institution_tier, value, unit, condition_text,
-            chunk_source, chunk_index, citation_excerpt, as_of_date, extracted_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+           (regulation_id, metric_id, institution_tier, value, unit, is_formula, formula_expr,
+            condition_text, chunk_source, chunk_index, citation_excerpt, as_of_date, extracted_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (
-            regulation_id, metric_id, institution_tier, value, unit, condition_text,
-            chunk_source, chunk_index, citation_excerpt, now, now,
+            regulation_id, metric_id, institution_tier, value, unit, int(is_formula), formula_expr,
+            condition_text, chunk_source, chunk_index, citation_excerpt, now, now,
         ),
     )
 
@@ -155,6 +166,7 @@ def lookup_threshold(query: str, limit: int = 5) -> list[dict]:
         rows = conn.execute(
             """SELECT r.citation AS regulation, r.title AS regulation_title,
                       m.metric_label AS metric, t.institution_tier, t.value, t.unit,
+                      t.is_formula, t.formula_expr,
                       t.condition_text, t.chunk_source, t.chunk_index,
                       t.citation_excerpt, t.as_of_date
                FROM fct_regulatory_thresholds t

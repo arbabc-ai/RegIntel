@@ -115,10 +115,14 @@ def _execute_tool(name: str, args: dict) -> tuple[str, set[str]]:
             return f"No warehouse threshold found matching {metric!r}.", set()
         lines, sources = [], set()
         for r in rows:
-            unit_str = "%" if r["unit"] == "percent" else f" {r['unit']}"
             citation = f"{r['chunk_source']}::chunk-{r['chunk_index']:04d}"
+            if r["is_formula"]:
+                value_str = f"FORMULA (not a flat number) — {r['formula_expr']}"
+            else:
+                unit_str = "%" if r["unit"] == "percent" else f" {r['unit']}"
+                value_str = f"{r['value']}{unit_str}"
             lines.append(
-                f"- {r['metric']}: {r['value']}{unit_str}, scope: {r['institution_tier']}"
+                f"- {r['metric']}: {value_str}, scope: {r['institution_tier']}"
                 + (f" ({r['condition_text']})" if r.get("condition_text") else "")
                 + f" [source: {citation}]"
             )

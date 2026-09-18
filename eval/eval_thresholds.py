@@ -39,7 +39,8 @@ def main() -> None:
         match = next(
             (
                 r for r in rows
-                if r["unit"] == c["expected_unit"]
+                if not r["is_formula"]  # a formula row has no flat value to compare
+                and r["unit"] == c["expected_unit"]
                 and abs(r["value"] - c["expected_value"]) <= c["tolerance"]
             ),
             None,
