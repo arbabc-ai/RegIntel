@@ -35,8 +35,11 @@ def main() -> None:
 
     print(f"\n=== THRESHOLDS MATCHING {query!r} ===\n")
     for r in rows:
-        unit_str = "%" if r["unit"] == "percent" else f" {r['unit']}"
-        print(f"  {r['metric']}: {r['value']}{unit_str}")
+        if r["is_formula"]:
+            print(f"  {r['metric']}: FORMULA (not a flat number) — {r['formula_expr']}")
+        else:
+            unit_str = "%" if r["unit"] == "percent" else f" {r['unit']}"
+            print(f"  {r['metric']}: {r['value']}{unit_str}")
         print(f"    Scope: {r['institution_tier']}"
               + (f" ({r['condition_text']})" if r.get("condition_text") else ""))
         print(f"    Source: {r['regulation']} — {r['regulation_title']}")
