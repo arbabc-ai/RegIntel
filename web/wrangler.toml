@@ -1,0 +1,14 @@
+# RegIntel hosted app — Cloudflare Pages project `regintel` (regintel.velodyn.com).
+name = "regintel"
+pages_build_output_dir = "public"
+compatibility_date = "2026-09-01"
+
+# Workers AI (embeddings + generation) and Vectorize (regulation chunks), both used via
+# bindings, so the runtime needs no API token. Create the index once (see web/README.md):
+#   npx wrangler vectorize create regintel-fed --dimensions=384 --metric=cosine
+[ai]
+binding = "AI"
+
+[[vectorize]]
+binding = "VECTORIZE"
+index_name = "regintel-fed"
