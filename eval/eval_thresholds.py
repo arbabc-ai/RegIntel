@@ -18,10 +18,12 @@ from src.warehouse import lookup_threshold
 
 CHECKS_PATH = Path("eval/thresholds_questions.yaml")
 
-# CI gate threshold, set below the 5/5 this eval currently gets: extraction
-# is itself an LLM pass (scripts/extract_thresholds.py), so which candidate
-# chunks get captured can vary slightly run to run, not just query-time
-# generation. Tolerates one flake without masking a genuine regression.
+# CI gate threshold. This eval currently scores 4/5 (the 2.5% conservation
+# buffer passage ranks outside the extraction candidate cap; see README), so
+# 0.8 is the current score, not a margin below it: any further miss fails the
+# gate. Deliberate -- lowering it would mask a real regression. Extraction is
+# itself an LLM pass (scripts/extract_thresholds.py), so coverage can vary
+# run to run; if the gate flakes, raise the candidate cap before the threshold.
 CHECKS_MIN_RATE = 0.8  # 4/5
 
 

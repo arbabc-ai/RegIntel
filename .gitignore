@@ -13,3 +13,6 @@ data/bm25_index.pkl
 *.egg-info/
 build/
 dist/
+data/fed/
+web/node_modules/
+web/.wrangler/
