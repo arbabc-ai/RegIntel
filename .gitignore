@@ -14,5 +14,6 @@ data/bm25_index.pkl
 build/
 dist/
 data/fed/
+data/corpus-phase1/
 web/node_modules/
 web/.wrangler/
