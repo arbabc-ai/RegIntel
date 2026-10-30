@@ -450,6 +450,7 @@ class Index:
                 out["explicit_parts"] = json.loads(row["explicit_parts"] or "[]")
                 out["explicit_ranges"] = json.loads(row["explicit_ranges"] or "[]")
                 out["explicit_paragraphs"] = json.loads(row["explicit_paragraphs"] or "{}")
+                out["carried_text_origin"] = row["carried_text_origin"]
                 out["pairing_status"] = row["pairing_status"]
         else:
             out["status"] = {"state": "current_baseline_requires_operative_effect_review",

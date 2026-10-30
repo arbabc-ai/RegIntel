@@ -1,7 +1,7 @@
 """Relational schema for the Phase 1 evidence index (SQLite, standard library)."""
 import sqlite3
 
-SCHEMA_VERSION = "p1-0.4"
+SCHEMA_VERSION = "p1-0.5"
 
 DDL = """
 CREATE TABLE index_meta (key TEXT PRIMARY KEY, value TEXT);
@@ -58,6 +58,7 @@ CREATE TABLE provision (
   operations TEXT,                         -- JSON, regex signal from the instruction (unreviewed)
   explicit_targets TEXT,                   -- JSON, sections this row's instruction explicitly amends (unreviewed)
   explicit_parts TEXT,                     -- JSON, parts it explicitly amends (authority citation, "Amend part N")
+  carried_text_origin TEXT,                -- section_element | loose_paragraphs (carried text that had no SECTION wrapper)
   explicit_paragraphs TEXT,                -- JSON {paths, status}: complete paragraph paths the paired instruction names
   explicit_ranges TEXT,                    -- JSON, `A.x through A.y` ranges named by an instruction-only row
   referenced_citations TEXT,               -- JSON, citations named in the instruction but NOT amended

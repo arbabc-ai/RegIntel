@@ -21,6 +21,17 @@ PASSAGE_CHARS = 1800
 UNIT_CHARS = 3000
 
 
+# A paragraph that follows an amendatory instruction is a continuation of it only when it is a short formulaic closer
+# ("The revisions and additions read as follows:") that does not open with a paragraph designator. Anything else is
+# carried regulatory text.
+CONTINUATION = re.compile(
+    r"^(?!\()[^()]{0,260}?\b(?:read|reads)\s+as\s+follows\s*:?\s*$|^(?!\()[^()]{0,200}\bas\s+follows\s*:\s*$", re.I)
+
+
+def is_continuation(text):
+    return bool(text) and len(text) <= 300 and bool(CONTINUATION.match(text))
+
+
 def clean(text):
     return WS.sub(" ", text.replace("\xa0", " ")).strip()
 
@@ -80,7 +91,10 @@ PARA_TOKEN = r"(?:\([A-Za-z0-9]+\))+"
 PARA_LIST = (rf"({PARA_TOKEN}(?:\s*(?:,|and|or|through|to|[\-\u2013\u2014])\s*(?:and\s+)?{PARA_TOKEN})*)")
 # A paragraph counts as named only as the object of an action ("revising paragraph (c)(1)", "In paragraph (a)(2),"),
 # outside quotation marks. A bare mention elsewhere is not evidence.
-PARA_ACTION = re.compile(rf"(?:\b{VERB}\s+(?:new\s+)?|(?<![A-Za-z])In\s+)paragraphs?\s+{PARA_LIST}", re.I)
+PARA_ACTION = re.compile(
+    rf"(?:\b{VERB}\s+(?:new\s+)?|(?:^|[.;:,]\s+|\b[a-z0-9]{{1,3}}\.\s+)(?-i:In)\s+)paragraphs?\s+{PARA_LIST}", re.I)
+# "In paragraph (c)(2), removing ..." names a path only as a clause-initial capital "In"; "provided in paragraph (e)(3)"
+# is a cross-reference and never evidence.
 PARA_PART = re.compile(r"\([A-Za-z0-9]+\)")
 
 
@@ -240,11 +254,16 @@ class FrParser:
                 self.close_loose()
                 self.on_heading(child)
             elif tag in ("P", "FP", "LI"):
-                if self.loose is not None and self.loose["instr_open"]:
-                    self.loose["instructions"][-1] += " " + text_of(child)  # e.g. "The revision reads as follows:"
+                text = text_of(child)
+                if self.loose is not None and self.loose["instr_open"] and is_continuation(text):
+                    self.loose["instructions"][-1] += " " + text  # e.g. "The revision reads as follows:"
+                    continue
+                if self.loose is not None and self.loose["block_open"]:
+                    self.loose["instr_open"] = False  # the instruction is complete; this is carried regulatory text
+                    self.loose["blocks"][-1]["paragraphs"].append(text)
                     continue
                 self.close_loose()
-                self.add_para(text_of(child))
+                self.add_para(text)
             elif tag == "FTNT":
                 self.stats["footnotes"] += 1
                 self.add_para("[footnote] " + text_of(child))
@@ -273,7 +292,8 @@ class FrParser:
         pairing is done afterwards by section reference (see add_unit), not by position.
         """
         if self.loose is None:
-            self.loose = {"instructions": [], "sections": [], "parts": [], "instr_open": False}
+            self.loose = {"instructions": [], "sections": [], "parts": [], "instr_open": False,
+                          "block_open": False, "blocks": []}
         if child.tag == "AMDPAR":
             text = text_of(child)
             if self.loose["instructions"] and not NUMBERED.match(text):
@@ -281,8 +301,12 @@ class FrParser:
             else:
                 self.loose["instructions"].append(text)
             self.loose["instr_open"] = True
+            # loose carried paragraphs that follow are kept apart from the instruction, tied to its position
+            self.loose["block_open"] = True
+            self.loose["blocks"].append({"instruction_idx": len(self.loose["instructions"]), "paragraphs": []})
             return
         self.loose["instr_open"] = False
+        self.loose["block_open"] = False
         if child.tag == "PART":
             self.loose["parts"].append(child)
         self.loose["sections"].append(child)
@@ -308,7 +332,7 @@ class FrParser:
             m = PART_HD.search(text_of(hd)) if hd is not None else None
             part = part or (m.group(1) if m else None)
         self.add_unit(holder, self.default_title, part, is_regtext=False,
-                      instructions=loose["instructions"])
+                      instructions=loose["instructions"], blocks=loose["blocks"])
 
     def collect_rows(self, el, part, rows):
         """Carried regulatory text in document order, each row with the part it sits in."""
@@ -357,7 +381,7 @@ class FrParser:
                 status = "unattributed_multiple_targets" if status != "attributed" else status
         return {"paths": paths, "status": status}
 
-    def add_unit(self, el, title, part, is_regtext, instructions=None):
+    def add_unit(self, el, title, part, is_regtext, instructions=None, blocks=None):
         """Pair carried section text only with instructions that explicitly target that section.
 
         Instruction text is kept complete. A citation merely referenced inside an instruction is not a target.
@@ -422,6 +446,32 @@ class FrParser:
                 "explicit_targets": explicit_targets, "explicit_parts": explicit_parts,
                 "referenced_citations": [x for i in matched for x in i["parsed"]["references"]],
                 "unresolved_candidates": unresolved, "pairing_status": status, "paragraphs": r["paragraphs"]})
+        for block in blocks or []:  # loose carried paragraphs (no SECTION wrapper) that followed an instruction
+            if not block["paragraphs"]:
+                continue
+            item = next((i for i in items if i["idx"] == block["instruction_idx"]), None)
+            parsed = item["parsed"] if item else None
+            if item and len(parsed["targets"]) == 1 and not parsed["ranges"] and not parsed["parts"]:
+                section = parsed["targets"][0]
+                item["used"] = True
+                item["covered"].add(section)
+                out.append({
+                    "section_no": section, "part_no": section.split(".")[0], "subject": None, "instruction": item["text"],
+                    "instruction_ordinals": [item["idx"]],
+                    "instruction_targets_all": {"targets": parsed["targets"], "ranges": parsed["ranges"]},
+                    "explicit_targets": [section], "explicit_parts": [], "referenced_citations": parsed["references"],
+                    "unresolved_candidates": [], "pairing_status": "explicit_loose_text",
+                    "paragraphs": block["paragraphs"], "carried_text_origin": "loose_paragraphs"})
+            else:  # association uncertain: keep the text and the candidate instruction, assert no target
+                out.append({
+                    "section_no": None, "part_no": part, "subject": None, "instruction": "", "instruction_ordinals": [],
+                    "instruction_targets_all": {"targets": [], "ranges": []}, "explicit_targets": [], "explicit_parts": [],
+                    "referenced_citations": [],
+                    "unresolved_candidates": ([{"instruction": item["text"], "instruction_ordinal": item["idx"],
+                                                "reason": "loose carried paragraphs follow an instruction that does not "
+                                                          "have a single explicit section target"}] if item else []),
+                    "pairing_status": "carried_text_unpaired", "paragraphs": block["paragraphs"],
+                    "carried_text_origin": "loose_paragraphs"})
         for i in items:  # instruction-only amendments: targets not covered by a carried-text row
             parsed = i["parsed"]
             remaining = [t for t in parsed["targets"] if t not in i["covered"]]
@@ -473,7 +523,7 @@ class FrParser:
                     "referenced_citations": r["referenced_citations"],
                     "unresolved_candidates": r["unresolved_candidates"], "pairing_status": r["pairing_status"],
                     "paragraph_leads": leads, "text": "\n".join(chunk), "fr_page": self.page,
-                    "from_regtext": is_regtext})
+                    "from_regtext": is_regtext, "carried_text_origin": r.get("carried_text_origin", "section_element")})
         self.stats["amendment_units"] += 1
 
     def run(self):

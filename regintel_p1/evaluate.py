@@ -433,6 +433,70 @@ def check_delta_precision(index, item):
             "section_context": [k for k, g in inst.items() if g.get("role") == "section_context"]}
 
 
+def check_instruction_boundary(index, item):
+    """Real-corpus guard for the instruction/carried-text boundary: the instruction is kept separate from loose carried
+    paragraphs, paragraph evidence comes only from instruction text, and an unsupported descendant never resolves."""
+    from .fedreg import named_paragraph_paths
+    failures, c = [], index.conn
+    rows = c.execute(
+        """SELECT p.instruction, p.text, p.pairing_status, p.carried_text_origin, p.explicit_paragraphs, p.locator
+           FROM provision p JOIN source_document d ON d.id=p.doc_id
+           WHERE d.doc_key=? AND p.kind='amendment' AND p.section_no=?""", (item["doc_key"], item["section"])).fetchall()
+    if not rows:
+        return {"id": item["id"], "passed": False, "failures": ["no amendment units found"]}
+    for r in rows:
+        if not r["instruction"].startswith(item["instruction_prefix"]) or len(r["instruction"]) > item["instruction_max_len"]:
+            failures.append(f"{r['locator']}: instruction not separated ({len(r['instruction'])} chars)")
+        if (r["carried_text_origin"], r["pairing_status"]) != ("loose_paragraphs", "explicit_loose_text"):
+            failures.append(f"{r['locator']}: origin/pairing {r['carried_text_origin']}/{r['pairing_status']}")
+        paths = json.loads(r["explicit_paragraphs"])["paths"]
+        if sorted(paths) != sorted(item["supported"]):
+            failures.append(f"{r['locator']}: paths {paths} != {item['supported']}")
+    carried = "\n".join(r["text"] for r in rows)
+    for needle in item["carried_contains"]:
+        if needle not in carried:
+            failures.append(f"carried text lost: {needle}")
+    if any(item["carried_contains"][0] in r["instruction"] for r in rows):
+        failures.append("carried text found inside the instruction")
+    # corpus-wide: stored paragraph paths must be derivable from the stored instruction text alone
+    bad = 0
+    for ins, ep in c.execute("SELECT instruction, explicit_paragraphs FROM provision WHERE kind='amendment' AND explicit_paragraphs IS NOT NULL"):
+        paths = json.loads(ep).get("paths", [])
+        if paths and not set(paths) <= set(named_paragraph_paths(ins)):
+            bad += 1
+    if bad:
+        failures.append(f"{bad} units carry paths not derivable from their instruction text")
+    cite = lambda p: f"12 CFR {item['section']}{p}"
+    for path in item["supported"]:
+        rec = index.resolve_citations(cite(path), "future")[0]
+        if not (rec["resolved"] and rec["achieved"] == "paragraph"):
+            failures.append(f"{path} should resolve at paragraph precision")
+    for path in item["unsupported"]:
+        label = cite(path)
+        rec = index.resolve_citations(label, "future")[0]
+        if rec["resolved"] or rec["achieved"] != "section_only" or rec["future_paragraph_support"]:
+            failures.append(f"{path} resolved through an ancestor or a cross-reference")
+        d = index.delta(label)
+        if d["future_precision"]["resolved"] or any(g.get("role") != "section_context" for g in d["instruments"] if g["doc_key"] == item["doc_key"]):
+            failures.append(f"{path}: delta established precision")
+        if d["legal_validity"] != "not_determined" or d["applicability_status"] != "not_assessed":
+            failures.append(f"{path}: delta asserted validity or applicability")
+        for mode in ("exact", "hybrid"):
+            for scope in ("current", "future", "both"):
+                for parts in (None, ["12:999"]):
+                    out = index.answer(label, mode=mode, scope=scope, parts=parts, k=10)
+                    tag = f"{path} {mode}/{scope}/{parts or 'nofilter'}"
+                    if out["status"] == "evidence_found":
+                        failures.append(f"{tag}: evidence_found")
+                    if f"citation:{label}" not in {g["topic"] for g in out["coverage_gaps"]}:
+                        failures.append(f"{tag}: no citation gap")
+                    if parts and out["results"]:
+                        failures.append(f"{tag}: excluding filter returned results")
+                    failures += [f"{tag}: {f}" for f in invariant_failures(out, scope)]
+    return {"id": item["id"], "doc_key": item["doc_key"], "section": item["section"], "units": len(rows),
+            "passed": not failures, "failures": failures[:10]}
+
+
 def run_regressions(index, path):
     spec = json.loads(open(path).read())
     out = {"version": spec["version"], "task": spec["task"],
@@ -442,12 +506,14 @@ def run_regressions(index, path):
            "status": [check_status_regression(index, x) for x in spec.get("status", [])],
            "citation_completeness": [check_citation_completeness(index, x) for x in spec.get("citation_completeness", [])],
            "mixed_source": [check_mixed_source(index, x) for x in spec.get("mixed_source", [])],
-           "delta_precision": [check_delta_precision(index, x) for x in spec.get("delta_precision", [])]}
+           "delta_precision": [check_delta_precision(index, x) for x in spec.get("delta_precision", [])],
+           "instruction_boundary": [check_instruction_boundary(index, x) for x in spec.get("instruction_boundary", [])]}
     out["passed"] = (all(d["passed"] for d in out["delta"]) and out["relationship_integrity"]["passed"]
                      and all(c["passed"] for c in out["citation_scope"]) and all(x["passed"] for x in out["status"])
                      and all(x["passed"] for x in out["citation_completeness"])
                      and all(x["passed"] for x in out["mixed_source"])
-                     and all(x["passed"] for x in out["delta_precision"]))
+                     and all(x["passed"] for x in out["delta_precision"])
+                     and all(x["passed"] for x in out["instruction_boundary"]))
     return out
 
 
@@ -498,6 +564,8 @@ def render(report):
         lines.append(f"  {ri['id']} {'PASS' if ri['passed'] else 'FAIL'} relationship integrity violations={ri['violations']} {'; '.join(ri['failures'])}")
         for c in reg["citation_scope"]:
             lines.append(f"  {c['id']} {'PASS' if c['passed'] else 'FAIL'} citation scope '{c['query']}' {'; '.join(c['failures'])}")
+        for x in reg.get("instruction_boundary", []):
+            lines.append(f"  {x['id']} {'PASS' if x['passed'] else 'FAIL'} instruction boundary {x.get('doc_key')} § {x.get('section')} units={x.get('units')} {'; '.join(x['failures'])}")
         for x in reg.get("delta_precision", []):
             lines.append(f"  {x['id']} {'PASS' if x['passed'] else 'FAIL'} delta precision '{x['citation']}' status={x.get('evidence_status')} supported={[k[-5:] for k in x.get('supported', [])]} context={[k[-5:] for k in x.get('section_context', [])]} {'; '.join(x['failures'])}")
         for x in reg.get("mixed_source", []):
