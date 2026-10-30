@@ -30,7 +30,7 @@ ECFR = "https://www.ecfr.gov"
 FR = "https://www.federalregister.gov"
 HOSTS = {"www.ecfr.gov", "www.federalregister.gov", "www.govinfo.gov", "www.gpo.gov"}
 PART = re.compile(r"^[0-9]+[a-zA-Z]?$")
-DOCUMENT = re.compile(r"^[0-9]{4}-[0-9]+$")
+DOCUMENT = re.compile(r"^(?:C[0-9]-)?[0-9]{4}-[0-9]+$")  # C1- etc. prefix official correction documents
 
 
 def now() -> str:

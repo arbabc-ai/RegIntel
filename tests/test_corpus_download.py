@@ -122,6 +122,27 @@ class DownloadTests(unittest.TestCase):
         self.assertIn("unreviewed_disposition", row["rule_status"])
         self.assertFalse(row["eligible_for_indexing"])
 
+    def test_correction_document_number_is_accepted_and_others_rejected(self):
+        self.assertTrue(c.DOCUMENT.fullmatch("C1-2026-10036"))
+        for bad in ("X1-2026-10036", "C1-2026", "../2026-1", "2026-1/x"):
+            self.assertIsNone(c.DOCUMENT.fullmatch(bad))
+        args = c.parser().parse_args(["--max-documents", "1", "federal-register", "--agency", "test", "--since", "2026-01-01"])
+        number = "C1-2026-10036"
+        class FRClient(FakeClient):
+            def get_json(self, url):
+                if "documents.json?" in url:
+                    value = {"count": 1, "results": [{"document_number": number}], "next_page_url": None}
+                else:
+                    value = {"document_number": number, "type": "Rule",
+                             "full_text_xml_url": "https://www.govinfo.gov/example.xml"}
+                return value, c.Response(json.dumps(value).encode(), url, {}, c.now())
+        client = FRClient({"https://www.govinfo.gov/example.xml": b"<RULE><PREAMB>Correction</PREAMB></RULE>"})
+        counts = c.download_fr(args, client, self.corpus)
+        self.assertEqual(counts["failed"], 0)
+        row = self.corpus.manifest["documents"][f"fr:{number}"]
+        self.assertIn("unreviewed_disposition", row["rule_status"])
+        self.assertFalse(row["eligible_for_indexing"])
+
     def test_lock_prevents_concurrent_mutation(self):
         with c.output_lock(self.output):
             with self.assertRaises(FileExistsError):
