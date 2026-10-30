@@ -902,6 +902,44 @@ def check_appendix_evidence(index, item):
     return {"id": item["id"], "kind": kind, "passed": not failures, "failures": failures[:10]}
 
 
+def check_titleless_delta(index, item):
+    """Real-corpus guard for titleless section citations: delta() and the citation resolver take the same title decision,
+    so `\u00a7 3.22` keeps exactly the instruments (and per-instrument paragraph support) of `12 CFR 3.22`, and a title that
+    cannot be identified uniquely is reported as ambiguity, never merged. Literal expectations are pinned in the item."""
+    failures = []
+    plain, explicit = item["titleless"], item["explicit"]
+    a, b = index.delta(plain), index.delta(explicit)
+    strip = ("citation", "requested_citation", "canonical_citation", "title_resolution")
+    if {k: v for k, v in a.items() if k not in strip} != {k: v for k, v in b.items() if k not in strip}:
+        failures.append("titleless delta differs from the fully qualified delta")
+    res = a["title_resolution"]
+    if (res["status"], res["title"]) != ("unique_from_acquired_evidence", item["title"]):
+        failures.append(f"title resolution {res['status']}/{res['title']} != unique/{item['title']}")
+    if [g["doc_key"] for g in a["instruments"]] != item["instruments"]:
+        failures.append(f"instruments {[g['doc_key'] for g in a['instruments']]} != {item['instruments']}")
+    if item.get("supported") is not None and sorted(a["future_precision"].get("supported_instruments") or []) != item["supported"]:
+        failures.append("paragraph support differs from the expected instruments")
+    if bool(a["baseline"]) != item["baseline"]:
+        failures.append("baseline presence differs")
+    if item.get("supported") is not None:
+        ctx = sorted(g["doc_key"] for g in a["instruments"] if g.get("role") == "section_context")
+        if ctx != item["section_context"]:
+            failures.append(f"section-context instruments {ctx} != {item['section_context']}")
+    for scope in ("current", "future", "both"):
+        ra, rb = index.resolve_citations(plain, scope)[0], index.resolve_citations(explicit, scope)[0]
+        for key in ("resolved", "achieved", "reason", "by_scope", "future_paragraph_support", "_current_ids", "_future_ids"):
+            if ra[key] != rb[key]:
+                failures.append(f"{scope}: resolver {key} differs between titleless and explicit")
+    if a["current_precision"]["resolved"] != index.resolve_citations(plain, "current")[0]["resolved"] or \
+            a["future_precision"]["resolved"] != index.resolve_citations(plain, "future")[0]["resolved"]:
+        failures.append("delta and resolver disagree for the titleless citation")
+    if "None CFR" in json.dumps(a, default=str):
+        failures.append("a missing title was interpolated as 'None'")
+    if a["legal_validity"] != "not_determined" or a["applicability_status"] != "not_assessed":
+        failures.append("validity or applicability asserted")
+    return {"id": item["id"], "titleless": plain, "explicit": explicit, "passed": not failures, "failures": failures[:10]}
+
+
 def run_regressions(index, path):
     spec = json.loads(Path(path).read_text())
     out = {"version": spec["version"], "task": spec["task"],
@@ -918,7 +956,8 @@ def run_regressions(index, path):
            "designator_integrity": [check_designator_integrity(index, x) for x in spec.get("designator_integrity", [])],
            "query_citations": [check_query_citations(index, x) for x in spec.get("query_citations", [])],
            "suffix_integrity": [check_suffix_integrity(index, x) for x in spec.get("suffix_integrity", [])],
-           "appendix_evidence": [check_appendix_evidence(index, x) for x in spec.get("appendix_evidence", [])]}
+           "appendix_evidence": [check_appendix_evidence(index, x) for x in spec.get("appendix_evidence", [])],
+           "titleless_delta": [check_titleless_delta(index, x) for x in spec.get("titleless_delta", [])]}
     out["passed"] = (all(d["passed"] for d in out["delta"]) and out["relationship_integrity"]["passed"]
                      and all(c["passed"] for c in out["citation_scope"]) and all(x["passed"] for x in out["status"])
                      and all(x["passed"] for x in out["citation_completeness"])
@@ -930,12 +969,13 @@ def run_regressions(index, path):
                      and all(x["passed"] for x in out["designator_integrity"])
                      and all(x["passed"] for x in out["query_citations"])
                      and all(x["passed"] for x in out["suffix_integrity"])
-                     and all(x["passed"] for x in out["appendix_evidence"]))
+                     and all(x["passed"] for x in out["appendix_evidence"])
+                     and all(x["passed"] for x in out["titleless_delta"]))
     return out
 
 
 REGRESSION_GROUPS = ("delta", "relationship_integrity", "citation_scope", "status", "citation_completeness",
-                     "mixed_source", "delta_precision", "instruction_boundary", "current_agreement", "amendatory_lists", "designator_integrity", "query_citations", "suffix_integrity", "appendix_evidence")
+                     "mixed_source", "delta_precision", "instruction_boundary", "current_agreement", "amendatory_lists", "designator_integrity", "query_citations", "suffix_integrity", "appendix_evidence", "titleless_delta")
 
 
 def overall(report):
@@ -1018,6 +1058,8 @@ def render(report):
         lines.append(f"  {ri['id']} {'PASS' if ri['passed'] else 'FAIL'} relationship integrity violations={ri['violations']} {'; '.join(ri['failures'])}")
         for c in reg["citation_scope"]:
             lines.append(f"  {c['id']} {'PASS' if c['passed'] else 'FAIL'} citation scope '{c['query']}' {'; '.join(c['failures'])}")
+        for x in reg.get("titleless_delta", []):
+            lines.append(f"  {x['id']} {'PASS' if x['passed'] else 'FAIL'} titleless delta '{x['titleless']}' = '{x['explicit']}' {'; '.join(x['failures'])}")
         for x in reg.get("appendix_evidence", []):
             lines.append(f"  {x['id']} {'PASS' if x['passed'] else 'FAIL'} appendix evidence [{x['kind']}] {'; '.join(x['failures'])}")
         for x in reg.get("suffix_integrity", []):

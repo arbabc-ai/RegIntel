@@ -1,6 +1,6 @@
 {
- "version": "p1-regress-0.15",
- "task": "S7-P1-EVIDENCE-BOUNDARIES-01 + S7-P1-EVIDENCE-COMPLETENESS-02 + S7-P1-COVERAGE-GUARDS-03 + S7-P1-CITATION-COMPLETENESS-04 + S7-P1-FUTURE-PARAGRAPH-PRECISION-05 + S7-P1-MIXED-SOURCE-COVERAGE-06 + S7-P1-DELTA-PRECISION-07 + S7-P1-INSTRUCTION-BOUNDARY-08 + S7-P1-RESERVED-RANGE-CONSISTENCY-09 + S7-P1-AMENDATORY-LIST-PRECISION-11 + S7-P1-DESIGNATOR-TOKEN-INTEGRITY-12 + S7-P1-QUERY-CITATION-INTEGRITY-13 + S7-P1-SUFFIX-INTEGRITY-14 + S7-P1-SUFFIX-INTEGRITY-14 + S7-P1-SUFFIX-BOUNDARY-15 + S7-P1-APPENDIX-EVIDENCE-16",
+ "version": "p1-regress-0.16",
+ "task": "S7-P1-EVIDENCE-BOUNDARIES-01 + S7-P1-EVIDENCE-COMPLETENESS-02 + S7-P1-COVERAGE-GUARDS-03 + S7-P1-CITATION-COMPLETENESS-04 + S7-P1-FUTURE-PARAGRAPH-PRECISION-05 + S7-P1-MIXED-SOURCE-COVERAGE-06 + S7-P1-DELTA-PRECISION-07 + S7-P1-INSTRUCTION-BOUNDARY-08 + S7-P1-RESERVED-RANGE-CONSISTENCY-09 + S7-P1-AMENDATORY-LIST-PRECISION-11 + S7-P1-DESIGNATOR-TOKEN-INTEGRITY-12 + S7-P1-QUERY-CITATION-INTEGRITY-13 + S7-P1-SUFFIX-INTEGRITY-14 + S7-P1-SUFFIX-INTEGRITY-14 + S7-P1-SUFFIX-BOUNDARY-15 + S7-P1-APPENDIX-EVIDENCE-16 + S7-P1-TITLELESS-DELTA-17",
  "note": "Deterministic regression checks over the acquired corpus for amendment-target integrity and retrieval scope filtering. Kept separate from questions.json so the 37-item baseline stays frozen. A pass means the contract holds, not that any rule applies to a bank.",
  "delta": [
   {
@@ -229,7 +229,8 @@
   "v0.12 (QUERY-CITATION-INTEGRITY-13, F1): query_citations QC01-QC06: a spaced designator resolves identically to the canonical citation (both supporting future instruments), a complete missing path keeps every designator, and unclosed/detached suffixes are explicit unresolved citations that never accept their valid prefix. Earlier checks unchanged.",
   "v0.13 (SUFFIX-INTEGRITY-14, F1): suffix_integrity SI01-SI05: an unclosed numeric suffix of length 6, 7, 8, 9 or 20 (with and without whitespace) is an explicit unresolved citation that never establishes its ancestor, never reaches evidence_found and carries a citation gap through resolver, exact/hybrid answers and delta; a closed designator of the same lengths keeps its full path; an unclosed instruction designator names no path; the plain ancestor and an explanatory parenthetical are controls. Earlier checks unchanged.",
   "v0.14 (SUFFIX-BOUNDARY-15, F1): suffix_integrity SB01-SB03: a punctuation-led suffix ((a)(-1)) and an unclosed glued parenthetical followed by an unrelated later ')' ((a)(introd and (b)) are explicit unresolved citations that never establish 12 CFR 3.22(a) or 3.12(c), never reach evidence_found, carry a citation gap, and leave delta unavailable with no baseline or instruments; the matching amendatory instructions attribute no path; closed explanations and the plain ancestor are controls. Earlier checks unchanged.",
-  "v0.15 (APPENDIX-EVIDENCE-16, F2): appendix_evidence AE01-AE07 pin the two direct REGTEXT/EXTRACT blocks of fr:2026-20247 (Appendix A and B to 12 CFR Part 252): recovered in document order with locators, source hash/URL, a line count and a token fingerprint equal to the source element; reachable in future retrieval for 12:252 and absent from current scope and excluded part filters; no section, part-wide or range target, no relationship, appendix-internal section numbers (2.1, 2.2, 3.1, 3.2) never CFR sections; distinct publisher-titled identities with binding_status not_determined. Earlier checks unchanged."
+  "v0.15 (APPENDIX-EVIDENCE-16, F2): appendix_evidence AE01-AE07 pin the two direct REGTEXT/EXTRACT blocks of fr:2026-20247 (Appendix A and B to 12 CFR Part 252): recovered in document order with locators, source hash/URL, a line count and a token fingerprint equal to the source element; reachable in future retrieval for 12:252 and absent from current scope and excluded part filters; no section, part-wide or range target, no relationship, appendix-internal section numbers (2.1, 2.2, 3.1, 3.2) never CFR sections; distinct publisher-titled identities with binding_status not_determined. Earlier checks unchanged.",
+  "v0.16 (TITLELESS-DELTA-17, F3): titleless_delta TD01-TD06: with Title 12 uniquely identified from acquired evidence, delta('§ 3.22') and delta('§ 3.22(i)') keep the four instruments of their fully qualified equivalents (fr:2026-04089, 05959, 05960, 21706), with paragraph support for (i) limited to 04089 and 21706 and 05959/05960 as section context; a numeric-range section (§ 3.5), another Title 12 section (§ 252.44) and a Title 31 section (§ 1010.100) match their explicit forms; resolver and delta agree and no 'None CFR' lookup remains. Earlier checks unchanged."
  ],
  "status": [
   {
@@ -1122,6 +1123,90 @@
    "letter": "B",
    "heading": "Appendix B to Part 252—Stress Testing Policy Statement",
    "policy_statement": true
+  }
+ ],
+ "titleless_delta": [
+  {
+   "id": "TD01",
+   "titleless": "§ 3.22",
+   "explicit": "12 CFR 3.22",
+   "title": "12",
+   "instruments": [
+    "fr:2026-04089",
+    "fr:2026-05959",
+    "fr:2026-05960",
+    "fr:2026-21706"
+   ],
+   "baseline": true
+  },
+  {
+   "id": "TD02",
+   "titleless": "§ 3.22(i)",
+   "explicit": "12 CFR 3.22(i)",
+   "title": "12",
+   "instruments": [
+    "fr:2026-04089",
+    "fr:2026-05959",
+    "fr:2026-05960",
+    "fr:2026-21706"
+   ],
+   "baseline": false,
+   "supported": [
+    "fr:2026-04089",
+    "fr:2026-21706"
+   ],
+   "section_context": [
+    "fr:2026-05959",
+    "fr:2026-05960"
+   ]
+  },
+  {
+   "id": "TD03",
+   "titleless": "§ 3.22(a)",
+   "explicit": "12 CFR 3.22(a)",
+   "title": "12",
+   "instruments": [
+    "fr:2026-04089",
+    "fr:2026-05959",
+    "fr:2026-05960",
+    "fr:2026-21706"
+   ],
+   "baseline": true,
+   "supported": [],
+   "section_context": [
+    "fr:2026-04089",
+    "fr:2026-05959",
+    "fr:2026-05960",
+    "fr:2026-21706"
+   ]
+  },
+  {
+   "id": "TD04",
+   "titleless": "§ 3.5",
+   "explicit": "12 CFR 3.5",
+   "title": "12",
+   "instruments": [
+    "fr:2026-05960"
+   ],
+   "baseline": true
+  },
+  {
+   "id": "TD05",
+   "titleless": "§ 252.44",
+   "explicit": "12 CFR 252.44",
+   "title": "12",
+   "instruments": [
+    "fr:2026-20247"
+   ],
+   "baseline": true
+  },
+  {
+   "id": "TD06",
+   "titleless": "§ 1010.100",
+   "explicit": "31 CFR 1010.100",
+   "title": "31",
+   "instruments": [],
+   "baseline": true
   }
  ]
 }

@@ -116,6 +116,8 @@ CITATION_REASONS = {
     "paragraph_precision_unresolved": "Only section-level amendment evidence was found; no amendatory instruction names the "
                                       "complete requested paragraph path, so its hierarchy is not established "
                                       "(section-level records are returned, flagged).",
+    "ambiguous_title": "The citation names no CFR title and acquired evidence for this section exists under more than one title; "
+                       "the titles' evidence is not merged. Name the title (for example `12 CFR 3.22`) to select one.",
     "excluded_by_part_filter": "A record exists, but the requested part filter excludes it.",
     "excluded_by_requested_scope": "A record exists in the other scope, but not in the requested scope.",
     "excluded_by_scope_and_part_filter": "A record exists, but only in the other scope and outside the requested part filter.",
@@ -330,6 +332,63 @@ class Index:
                     merged.append(pid)
         return [(pid, float(len(merged) - i)) for i, pid in enumerate(merged[:k])]
 
+    def title_resolution(self, c):
+        """The CFR title a citation refers to, decided once for resolver and delta from acquired evidence.
+
+        An explicit title is used as written. A titleless section citation (`§ 3.22`) takes the one title that has
+        evidence for that section: an acquired eCFR section or numeric range containing it, an `amends` or
+        `amends_candidate` target, or a numeric amendment range. If no title has section evidence but exactly one
+        title has evidence for the part, that title is used (the section is then simply absent from it). More than one
+        title is `ambiguous`: the candidates are listed and their evidence is never merged. No evidence gives
+        `unidentified`, which behaves as the titleless lookup always did (nothing found).
+        """
+        if c["title"]:
+            return {"status": "explicit", "title": c["title"], "candidates": []}
+        part, section, minor = c["part"], c["section"], c["minor"]
+        if not section:
+            return {"status": "unidentified", "title": None, "candidates": []}
+        titles = {r[0] for r in self.conn.execute("SELECT DISTINCT title_no FROM provision WHERE part_no=? AND title_no IS NOT NULL", (part,))}
+        for tab, col in (("amendment_range", "title_no"),):
+            titles |= {r[0] for r in self.conn.execute(f"SELECT DISTINCT {col} FROM {tab} WHERE part_no=? AND {col} IS NOT NULL", (part,))}
+        for (dst,) in self.conn.execute("SELECT DISTINCT dst_citation FROM relationship WHERE rel_type IN ('amends','amends_candidate') "
+                                        "AND (dst_citation LIKE ? OR dst_citation LIKE ?)", (f"% CFR {part}.%", f"% CFR Part {part}")):
+            head = dst.split(" CFR ", 1)[0]
+            if head.isdigit():
+                titles.add(head)
+        evidence = {}
+        for t in sorted(titles):
+            n_base = len(self.current_baseline(t, part, section, None)["rows"])
+            n_amend = self.conn.execute("SELECT COUNT(DISTINCT src_provision_id) FROM relationship WHERE rel_type='amends' AND dst_citation=?",
+                                        (f"{t} CFR {section}",)).fetchone()[0]
+            n_cand = self.conn.execute("SELECT COUNT(DISTINCT src_provision_id) FROM relationship WHERE rel_type='amends_candidate' AND dst_citation=?",
+                                       (f"{t} CFR {section}",)).fetchone()[0]
+            n_range = len(self.range_hits(t, part, minor))
+            evidence[t] = {"title": t, "citation": f"{t} CFR {section}", "baseline_records": n_base, "future_amendment_units": n_amend,
+                           "unresolved_candidate_units": n_cand, "numeric_range_units": n_range}
+        with_section = [t for t, e in evidence.items() if e["baseline_records"] or e["future_amendment_units"] or e["unresolved_candidate_units"] or e["numeric_range_units"]]
+        if len(with_section) == 1:
+            return {"status": "unique_from_acquired_evidence", "title": with_section[0], "basis": "section evidence",
+                    "candidates": [evidence[with_section[0]]]}
+        if len(with_section) > 1:
+            return {"status": "ambiguous", "title": None, "candidates": [evidence[t] for t in with_section]}
+        if len(titles) == 1:
+            (t,) = titles
+            return {"status": "unique_from_acquired_evidence", "title": t, "basis": "part evidence only; the section has no acquired evidence under it",
+                    "candidates": [evidence[t]]}
+        if len(titles) > 1:
+            return {"status": "ambiguous", "title": None, "candidates": [evidence[t] for t in sorted(titles)]}
+        return {"status": "unidentified", "title": None, "candidates": []}
+
+    def _ambiguous_record(self, c, resolution):
+        precision = "paragraph" if c["paras"] else "section"
+        return {"citation": c["canonical"], "requested": c["requested"], "canonical": c["canonical"], "requested_precision": precision,
+                "resolved": False, "achieved": None, "baseline_match": None, "by_scope": {"current": 0, "future": 0},
+                "legal_validity": "not_determined", "future_paragraph_support": [], "reason": "ambiguous_title",
+                "title_resolution": resolution, "candidate_titles": [x["title"] for x in resolution["candidates"]],
+                "note": CITATION_REASONS["ambiguous_title"] + " This reports unavailable evidence only; it is not a determination "
+                                                              "that the citation is invalid or does not exist.",
+                "_current_ids": [], "_future_ids": []}
+
     def resolve_citations(self, query, scope="both", parts=None):
         """One resolution record per distinct citation in the query, in the requested scope and part filter.
 
@@ -346,9 +405,14 @@ class Index:
             if c["malformed"]:
                 out.append(self._malformed_record(c, scope, parts))
                 continue
-            record = self._resolve_one(c["canonical"], c["title"], c["part"], c["section"], c["paras"], scope, parts)
+            resolution = self.title_resolution(c)
+            if resolution["status"] == "ambiguous":
+                out.append(self._ambiguous_record(c, resolution))
+                continue
+            record = self._resolve_one(c["canonical"], resolution["title"], c["part"], c["section"], c["paras"], scope, parts)
             record["requested"] = c["requested"]
             record["canonical"] = c["canonical"]
+            record["title_resolution"] = resolution
             out.append(record)
         return out
 
@@ -358,8 +422,11 @@ class Index:
         The section the valid prefix belongs to is reported only as a count of broader context records.
         """
         reason = c["malformed"]
-        cur = self._exact_current(c["title"], c["part"], c["section"], "", parts) if scope in ("current", "both") else []
-        fut = self._exact_future(c["title"], c["part"], c["section"], parts, c["minor"]) if scope in ("future", "both") else []
+        resolution = self.title_resolution(c)
+        title = resolution["title"]
+        counted = resolution["status"] != "ambiguous"  # an ambiguous title is never counted across titles
+        cur = self._exact_current(title, c["part"], c["section"], "", parts) if counted and scope in ("current", "both") else []
+        fut = self._exact_future(title, c["part"], c["section"], parts, c["minor"]) if counted and scope in ("future", "both") else []
         return {"citation": c["label"], "requested": c["requested"], "canonical": None,
                 "requested_precision": "paragraph" if c["paras"] else "section", "resolved": False, "achieved": None,
                 "baseline_match": None, "by_scope": {"current": 0, "future": 0}, "legal_validity": "not_determined",
@@ -696,6 +763,28 @@ class Index:
                 "notes": ["The request has an unread designator suffix, so no ancestor path was accepted and no baseline or "
                           "instrument is reported for it. Ask for the complete citation."]}
 
+    def _ambiguous_delta(self, citation, parsed, resolution):
+        """delta() for a titleless citation whose section has evidence under more than one title: explicit ambiguity.
+
+        Nothing is merged across titles: no baseline, no instruments. Each candidate title is listed with the size of
+        its own evidence so the caller can ask again with the title.
+        """
+        record = self._ambiguous_record(parsed, resolution)
+        unresolved = {"scope": None, "requested": record["requested_precision"], "resolved": False, "achieved": None,
+                      "reason": "ambiguous_title", "note": record["note"]}
+        return {"citation": citation, "requested_citation": parsed["requested"], "canonical_citation": parsed["canonical"],
+                "as_of": self.as_of, "requested_precision": record["requested_precision"], "requested_path": parsed["paras"] or None,
+                "baseline": None, "section_context": None, "instruments": [],
+                "current_precision": {**unresolved, "scope": "current"}, "future_precision": {**unresolved, "scope": "future"},
+                "evidence_status": "ambiguous_title",
+                "unavailable": {"reason": "ambiguous_title", "legal_validity": "not_determined", "note": record["note"],
+                                "candidate_titles": record["candidate_titles"]},
+                "title_resolution": resolution, "legal_validity": "not_determined", "unresolved_candidates": [],
+                "applicability_status": "not_assessed",
+                "notes": ["The citation names no CFR title and more than one title has acquired evidence for this section; evidence "
+                          "from different titles is never merged. Repeat the request with an explicit title, e.g. "
+                          + " or ".join(x["citation"] for x in resolution["candidates"]) + "."]}
+
     def delta(self, citation):
         """Current baseline versus each acquired future instrument for one section or part.
 
@@ -709,7 +798,10 @@ class Index:
         parsed = cites[0]
         if parsed["malformed"]:
             return self._malformed_delta(citation, parsed)
-        title, part, minor, paras = parsed["title"], parsed["part"], parsed["minor"], parsed["paras"]
+        resolution = self.title_resolution(parsed)  # the same title decision the citation resolver makes
+        if resolution["status"] == "ambiguous":
+            return self._ambiguous_delta(citation, parsed, resolution)
+        title, part, minor, paras = resolution["title"], parsed["part"], parsed["minor"], parsed["paras"]
         section = f"{part}.{minor}" if minor else None
         wanted = paras  # normalized requested paragraph path, e.g. "(c)(1)"; whitespace inside designators already closed
         match_via, range_info = None, None
@@ -863,6 +955,7 @@ class Index:
                 "baseline": baseline, "section_context": section_context, "instruments": instruments,
                 "current_precision": current_precision, "future_precision": future_precision,
                 "evidence_status": evidence_status, "unavailable": unavailable, "legal_validity": "not_determined",
+                "title_resolution": resolution,
                 "unresolved_candidates": candidates, "applicability_status": "not_assessed",
                 "notes": ["Instruments are independent; no cumulative future rulebook is constructed.",
                           "For a paragraph citation, section_context and instruments with role section_context are broader "
