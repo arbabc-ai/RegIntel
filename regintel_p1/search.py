@@ -7,6 +7,7 @@ every answer carries `applicability_status = "not_assessed"` and the missing pro
 import json
 import re
 import sqlite3
+from pathlib import Path
 from collections import defaultdict
 from itertools import zip_longest
 
@@ -101,6 +102,50 @@ class Index:
         for t in self.topics:
             t["synonyms"] = json.loads(t["synonyms"] or "[]")
         self._rulemaking = {r["doc_key"]: dict(r) for r in self.conn.execute("SELECT * FROM rulemaking")}
+        self._load_source_requests()
+
+    # ---------- source requests: jurisdictions and accounting intent, independent of topic matches ----------
+    def _load_source_requests(self):
+        base = Path(__file__).parent
+        cfg = json.loads((base / "source_requests.json").read_text())
+        jur = json.loads((base / cfg["jurisdiction"]["names_file"]).read_text())
+        self._jur_source = jur["source"]
+        self._jur_cfg = cfg["jurisdiction"]
+        self._jur_names = sorted(((n, j) for j in jur["jurisdictions"] for n in [j["name"]] + j.get("aliases", [])),
+                                 key=lambda x: -len(x[0]))
+        self._acct_cfg = cfg["accounting_intent"]
+        self._acct_patterns = [re.compile(p, re.I) for p in self._acct_cfg["patterns"]]
+
+    def detect_sources(self, query):
+        """Source families the request names, whether or not an acquired topic also matches.
+
+        Jurisdiction names come from the C3 STATE_JURISDICTION_REGISTER (read-only copy with provenance). Naming a
+        jurisdiction reports a state_law coverage gap and nothing more: no applicability, preemption or compliance is
+        asserted. Accounting intent (recognition or measurement of losses and similar) reports a gaap_asc gap.
+        """
+        found, masked = [], query
+        positions = {}
+        for name, rec in self._jur_names:
+            for m in list(re.finditer(r"(?<![A-Za-z0-9])" + re.escape(name) + r"(?![A-Za-z0-9])", masked, re.I)):
+                before, after = masked[:m.start()].lower(), masked[m.end():].lower()
+                if any(re.search(x, before) for x in self._jur_cfg["exclusions_before"]) or \
+                        any(re.search(x, after) for x in self._jur_cfg["exclusions_after"]):
+                    continue
+                found.append({"kind": "jurisdiction", "topic": self._jur_cfg["topic"], "matched": m.group(0), "id": rec["id"],
+                              "name": rec["name"], "type": rec["type"],
+                              "register": {"file": self._jur_source["file"], "sha256": self._jur_source["sha256"],
+                                           "status": rec["register_status"], "coverage": rec["register_coverage"]},
+                              "note": "Naming a jurisdiction does not assert state-law applicability, preemption or compliance."})
+                positions[id(found[-1])] = m.start()
+                masked = masked[:m.start()] + " " * (m.end() - m.start()) + masked[m.end():]
+        found.sort(key=lambda f: positions[id(f)])  # query order, not name-length order
+        for rx in self._acct_patterns:
+            m = rx.search(query)
+            if m:
+                found.append({"kind": "accounting_intent", "topic": self._acct_cfg["topic"], "matched": m.group(0).strip(),
+                              "note": "FASB ASC text is not acquired; detecting accounting intent does not answer the accounting question."})
+                break
+        return found
 
     # ---------- filters ----------
     def _where(self, scope, parts, doc_types=None, topic=None):
@@ -427,6 +472,7 @@ class Index:
 
         missing_evidence: the query names only topics whose sources are not acquired (no results returned).
         partial_evidence: results exist but a matched topic is `not_acquired` (alongside acquired ones) or `partial`,
+        a jurisdiction or accounting intent is named (`source_requests`, detected independently of topic matches),
         or no catalog topic matched (coverage `unassessed`); the gaps are reported in `coverage_gaps`, so the results
         must not be read as complete. evidence_found requires every matched topic fully acquired, or a citation-only
         query whose exact lookup resolves in the requested scope and part filter.
@@ -441,6 +487,18 @@ class Index:
         # A citation-only query is self-describing: it resolves to named provisions in the requested scope and part
         # filter, so it needs no topic. Any other query that matches no catalog topic has unassessed source
         # coverage, and a lexical hit alone does not establish that the sources it needs are acquired.
+        sources = self.detect_sources(query)
+        by_topic = {g["topic"]: g for g in gaps}
+        for src in sources:
+            topic = next(t for t in self.topics if t["id"] == src["topic"])
+            gap = by_topic.get(src["topic"])
+            if gap is None:
+                gap = {"topic": topic["id"], "coverage": topic["coverage"], "note": topic["coverage_note"], "detected_by": []}
+                gaps.append(gap)
+                by_topic[topic["id"]] = gap
+            gap.setdefault("detected_by", []).append(f"{src['kind']}: {src['matched']}")
+            if src["note"] not in gap["note"]:
+                gap["note"] += " " + src["note"]
         citations = self.resolve_citations(query, scope, parts)
         unresolved = [c for c in citations if not c["resolved"]]
         for c in unresolved:  # one gap per unresolved citation, whatever else resolved or matched a topic
@@ -454,8 +512,8 @@ class Index:
                                  "does not show that the sources needed to answer it are acquired."})
         if not results:
             status = "missing_evidence"
-        elif blocked or partial or unassessed or unresolved:
-            status = "partial_evidence"   # results exist, but coverage or a requested citation is incomplete
+        elif blocked or partial or unassessed or unresolved or sources:
+            status = "partial_evidence"   # results exist, but coverage, a named source or a requested citation is incomplete
         else:
             status = "evidence_found"
         return {
@@ -466,6 +524,7 @@ class Index:
                                   "conclusion.",
             "topics_matched": [t["id"] for t, _ in topic_hits], "coverage_gaps": gaps, "results": results,
             "citations": [{k: v for k, v in c.items() if not k.startswith("_")} for c in citations],
+            "source_requests": sources,
             "index": {"manifest_sha256": self.meta.get("manifest_sha256"), "built_at": self.meta.get("built_at")},
         }
 

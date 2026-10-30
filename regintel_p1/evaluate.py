@@ -343,6 +343,39 @@ def check_citation_completeness(index, item):
     return {"id": item["id"], "query": q, "parts": parts, "passed": not failures, "failures": failures[:12]}
 
 
+def check_mixed_source(index, item):
+    """Named jurisdictions / accounting intent expose their not_acquired gap beside acquired CET1 evidence, in every
+    mode and scope, at small k and under an excluding part filter. Results are kept, never suppressed."""
+    q, failures = item["query"], []
+    topic, runs = item["expect_gap_topic"], 0
+    for mode in ("exact", "hybrid"):
+        for scope in ("current", "future", "both"):
+            for k, parts in ((10, None), (1, None), (10, ["12:999"])):
+                out = index.answer(q, mode=mode, scope=scope, parts=parts, k=k)
+                tag, runs = f"{mode}/{scope}/k{k}/{parts or 'nofilter'}", runs + 1
+                gap = next((g for g in out["coverage_gaps"] if g["topic"] == topic), None)
+                if not gap or gap["coverage"] != "not_acquired":
+                    failures.append(f"{tag}: no {topic} not_acquired gap")
+                if out["status"] == "evidence_found":
+                    failures.append(f"{tag}: evidence_found with a named source gap")
+                want = "partial_evidence" if out["results"] else "missing_evidence"
+                if out["status"] != want:
+                    failures.append(f"{tag}: status {out['status']} != {want}")
+                if parts and out["results"]:
+                    failures.append(f"{tag}: excluding filter returned results")
+                if item.get("expect_acquired_topic") and item["expect_acquired_topic"] not in out["topics_matched"]:
+                    failures.append(f"{tag}: acquired topic {item['expect_acquired_topic']} no longer matched")
+                if item.get("expect_jurisdiction"):
+                    ids = [x["id"] for x in out["source_requests"] if x["kind"] == "jurisdiction"]
+                    if ids != [item["expect_jurisdiction"]]:
+                        failures.append(f"{tag}: jurisdictions {ids} != {item['expect_jurisdiction']}")
+                    for x in out["source_requests"]:
+                        if "does not assert state-law applicability, preemption or compliance" not in x.get("note", ""):
+                            failures.append(f"{tag}: jurisdiction record lacks the no-applicability note")
+                failures += [f"{tag}: {f}" for f in invariant_failures(out, scope)]
+    return {"id": item["id"], "query": q, "runs": runs, "passed": not failures, "failures": failures[:12]}
+
+
 def run_regressions(index, path):
     spec = json.loads(open(path).read())
     out = {"version": spec["version"], "task": spec["task"],
@@ -350,10 +383,12 @@ def run_regressions(index, path):
            "relationship_integrity": check_relationship_integrity(index, spec["relationship_integrity"]),
            "citation_scope": [check_citation_scope(index, c) for c in spec["citation_scope"]],
            "status": [check_status_regression(index, x) for x in spec.get("status", [])],
-           "citation_completeness": [check_citation_completeness(index, x) for x in spec.get("citation_completeness", [])]}
+           "citation_completeness": [check_citation_completeness(index, x) for x in spec.get("citation_completeness", [])],
+           "mixed_source": [check_mixed_source(index, x) for x in spec.get("mixed_source", [])]}
     out["passed"] = (all(d["passed"] for d in out["delta"]) and out["relationship_integrity"]["passed"]
                      and all(c["passed"] for c in out["citation_scope"]) and all(x["passed"] for x in out["status"])
-                     and all(x["passed"] for x in out["citation_completeness"]))
+                     and all(x["passed"] for x in out["citation_completeness"])
+                     and all(x["passed"] for x in out["mixed_source"]))
     return out
 
 
@@ -404,6 +439,8 @@ def render(report):
         lines.append(f"  {ri['id']} {'PASS' if ri['passed'] else 'FAIL'} relationship integrity violations={ri['violations']} {'; '.join(ri['failures'])}")
         for c in reg["citation_scope"]:
             lines.append(f"  {c['id']} {'PASS' if c['passed'] else 'FAIL'} citation scope '{c['query']}' {'; '.join(c['failures'])}")
+        for x in reg.get("mixed_source", []):
+            lines.append(f"  {x['id']} {'PASS' if x['passed'] else 'FAIL'} mixed source '{x['query']}' runs={x['runs']} {'; '.join(x['failures'])}")
         for x in reg.get("citation_completeness", []):
             lines.append(f"  {x['id']} {'PASS' if x['passed'] else 'FAIL'} citation completeness '{x['query']}' {x.get('parts') or ''} {'; '.join(x['failures'])}")
         for x in reg.get("status", []):

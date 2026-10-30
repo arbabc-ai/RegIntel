@@ -1,0 +1,26 @@
+{
+  "version": "p1-source-requests-0.1",
+  "note": "Detects that a request names a source family the corpus does not hold, independently of which acquired topics also match. Detection reports a coverage gap only; it never asserts applicability, preemption, compliance or legal effect.",
+  "jurisdiction": {
+    "topic": "state_law",
+    "names_file": "jurisdictions.json",
+    "match": "case-insensitive whole-name match, longest name first, matched spans masked so 'West Virginia' is not also 'Virginia'",
+    "caveat": "Heuristic. A jurisdiction name can occur without a state-law question (and abbreviations are not matched), so the result is a coverage gap, not a finding.",
+    "exclusions_before": [
+      "(?:federal reserve bank|federal home loan bank|fhlbank)(?:\\s+of)?\\s+$"
+    ],
+    "exclusions_after": [
+      "^\\s+fed\\b"
+    ]
+  },
+  "accounting_intent": {
+    "topic": "gaap_asc",
+    "patterns": [
+      "\\brecogni[sz]\\w*\\b[^.?!]{0,60}\\b(?:loss(?:es)?|allowance|impairment|revenue|goodwill|lease)\\w*",
+      "\\b(?:measure|measurement of|account for|accounting for)\\b[^.?!]{0,60}\\b(?:loss(?:es)?|allowance|impairment|fair value|goodwill|leases?)",
+      "\\b(?:expected|incurred)\\s+(?:credit|loan)\\s+loss(?:es)?\\b",
+      "\\bloan\\s+loss(?:es)?\\b"
+    ],
+    "caveat": "Heuristic over the wording of the request. A match reports that FASB ASC text is not acquired; it does not answer the accounting question."
+  }
+}

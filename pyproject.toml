@@ -25,4 +25,4 @@ build-backend = "setuptools.build_meta"
 packages = ["src", "scripts", "eval", "regintel_p1"]
 
 [tool.setuptools.package-data]
-regintel_p1 = ["topics.json"]
+regintel_p1 = ["topics.json", "jurisdictions.json", "source_requests.json"]

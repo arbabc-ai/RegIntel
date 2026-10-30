@@ -1,0 +1,483 @@
+{
+ "source": {
+  "file": "STATE_JURISDICTION_REGISTER.csv",
+  "path": "/mnt/c/Users/arbab/OneDrive/Documents/AI-OS/projects/velodyn/Velodyn_BankOS/ChatGPT/2026-10-24_204204_EDT_Codex_Three_Sessions/C3-RegIntel-RAG/2026-10-26_PHASE1_US_RULES/STATE_JURISDICTION_REGISTER.csv",
+  "sha256": "b1dbc39ac2bfb960c95de2ef9c41dcb23fca0338cd0b0713f70225f686d61d86",
+  "owner": "Codex C3 (read-only input; ChatGPT/ is never written)",
+  "rows": 56
+ },
+ "copied_fields": [
+  "id",
+  "name",
+  "jurisdiction_type",
+  "status",
+  "coverage"
+ ],
+ "note": "Names are used only to detect that a request names a jurisdiction. Matching a name asserts no state-law applicability, preemption or compliance; the register itself marks every row not-assessed and unindexed.",
+ "aliases_added_by_s7": {
+  "DC": [
+   "Washington, D.C.",
+   "Washington DC",
+   "D.C."
+  ],
+  "VI": [
+   "Virgin Islands"
+  ]
+ },
+ "jurisdictions": [
+  {
+   "id": "AL",
+   "name": "Alabama",
+   "type": "state",
+   "register_status": "official-endpoints-and-scope-unresolved",
+   "register_coverage": "not-assessed",
+   "aliases": []
+  },
+  {
+   "id": "AK",
+   "name": "Alaska",
+   "type": "state",
+   "register_status": "official-endpoints-and-scope-unresolved",
+   "register_coverage": "not-assessed",
+   "aliases": []
+  },
+  {
+   "id": "AZ",
+   "name": "Arizona",
+   "type": "state",
+   "register_status": "official-endpoints-and-scope-unresolved",
+   "register_coverage": "not-assessed",
+   "aliases": []
+  },
+  {
+   "id": "AR",
+   "name": "Arkansas",
+   "type": "state",
+   "register_status": "official-endpoints-and-scope-unresolved",
+   "register_coverage": "not-assessed",
+   "aliases": []
+  },
+  {
+   "id": "CA",
+   "name": "California",
+   "type": "state",
+   "register_status": "official-endpoints-and-scope-unresolved",
+   "register_coverage": "not-assessed",
+   "aliases": []
+  },
+  {
+   "id": "CO",
+   "name": "Colorado",
+   "type": "state",
+   "register_status": "official-endpoints-and-scope-unresolved",
+   "register_coverage": "not-assessed",
+   "aliases": []
+  },
+  {
+   "id": "CT",
+   "name": "Connecticut",
+   "type": "state",
+   "register_status": "official-endpoints-and-scope-unresolved",
+   "register_coverage": "not-assessed",
+   "aliases": []
+  },
+  {
+   "id": "DE",
+   "name": "Delaware",
+   "type": "state",
+   "register_status": "official-endpoints-and-scope-unresolved",
+   "register_coverage": "not-assessed",
+   "aliases": []
+  },
+  {
+   "id": "FL",
+   "name": "Florida",
+   "type": "state",
+   "register_status": "official-endpoints-and-scope-unresolved",
+   "register_coverage": "not-assessed",
+   "aliases": []
+  },
+  {
+   "id": "GA",
+   "name": "Georgia",
+   "type": "state",
+   "register_status": "official-endpoints-and-scope-unresolved",
+   "register_coverage": "not-assessed",
+   "aliases": []
+  },
+  {
+   "id": "HI",
+   "name": "Hawaii",
+   "type": "state",
+   "register_status": "official-endpoints-and-scope-unresolved",
+   "register_coverage": "not-assessed",
+   "aliases": []
+  },
+  {
+   "id": "ID",
+   "name": "Idaho",
+   "type": "state",
+   "register_status": "official-endpoints-and-scope-unresolved",
+   "register_coverage": "not-assessed",
+   "aliases": []
+  },
+  {
+   "id": "IL",
+   "name": "Illinois",
+   "type": "state",
+   "register_status": "official-endpoints-and-scope-unresolved",
+   "register_coverage": "not-assessed",
+   "aliases": []
+  },
+  {
+   "id": "IN",
+   "name": "Indiana",
+   "type": "state",
+   "register_status": "official-endpoints-and-scope-unresolved",
+   "register_coverage": "not-assessed",
+   "aliases": []
+  },
+  {
+   "id": "IA",
+   "name": "Iowa",
+   "type": "state",
+   "register_status": "official-endpoints-and-scope-unresolved",
+   "register_coverage": "not-assessed",
+   "aliases": []
+  },
+  {
+   "id": "KS",
+   "name": "Kansas",
+   "type": "state",
+   "register_status": "official-endpoints-and-scope-unresolved",
+   "register_coverage": "not-assessed",
+   "aliases": []
+  },
+  {
+   "id": "KY",
+   "name": "Kentucky",
+   "type": "state",
+   "register_status": "official-endpoints-and-scope-unresolved",
+   "register_coverage": "not-assessed",
+   "aliases": []
+  },
+  {
+   "id": "LA",
+   "name": "Louisiana",
+   "type": "state",
+   "register_status": "official-endpoints-and-scope-unresolved",
+   "register_coverage": "not-assessed",
+   "aliases": []
+  },
+  {
+   "id": "ME",
+   "name": "Maine",
+   "type": "state",
+   "register_status": "official-endpoints-and-scope-unresolved",
+   "register_coverage": "not-assessed",
+   "aliases": []
+  },
+  {
+   "id": "MD",
+   "name": "Maryland",
+   "type": "state",
+   "register_status": "official-endpoints-and-scope-unresolved",
+   "register_coverage": "not-assessed",
+   "aliases": []
+  },
+  {
+   "id": "MA",
+   "name": "Massachusetts",
+   "type": "state",
+   "register_status": "official-endpoints-and-scope-unresolved",
+   "register_coverage": "not-assessed",
+   "aliases": []
+  },
+  {
+   "id": "MI",
+   "name": "Michigan",
+   "type": "state",
+   "register_status": "official-endpoints-and-scope-unresolved",
+   "register_coverage": "not-assessed",
+   "aliases": []
+  },
+  {
+   "id": "MN",
+   "name": "Minnesota",
+   "type": "state",
+   "register_status": "official-endpoints-and-scope-unresolved",
+   "register_coverage": "not-assessed",
+   "aliases": []
+  },
+  {
+   "id": "MS",
+   "name": "Mississippi",
+   "type": "state",
+   "register_status": "official-endpoints-and-scope-unresolved",
+   "register_coverage": "not-assessed",
+   "aliases": []
+  },
+  {
+   "id": "MO",
+   "name": "Missouri",
+   "type": "state",
+   "register_status": "official-endpoints-and-scope-unresolved",
+   "register_coverage": "not-assessed",
+   "aliases": []
+  },
+  {
+   "id": "MT",
+   "name": "Montana",
+   "type": "state",
+   "register_status": "official-endpoints-and-scope-unresolved",
+   "register_coverage": "not-assessed",
+   "aliases": []
+  },
+  {
+   "id": "NE",
+   "name": "Nebraska",
+   "type": "state",
+   "register_status": "official-endpoints-and-scope-unresolved",
+   "register_coverage": "not-assessed",
+   "aliases": []
+  },
+  {
+   "id": "NV",
+   "name": "Nevada",
+   "type": "state",
+   "register_status": "official-endpoints-and-scope-unresolved",
+   "register_coverage": "not-assessed",
+   "aliases": []
+  },
+  {
+   "id": "NH",
+   "name": "New Hampshire",
+   "type": "state",
+   "register_status": "official-endpoints-and-scope-unresolved",
+   "register_coverage": "not-assessed",
+   "aliases": []
+  },
+  {
+   "id": "NJ",
+   "name": "New Jersey",
+   "type": "state",
+   "register_status": "official-endpoints-and-scope-unresolved",
+   "register_coverage": "not-assessed",
+   "aliases": []
+  },
+  {
+   "id": "NM",
+   "name": "New Mexico",
+   "type": "state",
+   "register_status": "official-endpoints-and-scope-unresolved",
+   "register_coverage": "not-assessed",
+   "aliases": []
+  },
+  {
+   "id": "NY",
+   "name": "New York",
+   "type": "state",
+   "register_status": "official-endpoints-and-scope-unresolved",
+   "register_coverage": "not-assessed",
+   "aliases": []
+  },
+  {
+   "id": "NC",
+   "name": "North Carolina",
+   "type": "state",
+   "register_status": "official-endpoints-and-scope-unresolved",
+   "register_coverage": "not-assessed",
+   "aliases": []
+  },
+  {
+   "id": "ND",
+   "name": "North Dakota",
+   "type": "state",
+   "register_status": "official-endpoints-and-scope-unresolved",
+   "register_coverage": "not-assessed",
+   "aliases": []
+  },
+  {
+   "id": "OH",
+   "name": "Ohio",
+   "type": "state",
+   "register_status": "official-endpoints-and-scope-unresolved",
+   "register_coverage": "not-assessed",
+   "aliases": []
+  },
+  {
+   "id": "OK",
+   "name": "Oklahoma",
+   "type": "state",
+   "register_status": "official-endpoints-and-scope-unresolved",
+   "register_coverage": "not-assessed",
+   "aliases": []
+  },
+  {
+   "id": "OR",
+   "name": "Oregon",
+   "type": "state",
+   "register_status": "official-endpoints-and-scope-unresolved",
+   "register_coverage": "not-assessed",
+   "aliases": []
+  },
+  {
+   "id": "PA",
+   "name": "Pennsylvania",
+   "type": "state",
+   "register_status": "official-endpoints-and-scope-unresolved",
+   "register_coverage": "not-assessed",
+   "aliases": []
+  },
+  {
+   "id": "RI",
+   "name": "Rhode Island",
+   "type": "state",
+   "register_status": "official-endpoints-and-scope-unresolved",
+   "register_coverage": "not-assessed",
+   "aliases": []
+  },
+  {
+   "id": "SC",
+   "name": "South Carolina",
+   "type": "state",
+   "register_status": "official-endpoints-and-scope-unresolved",
+   "register_coverage": "not-assessed",
+   "aliases": []
+  },
+  {
+   "id": "SD",
+   "name": "South Dakota",
+   "type": "state",
+   "register_status": "official-endpoints-and-scope-unresolved",
+   "register_coverage": "not-assessed",
+   "aliases": []
+  },
+  {
+   "id": "TN",
+   "name": "Tennessee",
+   "type": "state",
+   "register_status": "official-endpoints-and-scope-unresolved",
+   "register_coverage": "not-assessed",
+   "aliases": []
+  },
+  {
+   "id": "TX",
+   "name": "Texas",
+   "type": "state",
+   "register_status": "official-endpoints-and-scope-unresolved",
+   "register_coverage": "not-assessed",
+   "aliases": []
+  },
+  {
+   "id": "UT",
+   "name": "Utah",
+   "type": "state",
+   "register_status": "official-endpoints-and-scope-unresolved",
+   "register_coverage": "not-assessed",
+   "aliases": []
+  },
+  {
+   "id": "VT",
+   "name": "Vermont",
+   "type": "state",
+   "register_status": "official-endpoints-and-scope-unresolved",
+   "register_coverage": "not-assessed",
+   "aliases": []
+  },
+  {
+   "id": "VA",
+   "name": "Virginia",
+   "type": "state",
+   "register_status": "official-endpoints-and-scope-unresolved",
+   "register_coverage": "not-assessed",
+   "aliases": []
+  },
+  {
+   "id": "WA",
+   "name": "Washington",
+   "type": "state",
+   "register_status": "official-endpoints-and-scope-unresolved",
+   "register_coverage": "not-assessed",
+   "aliases": []
+  },
+  {
+   "id": "WV",
+   "name": "West Virginia",
+   "type": "state",
+   "register_status": "official-endpoints-and-scope-unresolved",
+   "register_coverage": "not-assessed",
+   "aliases": []
+  },
+  {
+   "id": "WI",
+   "name": "Wisconsin",
+   "type": "state",
+   "register_status": "official-endpoints-and-scope-unresolved",
+   "register_coverage": "not-assessed",
+   "aliases": []
+  },
+  {
+   "id": "WY",
+   "name": "Wyoming",
+   "type": "state",
+   "register_status": "official-endpoints-and-scope-unresolved",
+   "register_coverage": "not-assessed",
+   "aliases": []
+  },
+  {
+   "id": "DC",
+   "name": "District of Columbia",
+   "type": "district",
+   "register_status": "official-endpoints-and-scope-unresolved",
+   "register_coverage": "not-assessed",
+   "aliases": [
+    "Washington, D.C.",
+    "Washington DC",
+    "D.C."
+   ]
+  },
+  {
+   "id": "PR",
+   "name": "Puerto Rico",
+   "type": "territory",
+   "register_status": "official-endpoints-and-scope-unresolved",
+   "register_coverage": "not-assessed",
+   "aliases": []
+  },
+  {
+   "id": "VI",
+   "name": "U.S. Virgin Islands",
+   "type": "territory",
+   "register_status": "official-endpoints-and-scope-unresolved",
+   "register_coverage": "not-assessed",
+   "aliases": [
+    "Virgin Islands"
+   ]
+  },
+  {
+   "id": "GU",
+   "name": "Guam",
+   "type": "territory",
+   "register_status": "official-endpoints-and-scope-unresolved",
+   "register_coverage": "not-assessed",
+   "aliases": []
+  },
+  {
+   "id": "AS",
+   "name": "American Samoa",
+   "type": "territory",
+   "register_status": "official-endpoints-and-scope-unresolved",
+   "register_coverage": "not-assessed",
+   "aliases": []
+  },
+  {
+   "id": "MP",
+   "name": "Northern Mariana Islands",
+   "type": "territory",
+   "register_status": "official-endpoints-and-scope-unresolved",
+   "register_coverage": "not-assessed",
+   "aliases": []
+  }
+ ]
+}

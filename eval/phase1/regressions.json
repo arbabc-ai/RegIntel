@@ -1,6 +1,6 @@
 {
- "version": "p1-regress-0.5",
- "task": "S7-P1-EVIDENCE-BOUNDARIES-01 + S7-P1-EVIDENCE-COMPLETENESS-02 + S7-P1-COVERAGE-GUARDS-03 + S7-P1-CITATION-COMPLETENESS-04 + S7-P1-FUTURE-PARAGRAPH-PRECISION-05",
+ "version": "p1-regress-0.6",
+ "task": "S7-P1-EVIDENCE-BOUNDARIES-01 + S7-P1-EVIDENCE-COMPLETENESS-02 + S7-P1-COVERAGE-GUARDS-03 + S7-P1-CITATION-COMPLETENESS-04 + S7-P1-FUTURE-PARAGRAPH-PRECISION-05 + S7-P1-MIXED-SOURCE-COVERAGE-06",
  "note": "Deterministic regression checks over the acquired corpus for amendment-target integrity and retrieval scope filtering. Kept separate from questions.json so the 37-item baseline stays frozen. A pass means the contract holds, not that any rule applies to a bank.",
  "delta": [
   {
@@ -219,7 +219,8 @@
   "v0.2 (COMPLETENESS-02): citation-scope checks now exercise exact AND hybrid for every scope (v0.1 stopped after the exact mode) and require nonempty current results for acquired citations; added range, part-lookup and partial-coverage checks. G01-G08 are unchanged.",
   "v0.3 (COVERAGE-GUARDS-03): status checks P04-P12 added for queries that match no catalog topic (coverage unassessed), the LCR/NSFR partial-coverage topics, and citation-only controls. Earlier checks unchanged.",
   "v0.4 (CITATION-COMPLETENESS-04): citation_completeness checks K01-K09 exercise exact and hybrid across current/future/both, with and without part filters; earlier checks unchanged.",
-  "v0.5 (FUTURE-PARAGRAPH-PRECISION-05): K10-K15 added for deep paragraph paths in future scope. Earlier checks unchanged."
+  "v0.5 (FUTURE-PARAGRAPH-PRECISION-05): K10-K15 added for deep paragraph paths in future scope. Earlier checks unchanged.",
+  "v0.6 (MIXED-SOURCE-COVERAGE-06, finding F1): mixed_source checks M01-M04 (18 runs each: exact/hybrid x current/future/both x k10/k1/excluding filter) and status checks P13-P15. Earlier checks unchanged."
  ],
  "status": [
   {
@@ -320,6 +321,29 @@
    ],
    "expect_status_not": "evidence_found",
    "note": "negative control, future scope"
+  },
+  {
+   "id": "P13",
+   "query": "minimum common equity tier 1 capital ratio",
+   "scope": "current",
+   "expect_status": "evidence_found",
+   "note": "positive control: acquired-only CET1 request stays evidence_found with no source gap"
+  },
+  {
+   "id": "P14",
+   "query": "Federal Reserve Bank of New York CET1",
+   "scope": "current",
+   "expect_status": "evidence_found",
+   "note": "a federal bank name is not a jurisdiction request"
+  },
+  {
+   "id": "P15",
+   "query": "CECL under ASC 326",
+   "scope": "current",
+   "expect_status": "missing_evidence",
+   "gap_topic": "gaap_asc",
+   "gap_coverage": "not_acquired",
+   "note": "existing ASC protection"
   }
  ],
  "citation_completeness": [
@@ -503,6 +527,35 @@
     ]
    },
    "note": "2026-13192 names (e)(4) so future scope resolves it; current scope has no Part 327 baseline; first draft allowed only part_not_acquired, but in current scope a future-only record exists, so excluded_by_requested_scope is the accurate reason"
+  }
+ ],
+ "mixed_source": [
+  {
+   "id": "M01",
+   "query": "Texas common equity tier 1 capital",
+   "expect_gap_topic": "state_law",
+   "expect_acquired_topic": "cet1_capital",
+   "expect_jurisdiction": "TX"
+  },
+  {
+   "id": "M02",
+   "query": "New York CET1",
+   "expect_gap_topic": "state_law",
+   "expect_acquired_topic": "cet1_capital",
+   "expect_jurisdiction": "NY"
+  },
+  {
+   "id": "M03",
+   "query": "CET1 capital under Puerto Rico banking law",
+   "expect_gap_topic": "state_law",
+   "expect_acquired_topic": "cet1_capital",
+   "expect_jurisdiction": "PR"
+  },
+  {
+   "id": "M04",
+   "query": "How should a bank recognize expected loan losses and calculate CET1?",
+   "expect_gap_topic": "gaap_asc",
+   "expect_acquired_topic": "cet1_capital"
   }
  ]
 }

@@ -223,11 +223,15 @@ class CitationCompletenessTests(unittest.TestCase):
                         if out["status"] == "evidence_found":
                             self.assertTrue(all(c["resolved"] for c in out["citations"]), (q, mode, scope, parts))
 
-    def test_mixed_topic_finding_is_carried_forward_not_fixed(self):
-        # An acquired topic plus an uncatalogued jurisdiction still reads evidence_found; documented gap, out of scope here.
+    def test_mixed_topic_finding_f1_is_fixed(self):
+        # F1 (S7-P1-MIXED-SOURCE-COVERAGE-06): an acquired topic plus a named jurisdiction no longer reads evidence_found.
         out = self.index.answer("Texas CET1 capital ratio", mode="hybrid", scope="current")
-        self.assertEqual(out["status"], "evidence_found")
-        self.assertEqual(out["coverage_gaps"], [])
+        self.assertEqual(out["status"], "partial_evidence")
+        self.assertTrue(out["results"])  # useful federal results are preserved
+        gap = {g["topic"]: g for g in out["coverage_gaps"]}["state_law"]
+        self.assertEqual(gap["coverage"], "not_acquired")
+        self.assertIn("does not assert state-law applicability", gap["note"])
+        self.assertEqual(out["applicability_status"], "not_assessed")
 
 
 if __name__ == "__main__":
