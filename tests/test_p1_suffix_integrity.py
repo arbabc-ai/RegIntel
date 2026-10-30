@@ -94,7 +94,10 @@ class ParserTests(unittest.TestCase):
             self.assertIsNone(c["malformed"], q)
         self.assertEqual(paths("Revise paragraph (a)(introductory text)."), ["(a)"])
         self.assertEqual(paths("Revise paragraph (a)(introductory text) and (b)."), ["(a)"])  # unchanged from the previous commit
-        self.assertEqual(paths("Revise paragraph (a)(introd and (b)."), ["(a)"])
+        # SUFFIX-BOUNDARY-15: this used to expect ["(a)"]. That accepted the ancestor of an unclosed `(introd`
+        # because the later, unrelated ")" of "(b)" was taken to close it. An unclosed glued parenthetical is an
+        # unread suffix whatever follows it, so the instruction names neither (a) nor (b).
+        self.assertEqual(paths("Revise paragraph (a)(introd and (b)."), [])
 
     def test_canonical_citations_and_instructions_are_unchanged(self):
         for q in ("12 CFR 3.22", "12 CFR 3.22(a)", "§ 3.1(c)(4)(i)", "12 CFR Part 3"):
@@ -260,7 +263,7 @@ class SuffixIndexTests(unittest.TestCase):
         from regintel_p1 import evaluate
         reg = json.loads((Path(__file__).resolve().parent.parent / "eval/phase1/regressions.json").read_text())
         self.assertIn("suffix_integrity", evaluate.REGRESSION_GROUPS)
-        self.assertEqual(reg["version"], "p1-regress-0.13")
+        self.assertGreaterEqual(reg["version"], "p1-regress-0.13")  # later versions only add checks
         items = {x["id"]: x for x in reg["suffix_integrity"]}
         for key in ("SI01", "SI03", "SI04"):  # the synthetic fixture holds Part 3.22, so these run offline too
             out = evaluate.check_suffix_integrity(self.index, items[key])

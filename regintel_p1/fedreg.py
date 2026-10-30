@@ -172,17 +172,25 @@ def parsing_view(text):
     return DESIGNATOR_SPACES.sub(r"(\1)", text)
 
 
+_UNREAD = "unclosed_or_malformed_designator_suffix"
+_DETACHED = "detached_designator_suffix"
+_RUN = re.compile(r"[^\s()]*")
+_EXPLANATION = re.compile(r"\(([A-Za-z][^()]*?\s[^()]*)\)")  # a closed, unnested, multi-word parenthetical led by a letter
+
+
 def paren_suffix(text, position):
     """What a path is followed by at `position`: the one rule shared by instruction and query parsing.
 
     Returns ("complete", token, end) for a designator written directly after the path (any length, whitespace inside
     the parentheses allowed); ("incomplete", reason, end) when an unread designator candidate follows, so the path read
     so far is a valid prefix of something not read to its end; or None when nothing follows or the parenthetical is
-    ordinary explanation. Reasons: `unclosed_or_malformed_designator_suffix` (an opening parenthesis directly after the
-    path that is not a complete designator, of any length or character class, or a designator-shaped token set apart by
-    whitespace that is not closed) and `detached_designator_suffix` (a complete designator-shaped token set apart by
-    whitespace, which is ambiguous). A parenthetical set apart by whitespace whose first word is not designator-shaped
-    (`(introductory text)`, `(see below)`) is ordinary.
+    ordinary explanation. Reasons: `unclosed_or_malformed_designator_suffix` and `detached_designator_suffix`.
+
+    Directly after the path (no whitespace), anything that is not a complete designator is unread unless it is a closed,
+    unnested, multi-word explanation whose first word is not designator-shaped (`(introductory text)`): a punctuation-led
+    suffix (`(-1)`), an unclosed one (`(introd and (b)`: a later unrelated ")" never closes it) and a designator-shaped
+    pair (`(x y)`) are all unread, whatever their length. Set apart by whitespace, a designator-shaped token or a
+    symbol-only parenthetical (`(-1)`) is unread (detached when closed); any other parenthetical is ordinary.
     """
     m = _COMPLETE.match(text, position)
     if m:
@@ -191,19 +199,26 @@ def paren_suffix(text, position):
     if not o:
         return None
     gap, token = o.group(1), o.group(2)
-    if token is None:  # a bare "(": unclosed only when nothing but whitespace follows
-        return ("incomplete", "unclosed_or_malformed_designator_suffix", o.end()) if not text[o.end():].strip() else None
+    if token is None:
+        rest = text[o.end():]
+        if not rest.strip():  # a bare "(" at the end
+            return ("incomplete", _UNREAD, o.end())
+        run = _RUN.match(text, o.end())
+        symbolic = bool(run.group(0)) and not re.search(r"[A-Za-z]", run.group(0))  # `-1`, `.`, `*`: no letters at all
+        if not gap or symbolic:
+            closed = text.startswith(")", run.end())
+            end = run.end() + 1 if closed else run.end()
+            return ("incomplete", _DETACHED if (gap and closed) else _UNREAD, end)
+        return None
     close = _CLOSE.match(text, o.end())
-    closed = bool(close)
-    if not gap:  # directly after the path and not a complete designator
-        if designator_classes(token) or ")" not in text[o.end():]:
-            # designator-shaped (`(x y)`, `(1 and`) or never closed at all: unread, whatever its length
-            return ("incomplete", "unclosed_or_malformed_designator_suffix", o.end())
-        return None  # a closed multi-word parenthetical such as `(introductory text)` is ordinary explanation
+    if not gap:
+        e = _EXPLANATION.match(text, o.start() + len(gap))
+        if e and not designator_classes(e.group(1).split()[0]):
+            return None  # a closed multi-word explanation such as `(introductory text)`
+        return ("incomplete", _UNREAD, o.end())
     if not designator_classes(token):
         return None  # ordinary explanation
-    return ("incomplete", "detached_designator_suffix" if closed else "unclosed_or_malformed_designator_suffix",
-            close.end() if closed else o.end())
+    return ("incomplete", _DETACHED if close else _UNREAD, close.end() if close else o.end())
 
 
 def incomplete_after(view, position):

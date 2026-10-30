@@ -743,35 +743,40 @@ def check_suffix_integrity(index, item):
     from .fedreg import named_paragraph_paths
     failures, kind = [], item["kind"]
     scopes = ("current", "future", "both")
-    if kind == "unclosed":
-        for n in item["lengths"]:
-            for template in item["templates"]:
-                q = template.replace("{N}", "9" * n)
-                label = parse_query_citations(q)[0]["label"]
-                c = parse_query_citations(q)[0]
-                if c["malformed"] != "unclosed_or_malformed_designator_suffix" or c["diagnostics"]["accepted_valid_prefix"]:
-                    failures.append(f"len{n} '{q}': not read as an unclosed suffix")
-                    continue
+    if kind in ("unclosed", "forms"):
+        if kind == "forms":  # punctuation-led and unclosed-glued forms, written out literally
+            cases = [(0, q) for q in item["requests"]]
+        else:
+            cases = [(n, t.replace("{N}", "9" * n)) for n in item["lengths"] for t in item["templates"]]
+        for text in item.get("instructions", []):
+            if named_paragraph_paths(text):
+                failures.append(f"instruction '{text}' attributed a path")
+        for n, q in cases:
+            label = parse_query_citations(q)[0]["label"]
+            c = parse_query_citations(q)[0]
+            if c["malformed"] != "unclosed_or_malformed_designator_suffix" or c["diagnostics"]["accepted_valid_prefix"]:
+                failures.append(f"len{n} '{q}': not read as an unclosed suffix")
+                continue
+            for scope in scopes:
+                r = [x for x in index.resolve_citations(q, scope) if x["citation"] == label]
+                if not r or r[0]["resolved"] or r[0]["canonical"] == item["ancestor"] or r[0]["_current_ids"] or r[0]["_future_ids"]:
+                    failures.append(f"len{n} {scope}: '{q}' resolved or established its ancestor")
+                if index.exact(q, 50, scope):
+                    failures.append(f"len{n} {scope}: exact returned records for '{q}'")
+            for mode in ("exact", "hybrid"):
                 for scope in scopes:
-                    r = [x for x in index.resolve_citations(q, scope) if x["citation"] == label]
-                    if not r or r[0]["resolved"] or r[0]["canonical"] == item["ancestor"] or r[0]["_current_ids"] or r[0]["_future_ids"]:
-                        failures.append(f"len{n} {scope}: '{q}' resolved or established its ancestor")
-                    if index.exact(q, 50, scope):
-                        failures.append(f"len{n} {scope}: exact returned records for '{q}'")
-                for mode in ("exact", "hybrid"):
-                    for scope in scopes:
-                        for parts in (None, ["12:3"], ["12:999"]):
-                            for k in (10, 1):
-                                out = index.answer(q, mode=mode, scope=scope, parts=parts, k=k)
-                                tag = f"len{n} {mode}/{scope}/{parts or 'nofilter'}/k{k}"
-                                if out["status"] == "evidence_found":
-                                    failures.append(f"{tag}: evidence_found")
-                                if f"citation:{label}" not in {g["topic"] for g in out["coverage_gaps"]}:
-                                    failures.append(f"{tag}: no citation gap")
-                                failures += [f"{tag}: {f}" for f in invariant_failures(out, scope)]
-                d = index.delta(label)
-                if d["evidence_status"] != "unavailable" or d["baseline"] or d["instruments"]:
-                    failures.append(f"len{n}: delta of '{q}' is not explicit unavailable evidence")
+                    for parts in (None, ["12:3"], ["12:999"]):
+                        for k in (10, 1):
+                            out = index.answer(q, mode=mode, scope=scope, parts=parts, k=k)
+                            tag = f"len{n} {mode}/{scope}/{parts or 'nofilter'}/k{k}"
+                            if out["status"] == "evidence_found":
+                                failures.append(f"{tag}: evidence_found")
+                            if f"citation:{label}" not in {g["topic"] for g in out["coverage_gaps"]}:
+                                failures.append(f"{tag}: no citation gap")
+                            failures += [f"{tag}: {f}" for f in invariant_failures(out, scope)]
+            d = index.delta(label)
+            if d["evidence_status"] != "unavailable" or d["baseline"] or d["instruments"]:
+                failures.append(f"len{n}: delta of '{q}' is not explicit unavailable evidence")
     elif kind == "complete":
         for n in item["lengths"]:
             for template in item["templates"]:
@@ -802,8 +807,9 @@ def check_suffix_integrity(index, item):
         for mode in ("exact", "hybrid"):
             if index.answer(q, mode=mode, scope="future", k=10)["status"] != "evidence_found":
                 failures.append(f"control {q} {mode} is not evidence_found")
-        if parse_query_citations(item["parenthetical"])[0]["malformed"]:
-            failures.append("an ordinary explanatory parenthetical became a malformed designator suffix")
+        for text in [item["parenthetical"], *item.get("closed_explanations", [])]:
+            if parse_query_citations(text)[0]["malformed"]:
+                failures.append(f"an ordinary closed explanation '{text}' became a malformed designator suffix")
     return {"id": item["id"], "kind": kind, "passed": not failures, "failures": failures[:10]}
 
 
