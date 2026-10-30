@@ -110,6 +110,34 @@ class Index:
             params.append(topic)
         return " AND ".join(clauses), params
 
+    @staticmethod
+    def _parts_clause(parts):
+        if not parts:
+            return "", []
+        params = []
+        for spec in parts:
+            params += spec.split(":")
+        return " AND (" + " OR ".join("(p.title_no=? AND p.part_no=?)" for _ in parts) + ")", params
+
+    def range_hits(self, title, part, minor=None):
+        """Provision ids whose instruction-only row names a numeric `through` range containing the section.
+
+        Membership is numeric and unreviewed; ambiguous ranges are never matched. With no `minor` (a part
+        citation) every numeric range in the part matches.
+        """
+        sql = "SELECT src_provision_id, lo_section, hi_section, instruction_ordinal FROM amendment_range " \
+              "WHERE status='numeric_range' AND part_no=?"
+        params = [part]
+        if title:
+            sql += " AND title_no=?"
+            params.append(title)
+        if minor is not None:
+            if not str(minor).isdigit():
+                return {}
+            sql += " AND lo_minor<=? AND hi_minor>=?"
+            params += [int(minor), int(minor)]
+        return {r[0]: {"lo": r[1], "hi": r[2], "instruction_ordinal": r[3]} for r in self.conn.execute(sql, params)}
+
     # ---------- retrievers: each returns [(provision_id, score)] best first ----------
     def bm25(self, query, k=50, scope="both", parts=None, expression=None):
         expr = expression or fts_expression(terms_of(query))
@@ -175,7 +203,7 @@ class Index:
             if scope in ("current", "both"):
                 current += self._exact_current(title, part, section, paras, parts)
             if scope in ("future", "both"):
-                future += self._exact_future(title, part, section, parts)
+                future += self._exact_future(title, part, section, parts, minor)
         merged, seen = [], set()
         for pair in zip_longest(current, future):
             for pid in pair:
@@ -185,11 +213,15 @@ class Index:
         return [(pid, float(len(merged) - i)) for i, pid in enumerate(merged[:k])]
 
     def _exact_current(self, title, part, section, paras, parts):
-        where, params = self._where("current", parts)
         if section:
+            where, params = self._where("current", parts)
             cond, cparams = "p.section_no=? AND p.kind IN ('paragraph','definition','table','section')", [section]
         else:
-            cond, cparams = "p.part_no=? AND p.kind='part'", [part]
+            # Part citation: the part record then its sections, from eCFR documents only. The generic current filter
+            # excludes kind 'part', so it is not used here; the publisher test keeps Federal Register rows out.
+            clause, params = self._parts_clause(parts)
+            where = "d.publisher = 'eCFR'" + clause
+            cond, cparams = "p.part_no=? AND p.kind IN ('part','section')", [part]
         if title:
             cond += " AND p.title_no=?"
             cparams.append(title)
@@ -203,7 +235,7 @@ class Index:
             rows = narrowed or rows
         return [r["id"] for r in rows]
 
-    def _exact_future(self, title, part, section, parts):
+    def _exact_future(self, title, part, section, parts, minor=None):
         where, params = self._where("future", parts)
         if section and title:
             dst, dparams = "rel.dst_citation = ?", [f"{title} CFR {section}"]
@@ -219,7 +251,17 @@ class Index:
                 JOIN relationship rel ON rel.src_provision_id=p.id AND rel.rel_type='amends'
                 WHERE {where} AND p.kind='amendment' AND {dst} ORDER BY r.publication_date DESC, p.ordinal""",
             params + dparams).fetchall()
-        return [r["id"] for r in rows]
+        ids = [r["id"] for r in rows]
+        in_range = self.range_hits(title, part, minor) if (part and (minor is not None or not section)) else {}
+        if in_range:
+            where2, params2 = self._where("future", parts)
+            extra = self.conn.execute(
+                f"""SELECT p.id FROM provision p JOIN source_document d ON d.id=p.doc_id
+                    LEFT JOIN rulemaking r ON r.doc_key=d.doc_key
+                    WHERE {where2} AND p.kind='amendment' AND p.id IN ({','.join('?' * len(in_range))})
+                    ORDER BY r.publication_date DESC, p.ordinal""", params2 + list(in_range)).fetchall()
+            ids += [r["id"] for r in extra if r["id"] not in ids]
+        return ids
 
     def hybrid(self, query, k=50, scope="both", parts=None):
         runs = [self.bm25(query, k, scope, parts), self.topic_guided(query, k, scope, parts),
@@ -255,6 +297,7 @@ class Index:
                 out["instruction"] = row["instruction"]
                 out["explicit_targets"] = json.loads(row["explicit_targets"] or "[]")
                 out["explicit_parts"] = json.loads(row["explicit_parts"] or "[]")
+                out["explicit_ranges"] = json.loads(row["explicit_ranges"] or "[]")
                 out["pairing_status"] = row["pairing_status"]
         else:
             out["status"] = {"state": "current_baseline_requires_operative_effect_review",
@@ -276,8 +319,8 @@ class Index:
         """Evidence bundle. `status` is evidence_found | partial_evidence | missing_evidence.
 
         missing_evidence: the query names only topics whose sources are not acquired (no results returned).
-        partial_evidence: it names an unacquired source alongside acquired ones; results come from the acquired
-        sources and the gap is reported, so they must not be read as answering the unacquired part.
+        partial_evidence: results exist but a matched topic is `not_acquired` (alongside acquired ones) or `partial`;
+        the gaps are reported in `coverage_gaps`, so the results must not be read as complete for that topic.
         """
         topic_hits = self.match_topics(query)
         gaps = [{"topic": t["id"], "coverage": t["coverage"], "note": t["coverage_note"]}
@@ -285,10 +328,11 @@ class Index:
         blocked = [t for t, _ in topic_hits if t["coverage"] == "not_acquired"]
         only_blocked = bool(blocked) and len(blocked) == len(topic_hits) and not self.exact(query)
         results = [] if only_blocked else [self.evidence(pid) for pid, _ in self.retrieve(query, mode, k, scope, parts)]
+        partial = [t for t, _ in topic_hits if t["coverage"] == "partial"]
         if not results:
             status = "missing_evidence"
-        elif blocked:
-            status = "partial_evidence"
+        elif blocked or partial:
+            status = "partial_evidence"   # results exist, but a matched topic's source coverage is incomplete
         else:
             status = "evidence_found"
         return {
@@ -323,6 +367,7 @@ class Index:
             amend = self.conn.execute(
                 """SELECT DISTINCT r.src_provision_id FROM relationship r
                    WHERE r.rel_type='amends' AND r.dst_citation=?""", (f"{title} CFR {section}",)).fetchall()
+            ranged = self.range_hits(title, part, minor)
         else:
             base_rows = self.conn.execute(
                 """SELECT p.*, d.doc_key, d.sha256, d.publisher_issue_date, d.publisher_up_to_date_as_of FROM provision p
@@ -332,6 +377,8 @@ class Index:
                 """SELECT DISTINCT r.src_provision_id FROM relationship r
                    WHERE r.rel_type='amends' AND (r.dst_citation=? OR r.dst_citation LIKE ?)""",
                 (f"{title} CFR Part {part}", f"{title} CFR {part}.%")).fetchall()
+            ranged = self.range_hits(title, part)
+        amend = [r[0] for r in amend] + [pid for pid in ranged if pid not in {r[0] for r in amend}]
         if not base_rows and section:  # target may sit inside a reserved/range section such as 3.4-3.9
             for r in self.conn.execute("SELECT DISTINCT section_no FROM provision WHERE title_no=? AND part_no=? AND section_no LIKE '%-%'",
                                        (title, part)):
@@ -349,7 +396,7 @@ class Index:
                         "up_to_date_as_of": b["publisher_up_to_date_as_of"], "provisions_in_scope": len(base_rows),
                         "heading": b["heading"]}
         grouped = {}
-        for (pid,) in amend:
+        for pid in amend:
             ev = self.evidence(pid, with_context=False)
             g = grouped.setdefault(ev["doc_key"], {"doc_key": ev["doc_key"], "document_number": ev["status"]["document_number"],
                                                    "document_type": ev["status"]["document_type"], "status": ev["status"],
@@ -357,7 +404,10 @@ class Index:
                                                    "units": []})
             g["units"].append({"locator": ev["locator"], "fr_page": ev.get("fr_page"), "instruction": ev.get("instruction"),
                                "carried_text": ev["text"], "explicit_targets": ev.get("explicit_targets"),
-                               "explicit_parts": ev.get("explicit_parts"), "pairing_status": ev.get("pairing_status")})
+                               "explicit_parts": ev.get("explicit_parts"), "pairing_status": ev.get("pairing_status"),
+                               "match": ("range_membership" if pid in ranged and not (
+                                   section and section in (ev.get("explicit_targets") or [])) else "explicit_target"),
+                               "range": ranged.get(pid), "review_status": "parsed_unreviewed"})
         instruments = sorted(grouped.values(), key=lambda g: self._rulemaking[g["doc_key"]]["publication_date"] or "")
         for g in instruments:
             rm = self._rulemaking[g["doc_key"]]
@@ -384,6 +434,18 @@ class Index:
                     WHERE rel.rel_type='amends_candidate' AND rel.dst_citation {op} ?""", like):
             candidates.append({"doc_key": r["doc_key"], "locator": r["locator"], "pairing_status": r["pairing_status"],
                                "candidate_instructions": json.loads(r["unresolved_candidates"] or "[]")})
+        for r in self.conn.execute(
+                """SELECT d.doc_key, p.locator, a.lo_section, a.hi_section, a.instruction_ordinal, a.basis, p.instruction
+                   FROM amendment_range a JOIN provision p ON p.id=a.src_provision_id JOIN source_document d ON d.id=p.doc_id
+                   WHERE a.status='unresolved_ambiguous' AND (a.lo_section LIKE ? OR a.hi_section LIKE ? OR a.lo_section = ?
+                         OR a.hi_section = ?)""",
+                (f"{part}.%", f"{part}.%", section or "", section or "")):
+            if not section or section in (r["lo_section"], r["hi_section"]):
+                candidates.append({"doc_key": r["doc_key"], "locator": r["locator"], "pairing_status": "ambiguous_range",
+                                   "candidate_instructions": [{"instruction": r["instruction"],
+                                                               "instruction_ordinal": r["instruction_ordinal"],
+                                                               "range": [r["lo_section"], r["hi_section"]],
+                                                               "reason": r["basis"]}]})
         return {"citation": citation, "as_of": self.as_of, "baseline": baseline, "instruments": instruments,
                 "unresolved_candidates": candidates, "applicability_status": "not_assessed",
                 "notes": ["Instruments are independent; no cumulative future rulebook is constructed.",

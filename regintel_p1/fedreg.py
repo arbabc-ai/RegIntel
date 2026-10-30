@@ -130,6 +130,24 @@ def in_range(section, ranges):
     return False
 
 
+def classify_ranges(ranges):
+    """Numeric membership is only asserted for `A.x through A.y` with plain integer minors in one part and x <= y.
+
+    Anything else (different parts, lettered minors, reversed ends) stays `unresolved_ambiguous`: its endpoints
+    are still explicit targets, but nothing between them is claimed.
+    """
+    out = []
+    for lo, hi in ranges:
+        a, b = SECTION_TOKEN.fullmatch(lo), SECTION_TOKEN.fullmatch(hi)
+        ok = bool(a and b and a.group(1) == b.group(1) and a.group(2).isdigit() and b.group(2).isdigit()
+                  and int(a.group(2)) <= int(b.group(2)))
+        entry = {"lo": lo, "hi": hi, "status": "numeric_range" if ok else "unresolved_ambiguous"}
+        if ok:
+            entry.update({"part": a.group(1), "lo_minor": int(a.group(2)), "hi_minor": int(b.group(2))})
+        out.append(entry)
+    return out
+
+
 def targeted(parsed, section):
     return section in parsed["targets"] or in_range(section, parsed["ranges"])
 
@@ -356,14 +374,21 @@ class FrParser:
             parsed = i["parsed"]
             remaining = [t for t in parsed["targets"] if t not in i["covered"]]
             part_only = [p for p in parsed["parts"] if not re.search(r"authority citation", i["text"], re.I)]
-            if remaining or part_only:
+            ranges = classify_ranges(parsed["ranges"])
+            if remaining or part_only or ranges:
+                first_part = (remaining[0].split(".")[0] if remaining else
+                              (part_only[0] if part_only else ranges[0]["lo"].split(".")[0]))
                 out.append({
-                    "section_no": remaining[0] if remaining else None,
-                    "part_no": remaining[0].split(".")[0] if remaining else part_only[0], "subject": None,
+                    "section_no": remaining[0] if remaining else None, "part_no": first_part, "subject": None,
                     "instruction": i["text"], "instruction_ordinals": [i["idx"]],
                     "instruction_targets_all": {"targets": parsed["targets"], "ranges": parsed["ranges"]},
-                    "explicit_targets": remaining, "explicit_parts": part_only,
-                    "referenced_citations": parsed["references"], "unresolved_candidates": [],
+                    "explicit_targets": remaining, "explicit_parts": part_only, "explicit_ranges": [
+                        {**r, "instruction_ordinal": i["idx"]} for r in ranges],
+                    "referenced_citations": parsed["references"],
+                    "unresolved_candidates": [
+                        {"instruction": i["text"], "instruction_ordinal": i["idx"], "range": [r["lo"], r["hi"]],
+                         "reason": "range endpoints are not plain numeric sections of one part; sections between them are unresolved"}
+                        for r in ranges if r["status"] != "numeric_range"],
                     "pairing_status": "instruction_only", "paragraphs": []})
             elif not i["used"] and not parsed["targets"] and not parsed["parts"]:
                 out.append({
@@ -389,6 +414,7 @@ class FrParser:
                     "section_no": r["section_no"], "subject": r["subject"], "instruction": r["instruction"],
                     "instruction_ordinals": r["instruction_ordinals"], "operations": operations,
                     "explicit_targets": r["explicit_targets"], "explicit_parts": r["explicit_parts"],
+                    "explicit_ranges": r.get("explicit_ranges", []),
                     "instruction_targets_all": r["instruction_targets_all"],
                     "referenced_citations": r["referenced_citations"],
                     "unresolved_candidates": r["unresolved_candidates"], "pairing_status": r["pairing_status"],

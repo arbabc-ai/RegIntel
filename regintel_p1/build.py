@@ -31,16 +31,16 @@ def insert_provision(conn, doc_id, p):
     cur = conn.execute(
         """INSERT INTO provision (doc_id, locator, citation, kind, title_no, part_no, section_no, subpart, heading,
            context, text, defined_term, parent_locator, ordinal, char_start, char_end, fr_page, instruction,
-           operations, explicit_targets, explicit_parts, referenced_citations, unresolved_candidates,
+           operations, explicit_targets, explicit_parts, explicit_ranges, referenced_citations, unresolved_candidates,
            pairing_status, instruction_targets_all, instruction_ordinals, paragraph_leads)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
         (doc_id, p["locator"], p.get("citation"), p["kind"], p.get("title_no"), p.get("part_no"),
          p.get("section_no"), p.get("subpart"), p.get("heading"), p.get("context"), p["text"],
          p.get("defined_term"), p.get("parent_locator"), p.get("ordinal"), p.get("char_start"), p.get("char_end"),
          p.get("fr_page"), p.get("instruction"),
          json.dumps(p["operations"]) if "operations" in p else None,
          *(json.dumps(p[k]) if k in p else None for k in (
-             "explicit_targets", "explicit_parts", "referenced_citations", "unresolved_candidates")),
+             "explicit_targets", "explicit_parts", "explicit_ranges", "referenced_citations", "unresolved_candidates")),
          p.get("pairing_status"),
          json.dumps(p["instruction_targets_all"]) if "instruction_targets_all" in p else None,
          json.dumps(p["instruction_ordinals"]) if "instruction_ordinals" in p else None,
@@ -103,7 +103,7 @@ def build(corpus_dir, db_path, as_of, log=print):
                     "heading": u["subject"], "context": u["subject"] or "", "text": u["text"] or u["instruction"],
                     "instruction": u["instruction"], "operations": u["operations"],
                     "explicit_targets": u["explicit_targets"], "explicit_parts": u["explicit_parts"],
-                    "referenced_citations": u["referenced_citations"],
+                    "explicit_ranges": u["explicit_ranges"], "referenced_citations": u["referenced_citations"],
                     "unresolved_candidates": u["unresolved_candidates"], "pairing_status": u["pairing_status"],
                     "instruction_targets_all": u["instruction_targets_all"],
                     "instruction_ordinals": u["instruction_ordinals"], "paragraph_leads": u["paragraph_leads"],
@@ -217,6 +217,22 @@ def link_amendments(conn, section_ids, range_ids, part_ids, counts):
                           f"could not be paired explicitly [{status}]; see unresolved_candidates{note}", locator,
                           "unresolved_candidate"))
             cands += 1
+    ranges = 0
+    for pid, title, ranges_json in conn.execute(
+            "SELECT id, title_no, explicit_ranges FROM provision WHERE kind='amendment' AND explicit_ranges IS NOT NULL "
+            "AND explicit_ranges != '[]'").fetchall():
+        for r in json.loads(ranges_json):
+            numeric = r["status"] == "numeric_range"
+            conn.execute(
+                "INSERT INTO amendment_range (src_provision_id, title_no, part_no, lo_section, hi_section, lo_minor, "
+                "hi_minor, status, instruction_ordinal, basis, review_status) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                (pid, title, r.get("part"), r["lo"], r["hi"], r.get("lo_minor"), r.get("hi_minor"), r["status"],
+                 r.get("instruction_ordinal"),
+                 f"`{r['lo']} through {r['hi']}` named by an instruction-only amendment; interior membership is "
+                 + ("numeric" if numeric else "NOT asserted (ambiguous range)"),
+                 "parsed_unreviewed" if numeric else "unresolved_candidate"))
+            ranges += 1
+    counts["amendment_ranges"] = ranges
     counts["amends_relationships"] = n
     counts["amends_resolved_to_acquired_section"] = resolved
     counts["amendment_instruction_references"] = refs

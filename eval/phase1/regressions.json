@@ -1,6 +1,6 @@
 {
- "version": "p1-regress-0.1",
- "task": "S7-P1-EVIDENCE-BOUNDARIES-01",
+ "version": "p1-regress-0.2",
+ "task": "S7-P1-EVIDENCE-BOUNDARIES-01 + S7-P1-EVIDENCE-COMPLETENESS-02",
  "note": "Deterministic regression checks over the acquired corpus for amendment-target integrity and retrieval scope filtering. Kept separate from questions.json so the 37-item baseline stays frozen. A pass means the contract holds, not that any rule applies to a bank.",
  "delta": [
   {
@@ -74,6 +74,84 @@
    "expect": {
     "all_units_target_queried": true
    }
+  },
+  {
+   "id": "G09",
+   "citation": "12 CFR 327.31",
+   "note": "interior section of 2026-13192 instruction 10 (remove and reserve subpart B, §§ 327.30 through 327.36)",
+   "expect": {
+    "instruments": {
+     "fr:2026-13192": {}
+    },
+    "unit_match": {
+     "fr:2026-13192": "range_membership"
+    },
+    "instruction_contains": {
+     "fr:2026-13192": "10. Remove and reserve subpart B, consisting of §§ 327.30 through 327.36."
+    },
+    "range_provenance": [
+     "fr:2026-13192"
+    ],
+    "all_units_target_queried": true
+   }
+  },
+  {
+   "id": "G10",
+   "citation": "12 CFR 327.30",
+   "expect": {
+    "instruments": {
+     "fr:2026-13192": {}
+    },
+    "instruction_contains": {
+     "fr:2026-13192": "§§ 327.30 through 327.36"
+    }
+   }
+  },
+  {
+   "id": "G11",
+   "citation": "12 CFR 327.36",
+   "expect": {
+    "instruments": {
+     "fr:2026-13192": {}
+    },
+    "instruction_contains": {
+     "fr:2026-13192": "§§ 327.30 through 327.36"
+    }
+   }
+  },
+  {
+   "id": "G12",
+   "citation": "12 CFR 327.29",
+   "note": "outside-range negative below the range",
+   "expect": {
+    "absent_instruments": [
+     "fr:2026-13192"
+    ]
+   }
+  },
+  {
+   "id": "G13",
+   "citation": "12 CFR 327.37",
+   "note": "outside-range negative above the range",
+   "expect": {
+    "absent_instruments": [
+     "fr:2026-13192"
+    ]
+   }
+  },
+  {
+   "id": "G14",
+   "citation": "12 CFR 327.16",
+   "note": "an explicit single-section amendment is unaffected by range logic and stays explicit",
+   "expect": {
+    "instruments": {
+     "fr:2026-13192": {}
+    },
+    "unit_match": {
+     "fr:2026-13192": "explicit_target"
+    },
+    "all_units_target_queried": true
+   }
   }
  ],
  "relationship_integrity": {
@@ -84,28 +162,34 @@
   {
    "id": "C01",
    "query": "12 CFR 3.22",
-   "future_nonempty": true
+   "future_nonempty": true,
+   "current_nonempty": true
   },
   {
    "id": "C02",
    "query": "§ 217.12",
-   "future_nonempty": true
+   "future_nonempty": true,
+   "current_nonempty": true
   },
   {
    "id": "C03",
    "query": "12 CFR Part 252",
-   "future_nonempty": true
+   "future_nonempty": true,
+   "current_nonempty": true,
+   "current_includes_kind": "part"
   },
   {
    "id": "C04",
    "query": "12 CFR 3.12(c)(1)",
-   "future_nonempty": true
+   "future_nonempty": true,
+   "current_nonempty": true
   },
   {
    "id": "C05",
    "query": "12 CFR 249.10",
    "future_nonempty": false,
-   "note": "no acquired instrument explicitly amends this section (matches baseline D04); my first draft used 12 CFR 3.1, which the March capital proposals do amend explicitly, so that expectation was wrong"
+   "note": "no acquired instrument explicitly amends this section (matches baseline D04); my first draft used 12 CFR 3.1, which the March capital proposals do amend explicitly, so that expectation was wrong",
+   "current_nonempty": true
   },
   {
    "id": "C06",
@@ -113,7 +197,49 @@
    "future_nonempty": true,
    "parts": [
     "12:217"
-   ]
+   ],
+   "current_nonempty": true
+  },
+  {
+   "id": "C07",
+   "query": "12 CFR 327.31",
+   "future_nonempty": true,
+   "current_nonempty": false,
+   "note": "Part 327 is not an acquired baseline part, so only future (range-membership) records exist"
+  },
+  {
+   "id": "C08",
+   "query": "12 CFR 327.37",
+   "future_nonempty": false,
+   "current_nonempty": false,
+   "note": "just outside the 327.30-327.36 range"
+  }
+ ],
+ "changelog": [
+  "v0.2 (COMPLETENESS-02): citation-scope checks now exercise exact AND hybrid for every scope (v0.1 stopped after the exact mode) and require nonempty current results for acquired citations; added range, part-lookup and partial-coverage checks. G01-G08 are unchanged."
+ ],
+ "status": [
+  {
+   "id": "P01",
+   "query": "customer identification program minimum requirements for banks",
+   "scope": "current",
+   "expect_status": "partial_evidence",
+   "gap_topic": "bsa_aml_program",
+   "note": "31 CFR 1010/1020 acquired; other BSA sources are not (topic coverage partial)"
+  },
+  {
+   "id": "P02",
+   "query": "stablecoin issuer capital requirements",
+   "scope": "current",
+   "expect_status": "partial_evidence",
+   "gap_topic": "stablecoin_genius"
+  },
+  {
+   "id": "P03",
+   "query": "minimum common equity tier 1 capital ratio",
+   "scope": "current",
+   "expect_status": "evidence_found",
+   "note": "fully acquired topic stays evidence_found"
   }
  ]
 }

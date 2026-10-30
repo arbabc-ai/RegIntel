@@ -161,6 +161,12 @@ def invariant_failures(out, scope):
     return failures
 
 
+def _in_numeric_range(rng, part, minor):
+    lo, hi = rng["lo"].split("."), rng["hi"].split(".")
+    return (lo[0] == hi[0] == part and minor.isdigit() and lo[1].isdigit() and hi[1].isdigit()
+            and int(lo[1]) <= int(minor) <= int(hi[1]))
+
+
 def _all_units_target(out, citation):
     """Every unit of every instrument must explicitly target the queried section (or part)."""
     m = CITE.search(citation)
@@ -169,7 +175,8 @@ def _all_units_target(out, citation):
     for g in out["instruments"]:
         for u in g["units"]:
             if minor:
-                ok = f"{part}.{minor}" in (u["explicit_targets"] or [])
+                ok = f"{part}.{minor}" in (u["explicit_targets"] or []) or (
+                    u.get("match") == "range_membership" and u.get("range") and _in_numeric_range(u["range"], part, minor))
             else:
                 ok = part in (u["explicit_parts"] or []) or any(
                     t.startswith(part + ".") for t in (u["explicit_targets"] or []))
@@ -192,6 +199,21 @@ def check_boundary_delta(index, item):
     for key, needle in exp.get("no_unit_locator_contains", {}).items():
         if key in got and any(needle in u["locator"] for u in got[key]["units"]):
             failures.append(f"{key} carries a unit from another section ({needle})")
+    for key in exp.get("absent_instruments", []):
+        if key in got:
+            failures.append(f"{key} must not appear for {item['citation']}")
+    for key, match in exp.get("unit_match", {}).items():
+        if key in got and not all(u["match"] == match for u in got[key]["units"]):
+            failures.append(f"{key} units are not all {match}: {[u['match'] for u in got[key]['units']]}")
+    for key, needle in exp.get("instruction_contains", {}).items():
+        if key in got and not all(needle in (u["instruction"] or "") for u in got[key]["units"]):
+            failures.append(f"{key} unit lacks the complete instruction ({needle})")
+    for key in exp.get("range_provenance", []):
+        if key in got and not all(u["range"] and u["range"].get("lo") and u["range"].get("instruction_ordinal")
+                                  and u["review_status"] == "parsed_unreviewed" for u in got[key]["units"]):
+            failures.append(f"{key} range unit lacks range provenance or unreviewed status")
+    if "unresolved_ranges" in exp and len([c for c in out["unresolved_candidates"] if c["pairing_status"] == "ambiguous_range"]) != exp["unresolved_ranges"]:
+        failures.append("ambiguous range candidates differ from expectation")
     if exp.get("all_units_target_queried"):
         failures += _all_units_target(out, item["citation"])
     return {"id": item["id"], "citation": item["citation"], "passed": not failures, "failures": failures,
@@ -216,34 +238,55 @@ def check_relationship_integrity(index, item):
 
 
 def check_citation_scope(index, item):
-    """Citation queries must honor scope and part filters in every retriever that uses the exact lookup."""
+    """Citation queries must honor scope and part filters in both the exact and the hybrid retriever.
+
+    Every (mode, scope) pair is exercised; failures are tagged `mode/scope` so a hybrid-only violation is
+    attributed to hybrid. `current_nonempty` requires acquired-baseline citations to return current records.
+    """
     q, parts, failures = item["query"], item.get("parts"), []
     for mode in ("exact", "hybrid"):
         for scope in ("current", "future", "both"):
-            out = index.answer(q, mode=mode, scope=scope, parts=parts, k=20)
-            res = out["results"]
+            res = index.answer(q, mode=mode, scope=scope, parts=parts, k=20)["results"]
             tag = f"{mode}/{scope}"
             for r in res:
                 state = r["status"]["state"]
                 if scope == "future" and (state.startswith("current") or r["kind"] not in ("amendment", "fr_preamble", "fr_table")):
                     failures.append(f"{tag}: current-baseline record {r['citation']}")
-                if scope == "current" and not state.startswith("current_baseline"):
-                    failures.append(f"{tag}: future record {r['citation']}")
+                if scope == "current" and (not state.startswith("current_baseline") or r["doc_key"].startswith("fr:")):
+                    failures.append(f"{tag}: future or Federal Register record {r['citation']}")
                 if parts:
                     row = index.conn.execute("SELECT title_no, part_no FROM provision WHERE id=?", (r["provision_id"],)).fetchone()
                     if f"{row['title_no']}:{row['part_no']}" not in parts:
                         failures.append(f"{tag}: part filter violated by {r['citation']}")
-            if scope == "future" and mode == "exact" and item.get("future_nonempty") is True and not res:
+            if scope == "future" and item.get("future_nonempty") is True and not res:
                 failures.append(f"{tag}: no future records")
-            if scope == "future" and mode == "exact" and item.get("future_nonempty") is False and res:
+            if scope == "future" and item.get("future_nonempty") is False and mode == "exact" and res:
                 failures.append(f"{tag}: unexpected future records")
-        small = index.exact(q, 2, "both", parts)
-        kinds = {index.evidence(pid, with_context=False)["kind"] == "amendment" for pid, _ in small}
-        if item.get("future_nonempty") and index.exact(q, 50, "future", parts) and index.exact(q, 50, "current", parts) \
-                and kinds != {True, False}:
-            failures.append("both/k=2: one scope crowded out the other")
-        break
+            if scope == "current" and item.get("current_nonempty") and not res:
+                failures.append(f"{tag}: no current records for an acquired citation")
+    small = index.exact(q, 2, "both", parts)
+    kinds = {index.evidence(pid, with_context=False)["kind"] == "amendment" for pid, _ in small}
+    if item.get("current_includes_kind"):
+        cur = {index.evidence(pid, with_context=False)["kind"] for pid, _ in index.exact(q, 200, "current", parts)}
+        if item["current_includes_kind"] not in cur:
+            failures.append(f"exact/current lacks a {item['current_includes_kind']} record: {sorted(cur)}")
+        if any(index.evidence(pid, with_context=False)["doc_key"].startswith("fr:") for pid, _ in index.exact(q, 200, "current", parts)):
+            failures.append("exact/current widened to Federal Register records")
+    if item.get("future_nonempty") and item.get("current_nonempty") and kinds != {True, False}:
+        failures.append("both/k=2: one scope crowded out the other")
     return {"id": item["id"], "query": q, "passed": not failures, "failures": failures[:10]}
+
+
+def check_status_regression(index, item):
+    out = index.answer(item["query"], mode="hybrid", scope=item.get("scope", "both"), k=10)
+    failures = []
+    if out["status"] != item["expect_status"]:
+        failures.append(f"status {out['status']} != {item['expect_status']}")
+    if item.get("gap_topic") and item["gap_topic"] not in [g["topic"] for g in out["coverage_gaps"]]:
+        failures.append(f"coverage gap {item['gap_topic']} not reported")
+    failures += invariant_failures(out, item.get("scope", "both"))
+    return {"id": item["id"], "query": item["query"], "passed": not failures, "failures": failures,
+            "status": out["status"], "results": len(out["results"])}
 
 
 def run_regressions(index, path):
@@ -251,9 +294,10 @@ def run_regressions(index, path):
     out = {"version": spec["version"], "task": spec["task"],
            "delta": [check_boundary_delta(index, d) for d in spec["delta"]],
            "relationship_integrity": check_relationship_integrity(index, spec["relationship_integrity"]),
-           "citation_scope": [check_citation_scope(index, c) for c in spec["citation_scope"]]}
+           "citation_scope": [check_citation_scope(index, c) for c in spec["citation_scope"]],
+           "status": [check_status_regression(index, x) for x in spec.get("status", [])]}
     out["passed"] = (all(d["passed"] for d in out["delta"]) and out["relationship_integrity"]["passed"]
-                     and all(c["passed"] for c in out["citation_scope"]))
+                     and all(c["passed"] for c in out["citation_scope"]) and all(x["passed"] for x in out["status"]))
     return out
 
 
@@ -304,5 +348,7 @@ def render(report):
         lines.append(f"  {ri['id']} {'PASS' if ri['passed'] else 'FAIL'} relationship integrity violations={ri['violations']} {'; '.join(ri['failures'])}")
         for c in reg["citation_scope"]:
             lines.append(f"  {c['id']} {'PASS' if c['passed'] else 'FAIL'} citation scope '{c['query']}' {'; '.join(c['failures'])}")
+        for x in reg.get("status", []):
+            lines.append(f"  {x['id']} {'PASS' if x['passed'] else 'FAIL'} status={x['status']} results={x['results']} '{x['query']}' {'; '.join(x['failures'])}")
     lines.append("Filter checks: " + ", ".join(f"{c['id']}/{c['retriever']}={'ok' if c['respected'] else 'VIOLATED'}" for c in report["filter_checks"]))
     return "\n".join(lines)

@@ -1,7 +1,7 @@
 """Relational schema for the Phase 1 evidence index (SQLite, standard library)."""
 import sqlite3
 
-SCHEMA_VERSION = "p1-0.2"
+SCHEMA_VERSION = "p1-0.3"
 
 DDL = """
 CREATE TABLE index_meta (key TEXT PRIMARY KEY, value TEXT);
@@ -58,6 +58,7 @@ CREATE TABLE provision (
   operations TEXT,                         -- JSON, regex signal from the instruction (unreviewed)
   explicit_targets TEXT,                   -- JSON, sections this row's instruction explicitly amends (unreviewed)
   explicit_parts TEXT,                     -- JSON, parts it explicitly amends (authority citation, "Amend part N")
+  explicit_ranges TEXT,                    -- JSON, `A.x through A.y` ranges named by an instruction-only row
   referenced_citations TEXT,               -- JSON, citations named in the instruction but NOT amended
   unresolved_candidates TEXT,              -- JSON, instructions that might apply but could not be paired explicitly
   pairing_status TEXT,                     -- explicit | multiple_instructions_same_target | instruction_only |
@@ -103,6 +104,19 @@ CREATE TABLE relationship (
 CREATE INDEX relationship_src ON relationship(src_provision_id);
 CREATE INDEX relationship_dst ON relationship(dst_provision_id);
 CREATE INDEX relationship_dst_cite ON relationship(dst_citation);
+
+CREATE TABLE amendment_range (
+  id INTEGER PRIMARY KEY,
+  src_provision_id INTEGER NOT NULL REFERENCES provision(id),
+  title_no TEXT, part_no TEXT,
+  lo_section TEXT NOT NULL, hi_section TEXT NOT NULL,
+  lo_minor INTEGER, hi_minor INTEGER,       -- NULL when the range is ambiguous
+  status TEXT NOT NULL,                     -- numeric_range | unresolved_ambiguous
+  instruction_ordinal INTEGER,
+  basis TEXT NOT NULL,
+  review_status TEXT NOT NULL               -- parsed_unreviewed | unresolved_candidate
+);
+CREATE INDEX amendment_range_scope ON amendment_range(title_no, part_no, status);
 
 CREATE TABLE rulemaking_link (
   a_doc_key TEXT NOT NULL, b_doc_key TEXT NOT NULL,
