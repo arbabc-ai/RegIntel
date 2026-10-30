@@ -11,7 +11,7 @@ import json
 from pathlib import Path
 from collections import defaultdict
 
-from .search import CITE, Index
+from .search import Index, parse_query_citations
 
 RETRIEVERS = ("bm25", "topic", "hybrid")
 CUTOFFS = (1, 3, 5, 10)
@@ -170,8 +170,8 @@ def _in_numeric_range(rng, part, minor):
 
 def _all_units_target(out, citation):
     """Every unit of every instrument must explicitly target the queried section (or part)."""
-    m = CITE.search(citation)
-    title, part, minor, _ = m.groups()
+    c = parse_query_citations(citation)[0]
+    title, part, minor = c["title"], c["part"], c["minor"]
     bad = []
     for g in out["instruments"]:
         for u in g["units"]:
@@ -652,6 +652,88 @@ def check_designator_integrity(index, item):
             "passed": not failures, "failures": failures[:10]}
 
 
+def check_query_citations(index, item):
+    """Real-corpus guard for query-citation reading: a request with whitespace inside complete designators resolves
+    exactly like the canonical citation (original request preserved); a complete but missing path keeps every designator;
+    an unclosed, malformed or detached suffix is an explicit unresolved citation whose valid prefix is never accepted."""
+    failures, q, kind = [], item["requested"], item["kind"]
+    scopes = ("current", "future", "both")
+    if kind == "equivalent":
+        canon = item["canonical"]
+        for scope in scopes:
+            for parts in (None, ["12:3"], ["12:999"]):
+                a, b = index.resolve_citations(q, scope, parts)[0], index.resolve_citations(canon, scope, parts)[0]
+                for key in ("citation", "resolved", "achieved", "reason", "by_scope", "future_paragraph_support", "_current_ids", "_future_ids"):
+                    if a[key] != b[key]:
+                        failures.append(f"{scope}/{parts}: {key} differs from the canonical citation")
+                if a["requested"] != q or a["canonical"] != canon:
+                    failures.append("original request or canonical citation not preserved")
+        fut = index.resolve_citations(q, "future")[0]
+        got = sorted({x["doc_key"] for x in fut["future_paragraph_support"]})
+        if got != sorted(item["expect_support"]):
+            failures.append(f"supporting instruments {got} != {sorted(item['expect_support'])}")
+        da, db = index.delta(q), index.delta(canon)
+        for key in ("baseline", "section_context", "current_precision", "future_precision", "evidence_status", "requested_path"):
+            if da[key] != db[key]:
+                failures.append(f"delta {key} differs from the canonical citation")
+        if [g["doc_key"] for g in da["instruments"]] != [g["doc_key"] for g in db["instruments"]]:
+            failures.append("delta instruments differ from the canonical citation")
+        for mode in ("exact", "hybrid"):
+            for scope in scopes:
+                for parts in (None, ["12:999"]):
+                    for k in (10, 1):
+                        x, y = (index.answer(t, mode=mode, scope=scope, parts=parts, k=k) for t in (q, canon))
+                        if x["status"] != y["status"] or [r["provision_id"] for r in x["results"]] != [r["provision_id"] for r in y["results"]]:
+                            failures.append(f"answer {mode}/{scope}/{parts}/k{k} differs from the canonical citation")
+    elif kind == "missing_complete":
+        canon = item["canonical"]
+        for scope in scopes:
+            r = index.resolve_citations(q, scope)[0]
+            if r["canonical"] != canon or r["requested"] != q:
+                failures.append(f"{scope}: path not retained ({r['canonical']})")
+            if r["resolved"] and scope != "both":
+                failures.append(f"{scope}: a missing path resolved")
+        if index.exact(q, 50, "current"):
+            failures.append("current exact returned records for a missing paragraph")
+        d = index.delta(q)
+        if d["baseline"] is not None or d["requested_path"] != item["requested_path"]:
+            failures.append("delta lost the complete requested path or resolved it through an ancestor")
+    elif kind == "malformed":
+        for scope in scopes:
+            r = index.resolve_citations(q, scope)
+            bad = [x for x in r if x["citation"] == item["expect_label"]]
+            if not bad or bad[0]["resolved"] or bad[0]["reason"] != item["expect_reason"]:
+                failures.append(f"{scope}: not an explicit unresolved citation with reason {item['expect_reason']}")
+            elif bad[0]["diagnostics"]["accepted_valid_prefix"] or bad[0]["legal_validity"] != "not_determined" or bad[0]["_current_ids"] or bad[0]["_future_ids"]:
+                failures.append(f"{scope}: valid prefix accepted or validity asserted")
+            if index.exact(q, 50, scope):
+                failures.append(f"{scope}: exact returned records for a malformed request")
+        for mode in ("exact", "hybrid"):
+            for scope in scopes:
+                for parts in (None, ["12:3"], ["12:999"]):
+                    for k in (10, 1):
+                        out = index.answer(q, mode=mode, scope=scope, parts=parts, k=k)
+                        tag = f"{mode}/{scope}/{parts or 'nofilter'}/k{k}"
+                        if out["status"] == "evidence_found":
+                            failures.append(f"{tag}: evidence_found")
+                        if f"citation:{item['expect_label']}" not in {g["topic"] for g in out["coverage_gaps"]}:
+                            failures.append(f"{tag}: no citation gap")
+                        if item.get("expect_topic") and item["expect_topic"] not in out["topics_matched"]:
+                            failures.append(f"{tag}: topic {item['expect_topic']} no longer matched")
+                        failures += [f"{tag}: {f}" for f in invariant_failures(out, scope)]
+        d = index.delta(item["expect_label"])
+        if d["evidence_status"] != "unavailable" or d["baseline"] or d["instruments"] or d["unavailable"]["reason"] != item["expect_reason"]:
+            failures.append("delta of the malformed request is not explicit unavailable evidence")
+    elif kind == "control":
+        for scope in ("future",):
+            for mode in ("exact", "hybrid"):
+                if index.answer(q, mode=mode, scope=scope, k=10)["status"] != "evidence_found":
+                    failures.append(f"canonical control {q} {mode}/{scope} is not evidence_found")
+        if not index.resolve_citations(q, "future")[0]["resolved"] or index.resolve_citations(q, "future")[0]["canonical"] != q:
+            failures.append("canonical control changed")
+    return {"id": item["id"], "requested": q, "kind": kind, "passed": not failures, "failures": failures[:10]}
+
+
 def run_regressions(index, path):
     spec = json.loads(Path(path).read_text())
     out = {"version": spec["version"], "task": spec["task"],
@@ -665,7 +747,8 @@ def run_regressions(index, path):
            "instruction_boundary": [check_instruction_boundary(index, x) for x in spec.get("instruction_boundary", [])],
            "current_agreement": [check_current_agreement(index, x) for x in spec.get("current_agreement", [])],
            "amendatory_lists": [check_amendatory_lists(index, x) for x in spec.get("amendatory_lists", [])],
-           "designator_integrity": [check_designator_integrity(index, x) for x in spec.get("designator_integrity", [])]}
+           "designator_integrity": [check_designator_integrity(index, x) for x in spec.get("designator_integrity", [])],
+           "query_citations": [check_query_citations(index, x) for x in spec.get("query_citations", [])]}
     out["passed"] = (all(d["passed"] for d in out["delta"]) and out["relationship_integrity"]["passed"]
                      and all(c["passed"] for c in out["citation_scope"]) and all(x["passed"] for x in out["status"])
                      and all(x["passed"] for x in out["citation_completeness"])
@@ -674,12 +757,13 @@ def run_regressions(index, path):
                      and all(x["passed"] for x in out["instruction_boundary"])
                      and all(x["passed"] for x in out["current_agreement"])
                      and all(x["passed"] for x in out["amendatory_lists"])
-                     and all(x["passed"] for x in out["designator_integrity"]))
+                     and all(x["passed"] for x in out["designator_integrity"])
+                     and all(x["passed"] for x in out["query_citations"]))
     return out
 
 
 REGRESSION_GROUPS = ("delta", "relationship_integrity", "citation_scope", "status", "citation_completeness",
-                     "mixed_source", "delta_precision", "instruction_boundary", "current_agreement", "amendatory_lists", "designator_integrity")
+                     "mixed_source", "delta_precision", "instruction_boundary", "current_agreement", "amendatory_lists", "designator_integrity", "query_citations")
 
 
 def overall(report):
@@ -762,6 +846,8 @@ def render(report):
         lines.append(f"  {ri['id']} {'PASS' if ri['passed'] else 'FAIL'} relationship integrity violations={ri['violations']} {'; '.join(ri['failures'])}")
         for c in reg["citation_scope"]:
             lines.append(f"  {c['id']} {'PASS' if c['passed'] else 'FAIL'} citation scope '{c['query']}' {'; '.join(c['failures'])}")
+        for x in reg.get("query_citations", []):
+            lines.append(f"  {x['id']} {'PASS' if x['passed'] else 'FAIL'} query citation [{x['kind']}] '{x['requested']}' {'; '.join(x['failures'])}")
         for x in reg.get("designator_integrity", []):
             lines.append(f"  {x['id']} {'PASS' if x['passed'] else 'FAIL'} designator integrity {x.get('doc_key')} § {x.get('section')} units={x.get('units')} {'; '.join(x['failures'])}")
         for x in reg.get("amendatory_lists", []):

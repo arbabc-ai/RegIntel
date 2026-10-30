@@ -11,10 +11,63 @@ from pathlib import Path
 from collections import defaultdict
 from itertools import zip_longest
 
+from .fedreg import designator_classes
+
 STOP = set("""a an and are as at be by can do does for from has have how if in into is it its of on or that the their
 there this to under what when where which who whom why will with within would must should shall may not any all
 bank banks institution institutions requirement requirements rule rules regulation regulations""".split())
-CITE = re.compile(r"(?:(\d+)\s*CFR\s*(?:Part\s*)?|§+\s*)(\d+)(?:\.(\d+[A-Za-z]?))?((?:\([A-Za-z0-9]+\))*)", re.I)
+# One parser serves citation_only, resolve_citations (and so exact/hybrid retrieval and answer) and delta. The earlier
+# head-plus-paragraphs pattern was removed: it stopped at whitespace inside a designator and so accepted an ancestor prefix.
+CITE_HEAD = re.compile(r"(?:(\d+)\s*CFR\s*(?:Part\s*)?|\u00a7+\s*)(\d+)(?:\.(\d+[A-Za-z]?))?", re.I)
+DESIGNATOR_TOKEN = re.compile(r"\(\s*([A-Za-z0-9]{1,8})\s*\)")
+UNREAD_FRAGMENT = re.compile(r"(\s*)\(\s*([A-Za-z0-9]{1,6})(\s*\)|(?![A-Za-z0-9]))")
+TRAILING_OPEN = re.compile(r"\s*\(\s*$")  # a lone "(" at the very end of the request: an unclosed designator
+
+
+def parse_query_citations(query):
+    """Every CFR citation in a query, read once, the same way for every consumer.
+
+    Whitespace inside a complete designator (`( 4 )`, tabs, newlines) is normalized for lookup (`paras` is the
+    normalized path, `canonical` the citation built from it) while `requested` keeps the text exactly as asked. A path
+    followed by an unread designator-like fragment is never accepted as its own ancestor: an unclosed or malformed
+    designator (`3.22(a)(999`) or one set apart by whitespace (`3.1(c)(4) (i)`, `3.22 (a)`) makes the request
+    `malformed`, to be reported as an unresolved citation with diagnostics. An ordinary trailing parenthetical
+    (`(introductory text)`) does not.
+    """
+    out = []
+    for m in CITE_HEAD.finditer(query):
+        title, part, minor = m.groups()
+        section = f"{part}.{minor}" if minor else None
+        if not section and not title:
+            continue  # a bare '§ 12' is not a citation
+        pos, designators = m.end(), []
+        while section:
+            t = DESIGNATOR_TOKEN.match(query, pos)
+            if not t:
+                break
+            designators.append(t.group(1))
+            pos = t.end()
+        fragment = UNREAD_FRAGMENT.match(query, pos) if section else None
+        if fragment and not designator_classes(fragment.group(2)):
+            fragment = None
+        open_tail = TRAILING_OPEN.match(query, pos) if (section and not fragment) else None
+        end = fragment.end() if fragment else (open_tail.end() if open_tail else pos)
+        paras = "".join(f"({d})" for d in designators)
+        canonical = (f"{title} CFR " if title else "\u00a7 ") + (f"{section}{paras}" if section else f"Part {part}")
+        requested = query[m.start():end]
+        malformed = diagnostics = None
+        if fragment or open_tail:
+            closed = bool(fragment) and fragment.group(3).strip() == ")"
+            malformed = "detached_designator_suffix" if (closed and fragment.group(1)) else "unclosed_or_malformed_designator_suffix"
+            diagnostics = {"requested": " ".join(requested.split()), "accepted_valid_prefix": False,
+                           "valid_prefix": f"{section}{paras}", "unread_suffix": query[pos:end].strip()}
+        out.append({"title": title, "part": part, "minor": minor, "section": section, "paras": paras,
+                    "canonical": canonical, "requested": requested,
+                    "label": " ".join(requested.split()) if malformed else canonical,
+                    "malformed": malformed, "diagnostics": diagnostics})
+    return out
+
+
 CONTENT_KINDS = ("paragraph", "definition", "table", "section", "appendix")
 FUTURE_KINDS = ("amendment", "fr_preamble", "fr_table")
 RRF_K = 60
@@ -62,6 +115,10 @@ def terms_of(query):
 
 
 CITATION_REASONS = {
+    "unclosed_or_malformed_designator_suffix": "The request ends in an unclosed or malformed designator, so its parent path "
+                                               "was not accepted and no record is returned for the cited paragraph.",
+    "detached_designator_suffix": "A designator set apart by whitespace follows the citation, which makes the requested path "
+                                  "ambiguous; no ancestor path was accepted and no record is returned for it.",
     "paragraph_precision_unresolved": "Only section-level amendment evidence was found; no amendatory instruction names the "
                                       "complete requested paragraph path, so its hierarchy is not established "
                                       "(section-level records are returned, flagged).",
@@ -79,9 +136,13 @@ CITATION_WORDS = {"section", "sections", "cfr", "part", "parts", "title"}
 
 def citation_only(query):
     """True when the query is nothing but CFR citations (e.g. `12 CFR 3.22`, `§ 217.12`) and filler words."""
-    if not CITE.search(query):
+    cites = parse_query_citations(query)
+    if not cites:
         return False
-    return not [w for w in terms_of(CITE.sub(" ", query)) if w not in CITATION_WORDS]
+    rest = query
+    for c in sorted(cites, key=lambda c: -len(c["requested"])):
+        rest = rest.replace(c["requested"], " ")  # drop each cited span, including any unread malformed fragment
+    return not [w for w in terms_of(rest) if w not in CITATION_WORDS]
 
 
 def fts_expression(terms):
@@ -284,17 +345,37 @@ class Index:
         that the citation is legally invalid or nonexistent.
         """
         out, seen = [], set()
-        for m in CITE.finditer(query):
-            title, part, minor, paras = m.groups()
-            section = f"{part}.{minor}" if minor else None
-            if not section and not title:
-                continue  # a bare '§ 12' is not a citation
-            label = (f"{title} CFR " if title else "§ ") + (f"{section}{paras}" if section else f"Part {part}")
-            if label in seen:
+        for c in parse_query_citations(query):
+            if c["label"] in seen:
                 continue
-            seen.add(label)
-            out.append(self._resolve_one(label, title, part, section, paras or "", scope, parts))
+            seen.add(c["label"])
+            if c["malformed"]:
+                out.append(self._malformed_record(c, scope, parts))
+                continue
+            record = self._resolve_one(c["canonical"], c["title"], c["part"], c["section"], c["paras"], scope, parts)
+            record["requested"] = c["requested"]
+            record["canonical"] = c["canonical"]
+            out.append(record)
         return out
+
+    def _malformed_record(self, c, scope, parts):
+        """An explicit unresolved citation: its parent path is not accepted and nothing is returned for it.
+
+        The section the valid prefix belongs to is reported only as a count of broader context records.
+        """
+        reason = c["malformed"]
+        cur = self._exact_current(c["title"], c["part"], c["section"], "", parts) if scope in ("current", "both") else []
+        fut = self._exact_future(c["title"], c["part"], c["section"], parts, c["minor"]) if scope in ("future", "both") else []
+        return {"citation": c["label"], "requested": c["requested"], "canonical": None,
+                "requested_precision": "paragraph" if c["paras"] else "section", "resolved": False, "achieved": None,
+                "baseline_match": None, "by_scope": {"current": 0, "future": 0}, "legal_validity": "not_determined",
+                "future_paragraph_support": [], "reason": reason, "diagnostics": c["diagnostics"],
+                "context_available": {"role": "section_context_not_the_requested_citation",
+                                      "section": f"{c['title'] + ' CFR ' if c['title'] else ''}{c['section']}",
+                                      "current_records": len(cur), "future_records": len(fut)},
+                "note": CITATION_REASONS[reason] + " This reports unavailable evidence only; it is not a determination "
+                                                   "that the citation is invalid or does not exist.",
+                "_current_ids": [], "_future_ids": []}
 
     def _paragraph_support(self, ids, paras):
         """Amendment units whose evidence supports the complete requested paragraph path.
@@ -598,6 +679,27 @@ class Index:
         }
 
     # ---------- current-to-future ----------
+    def _malformed_delta(self, citation, parsed):
+        """delta() for a request whose designator suffix is unclosed, malformed or detached: an explicit unresolved result.
+
+        No baseline, instrument or paragraph precision is asserted for it, and the valid prefix is not accepted as its
+        own ancestor. The section it sits in is reported only as a count of context records, and no legal validity is
+        determined.
+        """
+        record = self._malformed_record(parsed, "both", None)
+        unresolved = {"scope": None, "requested": record["requested_precision"], "resolved": False, "achieved": None,
+                      "reason": record["reason"], "note": record["note"]}
+        return {"citation": citation, "requested_citation": parsed["requested"], "canonical_citation": None,
+                "as_of": self.as_of, "requested_precision": record["requested_precision"], "requested_path": None,
+                "baseline": None, "section_context": None, "instruments": [],
+                "current_precision": {**unresolved, "scope": "current"}, "future_precision": {**unresolved, "scope": "future"},
+                "evidence_status": "unavailable",
+                "unavailable": {"reason": record["reason"], "legal_validity": "not_determined", "note": record["note"],
+                                "diagnostics": record["diagnostics"], "context_available": record["context_available"]},
+                "legal_validity": "not_determined", "unresolved_candidates": [], "applicability_status": "not_assessed",
+                "notes": ["The request has an unread designator suffix, so no ancestor path was accepted and no baseline or "
+                          "instrument is reported for it. Ask for the complete citation."]}
+
     def delta(self, citation):
         """Current baseline versus each acquired future instrument for one section or part.
 
@@ -605,12 +707,15 @@ class Index:
         one future rulebook, and a final rule whose effective date predates the baseline issue date may already
         be reflected in the baseline text.
         """
-        m = CITE.search(citation)
-        if not m:
+        cites = parse_query_citations(citation)
+        if not cites:
             raise ValueError(f"cannot parse citation: {citation}")
-        title, part, minor, paras = m.groups()
+        parsed = cites[0]
+        if parsed["malformed"]:
+            return self._malformed_delta(citation, parsed)
+        title, part, minor, paras = parsed["title"], parsed["part"], parsed["minor"], parsed["paras"]
         section = f"{part}.{minor}" if minor else None
-        wanted = "".join(re.findall(r"\([A-Za-z0-9]+\)", paras or ""))  # requested paragraph path, e.g. "(c)(1)"
+        wanted = paras  # normalized requested paragraph path, e.g. "(c)(1)"; whitespace inside designators already closed
         match_via, range_info = None, None
         if section:
             cb = self.current_baseline(title, part, section, None)  # the same lookup resolve_citations uses
@@ -757,7 +862,8 @@ class Index:
             unavailable = {"reason": reason, "legal_validity": "not_determined",
                            "note": CITATION_REASONS[reason] + " This reports unavailable evidence only; it is not a "
                                    "determination that the citation is invalid or does not exist."}
-        return {"citation": citation, "as_of": self.as_of, "requested_precision": precision, "requested_path": wanted or None,
+        return {"citation": citation, "requested_citation": parsed["requested"], "canonical_citation": parsed["canonical"],
+                "as_of": self.as_of, "requested_precision": precision, "requested_path": wanted or None,
                 "baseline": baseline, "section_context": section_context, "instruments": instruments,
                 "current_precision": current_precision, "future_precision": future_precision,
                 "evidence_status": evidence_status, "unavailable": unavailable, "legal_validity": "not_determined",
