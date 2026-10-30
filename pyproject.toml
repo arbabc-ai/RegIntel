@@ -22,4 +22,7 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
-packages = ["src", "scripts", "eval"]
+packages = ["src", "scripts", "eval", "regintel_p1"]
+
+[tool.setuptools.package-data]
+regintel_p1 = ["topics.json"]

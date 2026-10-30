@@ -1,0 +1,202 @@
+"""Evaluation harness: retrieval hit rates per retriever, deterministic delta checks and status/refusal checks.
+
+A retrieved provision is a hit when it matches any gold matcher:
+  {"doc_key", "locator"}     the provision with that locator, or any provision beneath it
+  {"doc_key", "section_no"}  any provision in that section
+  {"doc_key"[, "kind", "section_no"]}  any provision in that document
+Gold matchers are validated against the index first; a matcher that matches nothing is reported as invalid
+rather than silently counted as a miss.
+"""
+import json
+from collections import defaultdict
+
+from .search import Index
+
+RETRIEVERS = ("bm25", "topic", "hybrid")
+CUTOFFS = (1, 3, 5, 10)
+
+
+def matches(row, gold):
+    if row["doc_key"] != gold["doc_key"]:
+        return False
+    if "locator" in gold:
+        return row["locator"] == gold["locator"] or row["locator"].startswith(gold["locator"] + "(")
+    if "kind" in gold and row["kind"] != gold["kind"]:
+        return False
+    if "section_no" in gold and row["section_no"] != gold["section_no"]:
+        return False
+    return True
+
+
+def provision_rows(index, ids):
+    if not ids:
+        return {}
+    q = f"""SELECT p.id, p.locator, p.kind, p.section_no, p.part_no, p.title_no, d.doc_key
+            FROM provision p JOIN source_document d ON d.id=p.doc_id WHERE p.id IN ({','.join('?' * len(ids))})"""
+    return {r["id"]: r for r in index.conn.execute(q, list(ids))}
+
+
+def gold_valid(index, golds):
+    bad = []
+    for g in golds:
+        rows = index.conn.execute(
+            "SELECT p.locator, p.kind, p.section_no, d.doc_key FROM provision p JOIN source_document d ON d.id=p.doc_id "
+            "WHERE d.doc_key=?", (g["doc_key"],)).fetchall()
+        if not any(matches(r, g) for r in rows):
+            bad.append(g)
+    return bad
+
+
+def run_retrieval(index, items, k=10):
+    per_item, agg = [], {r: defaultdict(lambda: defaultdict(list)) for r in RETRIEVERS}
+    for item in items:
+        invalid = gold_valid(index, item["gold"])
+        record = {"id": item["id"], "category": item["category"], "query": item["query"], "invalid_gold": invalid,
+                  "retrievers": {}}
+        for name in RETRIEVERS:
+            ranked = index.retrieve(item["query"], name, k, item.get("scope", "both"), item.get("parts"))
+            rows = provision_rows(index, [pid for pid, _ in ranked])
+            first = None
+            for rank, (pid, _) in enumerate(ranked, 1):
+                if any(matches(rows[pid], g) for g in item["gold"]):
+                    first = rank
+                    break
+            top = [{"rank": i, "doc_key": rows[pid]["doc_key"], "locator": rows[pid]["locator"]}
+                   for i, (pid, _) in enumerate(ranked[:5], 1)]
+            extra = {}
+            if item.get("all_results_in_parts"):
+                allowed = {tuple(p.split(":")) for p in item["all_results_in_parts"]}
+                extra["filter_respected"] = all((rows[pid]["title_no"], rows[pid]["part_no"]) in allowed for pid, _ in ranked)
+            record["retrievers"][name] = {"first_hit_rank": first, "returned": len(ranked), "top5": top, **extra}
+            for cat in (item["category"], "ALL"):
+                a = agg[name][cat]
+                a["rr"].append(1.0 / first if first else 0.0)
+                for c in CUTOFFS:
+                    a[f"hit@{c}"].append(1.0 if first and first <= c else 0.0)
+        per_item.append(record)
+    summary = {}
+    for name in RETRIEVERS:
+        summary[name] = {}
+        for cat, a in agg[name].items():
+            n = len(a["rr"])
+            summary[name][cat] = {"n": n, "mrr": round(sum(a["rr"]) / n, 3),
+                                  **{f"hit@{c}": round(sum(a[f"hit@{c}"]) / n, 3) for c in CUTOFFS}}
+    return per_item, summary
+
+
+def check_delta(index, item):
+    ix = index if "as_of" not in item else Index(index.db_path, item["as_of"])
+    out = ix.delta(item["citation"])
+    exp, failures = item["expect"], []
+    got = {g["doc_key"]: g for g in out["instruments"]}
+    if "baseline_doc" in exp and (not out["baseline"] or out["baseline"]["doc_key"] != exp["baseline_doc"]):
+        failures.append(f"baseline doc {out['baseline'] and out['baseline']['doc_key']} != {exp['baseline_doc']}")
+    for key, want in exp.get("instruments", {}).items():
+        g = got.get(key)
+        if not g:
+            failures.append(f"missing instrument {key}")
+            continue
+        if "state" in want and g["status"]["state"] != want["state"]:
+            failures.append(f"{key} state {g['status']['state']} != {want['state']}")
+        if "baseline_relation" in want and g["baseline_relation"] != want["baseline_relation"]:
+            failures.append(f"{key} baseline_relation {g['baseline_relation']} != {want['baseline_relation']}")
+    if "min_instruments" in exp and len(got) < exp["min_instruments"]:
+        failures.append(f"only {len(got)} instruments < {exp['min_instruments']}")
+    if "max_instruments" in exp and len(got) > exp["max_instruments"]:
+        failures.append(f"{len(got)} instruments > {exp['max_instruments']}: {sorted(got)}")
+    if exp.get("no_proposal_labelled_final_or_effective"):
+        for g in got.values():
+            if g["document_type"] == "Proposed Rule" and g["status"]["state"].startswith(("final", "current")):
+                failures.append(f"proposal {g['doc_key']} labelled {g['status']['state']}")
+    if "baseline_contains" in exp:
+        b = exp["baseline_contains"]
+        row = index.conn.execute("SELECT p.text FROM provision p JOIN source_document d ON d.id=p.doc_id "
+                                 "WHERE d.doc_key=? AND p.locator=?", (b["doc_key"], b["locator"])).fetchone()
+        if not row or b["text"] not in row[0]:
+            failures.append(f"baseline {b['locator']} lacks '{b['text']}'")
+    if "instruction_contains" in exp:
+        b = exp["instruction_contains"]
+        g = got.get(b["doc_key"])
+        if not g or not any(b["text"] in (u["instruction"] or "") for u in g["units"]):
+            failures.append(f"instruction of {b['doc_key']} lacks '{b['text']}'")
+    return {"id": item["id"], "citation": item["citation"], "as_of": ix.as_of, "passed": not failures,
+            "failures": failures, "instruments_found": sorted(got)}
+
+
+def check_status(index, item):
+    exp = item["expect"]
+    out = index.answer(item["query"], mode="hybrid", scope=item.get("scope", "both"), k=10)
+    failures = []
+    if out["status"] != exp["status"]:
+        failures.append(f"status {out['status']} != {exp['status']}")
+    if "gap_topic" in exp and exp["gap_topic"] not in [g["topic"] for g in out["coverage_gaps"]]:
+        failures.append(f"coverage gap {exp['gap_topic']} not reported")
+    if "applicability_status" in exp and out["applicability_status"] != exp["applicability_status"]:
+        failures.append(f"applicability_status {out['applicability_status']}")
+    failures += invariant_failures(out, item.get("scope", "both"))
+    if exp["status"] == "missing_evidence" and out["results"]:
+        failures.append("returned results despite missing_evidence")
+    if "no_proposal_state_prefix_in" in exp:
+        for r in out["results"]:
+            if r["status"].get("document_type") == "Proposed Rule" and r["status"]["state"].startswith(
+                    tuple(exp["no_proposal_state_prefix_in"])):
+                failures.append(f"proposal labelled {r['status']['state']}")
+    return {"id": item["id"], "query": item["query"], "passed": not failures, "failures": failures,
+            "status": out["status"], "results": len(out["results"])}
+
+
+def invariant_failures(out, scope):
+    """Universal safety invariants applied to every answer bundle."""
+    failures = []
+    if out["applicability_status"] != "not_assessed":
+        failures.append("answer claimed an applicability status")
+    for r in out["results"]:
+        state = r["status"]["state"]
+        if scope == "current" and not state.startswith("current_baseline"):
+            failures.append(f"{r['citation']} has state {state} in current scope")
+        if scope == "future" and state.startswith("current"):
+            failures.append(f"{r['citation']} has current state in future scope")
+        if r["status"].get("document_type") == "Proposed Rule" and state.startswith(("final", "current")):
+            failures.append(f"proposal {r['citation']} labelled {state}")
+    return failures
+
+
+def run(index, questions_path):
+    spec = json.loads(open(questions_path).read())
+    per_item, summary = run_retrieval(index, spec["retrieval"])
+    deltas = [check_delta(index, d) for d in spec["delta"]]
+    statuses = [check_status(index, s) for s in spec["status"]]
+    filters = [(r["id"], r["retrievers"][n]["filter_respected"], n) for r in per_item for n in RETRIEVERS
+               if "filter_respected" in r["retrievers"][n]]
+    return {"questions_version": spec["version"], "as_of": index.as_of, "index": index.meta,
+            "retrieval_summary": summary, "retrieval_items": per_item, "delta": deltas, "status": statuses,
+            "filter_checks": [{"id": i, "retriever": n, "respected": ok} for i, ok, n in filters]}
+
+
+def render(report):
+    lines = [f"As of {report['as_of']}; index built {report['index'].get('built_at')}", ""]
+    lines.append("Retrieval (hit@k = first gold hit within top k; MRR over first-hit rank)")
+    lines.append(f"{'retriever':8} {'category':14} {'n':>3} {'hit@1':>6} {'hit@3':>6} {'hit@5':>6} {'hit@10':>7} {'MRR':>6}")
+    for name, cats in report["retrieval_summary"].items():
+        for cat, m in sorted(cats.items(), key=lambda kv: (kv[0] != "ALL", kv[0])):
+            lines.append(f"{name:8} {cat:14} {m['n']:>3} {m['hit@1']:>6} {m['hit@3']:>6} {m['hit@5']:>6} {m['hit@10']:>7} {m['mrr']:>6}")
+        lines.append("")
+    bad = [i for i in report["retrieval_items"] if i["invalid_gold"]]
+    lines.append(f"Invalid gold matchers: {len(bad)}")
+    for i in bad:
+        lines.append(f"  {i['id']}: {i['invalid_gold']}")
+    lines.append("")
+    lines.append("Misses by retriever (id: first-hit rank, '-' = no hit in top 10)")
+    for name in RETRIEVERS:
+        miss = [f"{i['id']}:{i['retrievers'][name]['first_hit_rank'] or '-'}" for i in report["retrieval_items"]
+                if not i["retrievers"][name]["first_hit_rank"] or i["retrievers"][name]["first_hit_rank"] > 3]
+        lines.append(f"  {name}: {', '.join(miss) or 'none'}")
+    lines.append("")
+    lines.append("Delta checks")
+    for d in report["delta"]:
+        lines.append(f"  {d['id']} {'PASS' if d['passed'] else 'FAIL'} {d['citation']} as_of={d['as_of']} {'; '.join(d['failures'])}")
+    lines.append("Status / refusal checks")
+    for s in report["status"]:
+        lines.append(f"  {s['id']} {'PASS' if s['passed'] else 'FAIL'} status={s['status']} results={s['results']} {'; '.join(s['failures'])}")
+    lines.append("Filter checks: " + ", ".join(f"{c['id']}/{c['retriever']}={'ok' if c['respected'] else 'VIOLATED'}" for c in report["filter_checks"]))
+    return "\n".join(lines)
