@@ -734,6 +734,79 @@ def check_query_citations(index, item):
     return {"id": item["id"], "requested": q, "kind": kind, "passed": not failures, "failures": failures[:10]}
 
 
+def check_suffix_integrity(index, item):
+    """Length-independent suffix guard on the acquired corpus. `unclosed`: an unclosed numeric suffix of every listed length
+    (with and without whitespace) is an explicit unresolved citation, never its ancestor, never evidence_found, with a
+    citation gap, in resolver, exact/hybrid answers and delta. `complete`: a closed designator of the same lengths keeps
+    its full path. `instruction`: an instruction whose designator is unclosed names no path. `control`: the ancestor itself,
+    asked for plainly, is still evidence."""
+    from .fedreg import named_paragraph_paths
+    failures, kind = [], item["kind"]
+    scopes = ("current", "future", "both")
+    if kind == "unclosed":
+        for n in item["lengths"]:
+            for template in item["templates"]:
+                q = template.replace("{N}", "9" * n)
+                label = parse_query_citations(q)[0]["label"]
+                c = parse_query_citations(q)[0]
+                if c["malformed"] != "unclosed_or_malformed_designator_suffix" or c["diagnostics"]["accepted_valid_prefix"]:
+                    failures.append(f"len{n} '{q}': not read as an unclosed suffix")
+                    continue
+                for scope in scopes:
+                    r = [x for x in index.resolve_citations(q, scope) if x["citation"] == label]
+                    if not r or r[0]["resolved"] or r[0]["canonical"] == item["ancestor"] or r[0]["_current_ids"] or r[0]["_future_ids"]:
+                        failures.append(f"len{n} {scope}: '{q}' resolved or established its ancestor")
+                    if index.exact(q, 50, scope):
+                        failures.append(f"len{n} {scope}: exact returned records for '{q}'")
+                for mode in ("exact", "hybrid"):
+                    for scope in scopes:
+                        for parts in (None, ["12:3"], ["12:999"]):
+                            for k in (10, 1):
+                                out = index.answer(q, mode=mode, scope=scope, parts=parts, k=k)
+                                tag = f"len{n} {mode}/{scope}/{parts or 'nofilter'}/k{k}"
+                                if out["status"] == "evidence_found":
+                                    failures.append(f"{tag}: evidence_found")
+                                if f"citation:{label}" not in {g["topic"] for g in out["coverage_gaps"]}:
+                                    failures.append(f"{tag}: no citation gap")
+                                failures += [f"{tag}: {f}" for f in invariant_failures(out, scope)]
+                d = index.delta(label)
+                if d["evidence_status"] != "unavailable" or d["baseline"] or d["instruments"]:
+                    failures.append(f"len{n}: delta of '{q}' is not explicit unavailable evidence")
+    elif kind == "complete":
+        for n in item["lengths"]:
+            for template in item["templates"]:
+                q = template.replace("{N}", "9" * n)
+                c = parse_query_citations(q)[0]
+                want = item["canonical"].replace("{N}", "9" * n)
+                if c["malformed"] or c["canonical"] != want or c["requested"] != q:
+                    failures.append(f"len{n} '{q}': full path not retained ({c['canonical']})")
+                for scope in scopes:
+                    r = index.resolve_citations(q, scope)[0]
+                    if r["canonical"] != want or (r["resolved"] and scope == "current"):
+                        failures.append(f"len{n} {scope}: '{q}' collapsed or resolved through its ancestor")
+                if index.exact(q, 50, "current"):
+                    failures.append(f"len{n}: current exact returned records for a missing paragraph")
+                dd = index.delta(q)
+                if dd["baseline"] is not None or dd["requested_path"] != item["requested_path"].replace("{N}", "9" * n):
+                    failures.append(f"len{n}: delta lost the complete path")
+    elif kind == "instruction":
+        for n in item["lengths"]:
+            for template in item["templates"]:
+                if named_paragraph_paths(template.replace("{N}", "9" * n)):
+                    failures.append(f"len{n}: an unclosed instruction designator named a path")
+        for text, want in item.get("closed", []):
+            if named_paragraph_paths(text) != want:
+                failures.append(f"closed instruction '{text}' != {want}")
+    elif kind == "control":
+        q = item["requested"]
+        for mode in ("exact", "hybrid"):
+            if index.answer(q, mode=mode, scope="future", k=10)["status"] != "evidence_found":
+                failures.append(f"control {q} {mode} is not evidence_found")
+        if parse_query_citations(item["parenthetical"])[0]["malformed"]:
+            failures.append("an ordinary explanatory parenthetical became a malformed designator suffix")
+    return {"id": item["id"], "kind": kind, "passed": not failures, "failures": failures[:10]}
+
+
 def run_regressions(index, path):
     spec = json.loads(Path(path).read_text())
     out = {"version": spec["version"], "task": spec["task"],
@@ -748,7 +821,8 @@ def run_regressions(index, path):
            "current_agreement": [check_current_agreement(index, x) for x in spec.get("current_agreement", [])],
            "amendatory_lists": [check_amendatory_lists(index, x) for x in spec.get("amendatory_lists", [])],
            "designator_integrity": [check_designator_integrity(index, x) for x in spec.get("designator_integrity", [])],
-           "query_citations": [check_query_citations(index, x) for x in spec.get("query_citations", [])]}
+           "query_citations": [check_query_citations(index, x) for x in spec.get("query_citations", [])],
+           "suffix_integrity": [check_suffix_integrity(index, x) for x in spec.get("suffix_integrity", [])]}
     out["passed"] = (all(d["passed"] for d in out["delta"]) and out["relationship_integrity"]["passed"]
                      and all(c["passed"] for c in out["citation_scope"]) and all(x["passed"] for x in out["status"])
                      and all(x["passed"] for x in out["citation_completeness"])
@@ -758,12 +832,13 @@ def run_regressions(index, path):
                      and all(x["passed"] for x in out["current_agreement"])
                      and all(x["passed"] for x in out["amendatory_lists"])
                      and all(x["passed"] for x in out["designator_integrity"])
-                     and all(x["passed"] for x in out["query_citations"]))
+                     and all(x["passed"] for x in out["query_citations"])
+                     and all(x["passed"] for x in out["suffix_integrity"]))
     return out
 
 
 REGRESSION_GROUPS = ("delta", "relationship_integrity", "citation_scope", "status", "citation_completeness",
-                     "mixed_source", "delta_precision", "instruction_boundary", "current_agreement", "amendatory_lists", "designator_integrity", "query_citations")
+                     "mixed_source", "delta_precision", "instruction_boundary", "current_agreement", "amendatory_lists", "designator_integrity", "query_citations", "suffix_integrity")
 
 
 def overall(report):
@@ -846,6 +921,8 @@ def render(report):
         lines.append(f"  {ri['id']} {'PASS' if ri['passed'] else 'FAIL'} relationship integrity violations={ri['violations']} {'; '.join(ri['failures'])}")
         for c in reg["citation_scope"]:
             lines.append(f"  {c['id']} {'PASS' if c['passed'] else 'FAIL'} citation scope '{c['query']}' {'; '.join(c['failures'])}")
+        for x in reg.get("suffix_integrity", []):
+            lines.append(f"  {x['id']} {'PASS' if x['passed'] else 'FAIL'} suffix integrity [{x['kind']}] {'; '.join(x['failures'])}")
         for x in reg.get("query_citations", []):
             lines.append(f"  {x['id']} {'PASS' if x['passed'] else 'FAIL'} query citation [{x['kind']}] '{x['requested']}' {'; '.join(x['failures'])}")
         for x in reg.get("designator_integrity", []):

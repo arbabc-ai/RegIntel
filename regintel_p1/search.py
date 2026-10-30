@@ -11,7 +11,7 @@ from pathlib import Path
 from collections import defaultdict
 from itertools import zip_longest
 
-from .fedreg import designator_classes
+from .fedreg import paren_suffix
 
 STOP = set("""a an and are as at be by can do does for from has have how if in into is it its of on or that the their
 there this to under what when where which who whom why will with within would must should shall may not any all
@@ -19,9 +19,6 @@ bank banks institution institutions requirement requirements rule rules regulati
 # One parser serves citation_only, resolve_citations (and so exact/hybrid retrieval and answer) and delta. The earlier
 # head-plus-paragraphs pattern was removed: it stopped at whitespace inside a designator and so accepted an ancestor prefix.
 CITE_HEAD = re.compile(r"(?:(\d+)\s*CFR\s*(?:Part\s*)?|\u00a7+\s*)(\d+)(?:\.(\d+[A-Za-z]?))?", re.I)
-DESIGNATOR_TOKEN = re.compile(r"\(\s*([A-Za-z0-9]{1,8})\s*\)")
-UNREAD_FRAGMENT = re.compile(r"(\s*)\(\s*([A-Za-z0-9]{1,6})(\s*\)|(?![A-Za-z0-9]))")
-TRAILING_OPEN = re.compile(r"\s*\(\s*$")  # a lone "(" at the very end of the request: an unclosed designator
 
 
 def parse_query_citations(query):
@@ -40,25 +37,22 @@ def parse_query_citations(query):
         section = f"{part}.{minor}" if minor else None
         if not section and not title:
             continue  # a bare '§ 12' is not a citation
-        pos, designators = m.end(), []
+        pos, designators, suffix = m.end(), [], None
         while section:
-            t = DESIGNATOR_TOKEN.match(query, pos)
-            if not t:
-                break
-            designators.append(t.group(1))
-            pos = t.end()
-        fragment = UNREAD_FRAGMENT.match(query, pos) if section else None
-        if fragment and not designator_classes(fragment.group(2)):
-            fragment = None
-        open_tail = TRAILING_OPEN.match(query, pos) if (section and not fragment) else None
-        end = fragment.end() if fragment else (open_tail.end() if open_tail else pos)
+            found = paren_suffix(query, pos)
+            if found and found[0] == "complete":
+                designators.append(found[1])
+                pos = found[2]
+                continue
+            suffix = found if found and found[0] == "incomplete" else None
+            break
+        end = suffix[2] if suffix else pos
         paras = "".join(f"({d})" for d in designators)
         canonical = (f"{title} CFR " if title else "\u00a7 ") + (f"{section}{paras}" if section else f"Part {part}")
         requested = query[m.start():end]
         malformed = diagnostics = None
-        if fragment or open_tail:
-            closed = bool(fragment) and fragment.group(3).strip() == ")"
-            malformed = "detached_designator_suffix" if (closed and fragment.group(1)) else "unclosed_or_malformed_designator_suffix"
+        if suffix:
+            malformed = suffix[1]
             diagnostics = {"requested": " ".join(requested.split()), "accepted_valid_prefix": False,
                            "valid_prefix": f"{section}{paras}", "unread_suffix": query[pos:end].strip()}
         out.append({"title": title, "part": part, "minor": minor, "section": section, "paras": paras,

@@ -154,27 +154,62 @@ def expand_shorthand(previous, designator):
     return None
 
 
-DESIGNATOR_SPACES = re.compile(r"\(\s*([A-Za-z0-9]{1,8})\s*\)")
-FRAGMENT_AFTER = re.compile(r"\s*\(\s*([A-Za-z0-9]{1,6})(?:\s*\)|(?![A-Za-z0-9]))")
+# No length limit appears below: a designator candidate is read by its shape, never by how many characters it has, so a
+# suffix of 7, 9 or 20 digits is handled exactly like one of 3.
+DESIGNATOR_SPACES = re.compile(r"\(\s*([A-Za-z0-9]+)\s*\)")
+_COMPLETE = re.compile(r"\(\s*([A-Za-z0-9]+)\s*\)")
+_OPENER = re.compile(r"(\s*)\(\s*([A-Za-z0-9]+)?")
+_CLOSE = re.compile(r"\s*\)")
 
 
 def parsing_view(text):
     """A normalized copy of instruction text used only for pattern matching.
 
     Whitespace inside a designator (`( 1 )`, `( xiii )`, from newlines or tabs around inline XML emphasis) is removed so
-    the designator is read whole. The stored instruction, the source bytes and their hashes are never altered.
+    the designator is read whole, whatever its length. The stored instruction, the source bytes and their hashes are
+    never altered.
     """
     return DESIGNATOR_SPACES.sub(r"(\1)", text)
 
 
-def incomplete_after(view, position):
-    """True when a designator-like fragment follows a path (`(C)(1` unclosed, or `(C) (1)` set apart by whitespace).
+def paren_suffix(text, position):
+    """What a path is followed by at `position`: the one rule shared by instruction and query parsing.
 
-    A path followed by such a fragment is a valid prefix of something that was not read to its end, so it is not
-    accepted as an explicitly named parent: the sequence is incomplete or ambiguous and stays unresolved.
+    Returns ("complete", token, end) for a designator written directly after the path (any length, whitespace inside
+    the parentheses allowed); ("incomplete", reason, end) when an unread designator candidate follows, so the path read
+    so far is a valid prefix of something not read to its end; or None when nothing follows or the parenthetical is
+    ordinary explanation. Reasons: `unclosed_or_malformed_designator_suffix` (an opening parenthesis directly after the
+    path that is not a complete designator, of any length or character class, or a designator-shaped token set apart by
+    whitespace that is not closed) and `detached_designator_suffix` (a complete designator-shaped token set apart by
+    whitespace, which is ambiguous). A parenthetical set apart by whitespace whose first word is not designator-shaped
+    (`(introductory text)`, `(see below)`) is ordinary.
     """
-    m = FRAGMENT_AFTER.match(view, position)
-    return bool(m and designator_classes(m.group(1)))
+    m = _COMPLETE.match(text, position)
+    if m:
+        return ("complete", m.group(1), m.end())
+    o = _OPENER.match(text, position)
+    if not o:
+        return None
+    gap, token = o.group(1), o.group(2)
+    if token is None:  # a bare "(": unclosed only when nothing but whitespace follows
+        return ("incomplete", "unclosed_or_malformed_designator_suffix", o.end()) if not text[o.end():].strip() else None
+    close = _CLOSE.match(text, o.end())
+    closed = bool(close)
+    if not gap:  # directly after the path and not a complete designator
+        if designator_classes(token) or ")" not in text[o.end():]:
+            # designator-shaped (`(x y)`, `(1 and`) or never closed at all: unread, whatever its length
+            return ("incomplete", "unclosed_or_malformed_designator_suffix", o.end())
+        return None  # a closed multi-word parenthetical such as `(introductory text)` is ordinary explanation
+    if not designator_classes(token):
+        return None  # ordinary explanation
+    return ("incomplete", "detached_designator_suffix" if closed else "unclosed_or_malformed_designator_suffix",
+            close.end() if closed else o.end())
+
+
+def incomplete_after(view, position):
+    """True when an unread designator candidate follows a path, so the path is never accepted as a named parent."""
+    r = paren_suffix(view, position)
+    return bool(r and r[0] == "incomplete")
 
 
 def named_paragraph_paths(text):

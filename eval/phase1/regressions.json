@@ -1,6 +1,6 @@
 {
- "version": "p1-regress-0.12",
- "task": "S7-P1-EVIDENCE-BOUNDARIES-01 + S7-P1-EVIDENCE-COMPLETENESS-02 + S7-P1-COVERAGE-GUARDS-03 + S7-P1-CITATION-COMPLETENESS-04 + S7-P1-FUTURE-PARAGRAPH-PRECISION-05 + S7-P1-MIXED-SOURCE-COVERAGE-06 + S7-P1-DELTA-PRECISION-07 + S7-P1-INSTRUCTION-BOUNDARY-08 + S7-P1-RESERVED-RANGE-CONSISTENCY-09 + S7-P1-AMENDATORY-LIST-PRECISION-11 + S7-P1-DESIGNATOR-TOKEN-INTEGRITY-12 + S7-P1-QUERY-CITATION-INTEGRITY-13",
+ "version": "p1-regress-0.13",
+ "task": "S7-P1-EVIDENCE-BOUNDARIES-01 + S7-P1-EVIDENCE-COMPLETENESS-02 + S7-P1-COVERAGE-GUARDS-03 + S7-P1-CITATION-COMPLETENESS-04 + S7-P1-FUTURE-PARAGRAPH-PRECISION-05 + S7-P1-MIXED-SOURCE-COVERAGE-06 + S7-P1-DELTA-PRECISION-07 + S7-P1-INSTRUCTION-BOUNDARY-08 + S7-P1-RESERVED-RANGE-CONSISTENCY-09 + S7-P1-AMENDATORY-LIST-PRECISION-11 + S7-P1-DESIGNATOR-TOKEN-INTEGRITY-12 + S7-P1-QUERY-CITATION-INTEGRITY-13 + S7-P1-SUFFIX-INTEGRITY-14",
  "note": "Deterministic regression checks over the acquired corpus for amendment-target integrity and retrieval scope filtering. Kept separate from questions.json so the 37-item baseline stays frozen. A pass means the contract holds, not that any rule applies to a bank.",
  "delta": [
   {
@@ -226,7 +226,8 @@
   "v0.9 (RESERVED-RANGE-CONSISTENCY-09, F1): current_agreement CA01-CA07 explicitly require delta() and the current-citation resolver to agree for section citations, including 12 CFR 3.5 and 217.5 inside acquired range sections; DP08's paragraph-only agreement check is unchanged and no longer the only guard. Earlier checks unchanged.",
   "v0.10 (AMENDATORY-LIST-PRECISION-11, F1/F2): amendatory_lists AL01-AL04 pin the literal expected paragraph paths for 2026-05960 § 3.1 and 2026-15774 § 239.40 (no fabricated (c)(4)(e), (b)(c) etc.), the three explicit targets of the 2026-06947 Oxford-comma instruction, and the unchanged 2026-08298 § 3.12 control. Earlier checks unchanged.",
   "v0.11 (DESIGNATOR-TOKEN-INTEGRITY-12, F1): designator_integrity DI01 pins 2026-11044 § 337.6 instruction 4: complete paths (a)(5)(iii)(C)(1) and (a)(5)(v)(I)(1)(xiii) are named, the truncated ancestors (a)(5)(iii)(C) and (a)(5)(v)(I) are not, the stored instruction keeps its spaces, and each is checked through resolver, delta and answers. Earlier checks unchanged.",
-  "v0.12 (QUERY-CITATION-INTEGRITY-13, F1): query_citations QC01-QC06: a spaced designator resolves identically to the canonical citation (both supporting future instruments), a complete missing path keeps every designator, and unclosed/detached suffixes are explicit unresolved citations that never accept their valid prefix. Earlier checks unchanged."
+  "v0.12 (QUERY-CITATION-INTEGRITY-13, F1): query_citations QC01-QC06: a spaced designator resolves identically to the canonical citation (both supporting future instruments), a complete missing path keeps every designator, and unclosed/detached suffixes are explicit unresolved citations that never accept their valid prefix. Earlier checks unchanged.",
+  "v0.13 (SUFFIX-INTEGRITY-14, F1): suffix_integrity SI01-SI05: an unclosed numeric suffix of length 6, 7, 8, 9 or 20 (with and without whitespace) is an explicit unresolved citation that never establishes its ancestor, never reaches evidence_found and carries a citation gap through resolver, exact/hybrid answers and delta; a closed designator of the same lengths keeps its full path; an unclosed instruction designator names no path; the plain ancestor and an explanatory parenthetical are controls. Earlier checks unchanged."
  ],
  "status": [
   {
@@ -914,6 +915,87 @@
    "kind": "control",
    "requested": "12 CFR 3.12(c)(1)",
    "note": "canonical control"
+  }
+ ],
+ "suffix_integrity": [
+  {
+   "id": "SI01",
+   "kind": "unclosed",
+   "lengths": [
+    6,
+    7,
+    8,
+    9,
+    20
+   ],
+   "templates": [
+    "CET1 12 CFR 3.22(a)({N}",
+    "12 CFR 3.22(a)( {N}",
+    "12 CFR 3.22(a)(  {N}  "
+   ],
+   "ancestor": "12 CFR 3.22(a)"
+  },
+  {
+   "id": "SI02",
+   "kind": "unclosed",
+   "lengths": [
+    6,
+    7,
+    8,
+    9,
+    20
+   ],
+   "templates": [
+    "12 CFR 3.12(c)({N}"
+   ],
+   "ancestor": "12 CFR 3.12(c)",
+   "note": "a second ancestor, with a plain independent control in SI05"
+  },
+  {
+   "id": "SI03",
+   "kind": "complete",
+   "lengths": [
+    6,
+    7,
+    8,
+    9,
+    20
+   ],
+   "templates": [
+    "12 CFR 3.22(a)({N})",
+    "12 CFR 3.22(a)( {N} )"
+   ],
+   "canonical": "12 CFR 3.22(a)({N})",
+   "requested_path": "(a)({N})"
+  },
+  {
+   "id": "SI04",
+   "kind": "instruction",
+   "lengths": [
+    6,
+    7,
+    8,
+    9,
+    20
+   ],
+   "templates": [
+    "Amend § 3.22 by revising paragraph (a)({N} to read as follows:",
+    "Amend § 3.22 by revising paragraph (a)( {N} to read as follows:"
+   ],
+   "closed": [
+    [
+     "Amend § 3.22 by revising paragraph (a)(9999999) to read as follows:",
+     [
+      "(a)(9999999)"
+     ]
+    ]
+   ]
+  },
+  {
+   "id": "SI05",
+   "kind": "control",
+   "requested": "12 CFR 3.12(c)(1)",
+   "parenthetical": "12 CFR 3.12(c)(1) (introductory text)"
   }
  ]
 }
