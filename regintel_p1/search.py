@@ -11,7 +11,7 @@ from pathlib import Path
 from collections import defaultdict
 from itertools import zip_longest
 
-from .fedreg import paren_suffix
+from .fedreg import DEPTH_CLASS, designator_classes, expand_shorthand, paren_suffix
 
 STOP = set("""a an and are as at be by can do does for from has have how if in into is it its of on or that the their
 there this to under what when where which who whom why will with within would must should shall may not any all
@@ -19,6 +19,100 @@ bank banks institution institutions requirement requirements rule rules regulati
 # One parser serves citation_only, resolve_citations (and so exact/hybrid retrieval and answer) and delta. The earlier
 # head-plus-paragraphs pattern was removed: it stopped at whitespace inside a designator and so accepted an ancestor prefix.
 CITE_HEAD = re.compile(r"(?:(\d+)\s*CFR\s*(?:Part\s*)?|\u00a7+\s*)(\d+)(?:\.(\d+[A-Za-z]?))?", re.I)
+
+
+LIST_SEP = re.compile(r"(?:\s*[,;]\s*(?:(?:and|or)\s+)?|\s+(?:and|or)\s+)", re.I)
+SECTION_MEMBER = re.compile(r"(?<![\w.])(\d+)\.(\d+[A-Za-z]?)(?![A-Za-z0-9])(?!\s*(?:%|percent\b))", re.I)
+BARE_DESIGNATOR = re.compile(r"\(\s*([A-Za-z0-9]+)\s*\)")
+BARE_OPENER = re.compile(r"\(\s*([A-Za-z0-9]+)")
+
+
+def _read_designators(query, pos):
+    """Complete designators written one after another from `pos`, and the unread suffix (if any) that stops them."""
+    designators, suffix = [], None
+    while True:
+        found = paren_suffix(query, pos)
+        if found and found[0] == "complete":
+            designators.append(found[1])
+            pos = found[2]
+            continue
+        suffix = found if found and found[0] == "incomplete" else None
+        return designators, pos, suffix
+
+
+def _citation_record(title, part, minor, designators, pos, suffix, query, start, inherited=None):
+    section = f"{part}.{minor}" if minor else None
+    end = suffix[2] if suffix else pos
+    paras = "".join(f"({d})" for d in designators)
+    canonical = (f"{title} CFR " if title else "\u00a7 ") + (f"{section}{paras}" if section else f"Part {part}")
+    requested = query[start:end]
+    malformed = diagnostics = None
+    if suffix:
+        malformed = suffix[1]
+        diagnostics = {"requested": " ".join(requested.split()), "accepted_valid_prefix": False,
+                       "valid_prefix": f"{section}{paras}", "unread_suffix": query[pos:end].strip()}
+    return {"title": title, "part": part, "minor": minor, "section": section, "paras": paras, "canonical": canonical,
+            "requested": requested, "label": " ".join(requested.split()) if malformed else canonical,
+            "malformed": malformed, "diagnostics": diagnostics, "inherited": inherited, "designators": list(designators), "_end": end}
+
+
+def _unresolved_expression(reason, expression, start, end, prev, candidates):
+    """A list member that cannot be settled: kept as a structured unresolved expression, never dropped or guessed."""
+    label = f"{' '.join(expression.split())} after {prev['label']}"
+    return {"title": prev["title"], "part": prev["part"], "minor": prev["minor"], "section": prev["section"], "paras": "",
+            "canonical": None, "requested": expression, "label": label, "malformed": reason,
+            "diagnostics": {"requested": " ".join(expression.split()), "accepted_valid_prefix": False,
+                            "valid_prefix": prev["canonical"], "unread_suffix": expression.strip(), "expression": expression.strip(),
+                            "inherits_from": prev["label"], "candidate_paths": candidates},
+            "inherited": {"kind": "paragraph", "from": prev["label"]}, "designators": [], "_end": end, "_unsettled": True}
+
+
+def _read_member(query, pos, prev):
+    """The list member that follows a separator, or None when what follows is not a citation member.
+
+    A bare section (`6.1`) inherits the title of the citation it follows. A bare paragraph designator (`(z)`) inherits
+    the section and, through the CFR hierarchy, the level of the previous member's paragraph path; it is settled only
+    when the hierarchy puts it in one place. Anything else is an unresolved expression with its candidates.
+    """
+    m = SECTION_MEMBER.match(query, pos)
+    if m:
+        designators, p, suffix = _read_designators(query, m.end())
+        rec = _citation_record(prev["title"], m.group(1), m.group(2), designators, p, suffix, query, pos,
+                               {"kind": "section", "from": prev["label"], "title_inherited": prev["title"]})
+        if rec["malformed"] and prev["title"]:
+            rec["label"] = f"{prev['title']} CFR {rec['label']}"
+        return rec
+    if not query.startswith("(", pos):
+        return None
+    c = BARE_DESIGNATOR.match(query, pos)
+    if not c:
+        o = BARE_OPENER.match(query, pos)
+        if not o or not designator_classes(o.group(1)):
+            return None  # not designator-shaped: ordinary parenthetical text, not a list member
+        found = paren_suffix(query, pos)  # an unclosed or malformed bare designator after a list separator
+        end = found[2] if found and found[0] == "incomplete" else o.end()
+        return _unresolved_expression("unclosed_or_malformed_designator_suffix", query[pos:end], pos, end, prev, [])
+    first = c.group(1)
+    designators, p, suffix = _read_designators(query, c.end())
+    end = suffix[2] if suffix else p
+    if prev.get("_unsettled"):  # inherits from something that was itself not settled
+        return _unresolved_expression("ambiguous_shorthand", query[pos:end], pos, end, prev, [])
+    if not prev.get("section") or not prev.get("designators"):
+        return _unresolved_expression("shorthand_without_paragraph_context", query[pos:end], pos, end, prev, [])
+    base = expand_shorthand(prev["designators"], first)
+    if base is None:
+        classes = designator_classes(first)
+        depth = len(prev["designators"])
+        cands = []
+        if DEPTH_CLASS.get(depth, "digit") in classes:
+            cands.append(prev["designators"][:-1] + [first])
+        if "letter" in classes:
+            cands.append([first])
+        return _unresolved_expression("ambiguous_shorthand", query[pos:end], pos, end, prev,
+                                      [f"{prev['section']}" + "".join(f"({d})" for d in x) for x in cands])
+    rec = _citation_record(prev["title"], prev["part"], prev["minor"], base + designators, p, suffix, query, pos,
+                           {"kind": "paragraph", "from": prev["label"], "inherited_path": "".join(f"({d})" for d in base)})
+    return rec
 
 
 def parse_query_citations(query):
@@ -30,35 +124,37 @@ def parse_query_citations(query):
     designator (`3.22(a)(999`) or one set apart by whitespace (`3.1(c)(4) (i)`, `3.22 (a)`) makes the request
     `malformed`, to be reported as an unresolved citation with diagnostics. An ordinary trailing parenthetical
     (`(introductory text)`) does not.
+
+    List members after a comma, semicolon, `and` or `or` are citations too. A bare section (`12 CFR 3.1, 6.1`) inherits
+    the title of the citation before it; a bare paragraph designator (`12 CFR 3.22(a) and (z)`) inherits the section
+    and, by the CFR hierarchy, the paragraph level of the previous member. When the hierarchy does not settle it
+    (`3.1(c)(4)(i) and (v)`), or there is no paragraph to inherit from, the member is a structured unresolved
+    expression (`ambiguous_shorthand`, `shorthand_without_paragraph_context`), never dropped and never merged into
+    the citation before it. Members carry `inherited`; their `requested` is the member text alone.
     """
     out = []
     for m in CITE_HEAD.finditer(query):
         title, part, minor = m.groups()
-        section = f"{part}.{minor}" if minor else None
-        if not section and not title:
-            continue  # a bare '§ 12' is not a citation
-        pos, designators, suffix = m.end(), [], None
-        while section:
-            found = paren_suffix(query, pos)
-            if found and found[0] == "complete":
-                designators.append(found[1])
-                pos = found[2]
-                continue
-            suffix = found if found and found[0] == "incomplete" else None
-            break
-        end = suffix[2] if suffix else pos
-        paras = "".join(f"({d})" for d in designators)
-        canonical = (f"{title} CFR " if title else "\u00a7 ") + (f"{section}{paras}" if section else f"Part {part}")
-        requested = query[m.start():end]
-        malformed = diagnostics = None
-        if suffix:
-            malformed = suffix[1]
-            diagnostics = {"requested": " ".join(requested.split()), "accepted_valid_prefix": False,
-                           "valid_prefix": f"{section}{paras}", "unread_suffix": query[pos:end].strip()}
-        out.append({"title": title, "part": part, "minor": minor, "section": section, "paras": paras,
-                    "canonical": canonical, "requested": requested,
-                    "label": " ".join(requested.split()) if malformed else canonical,
-                    "malformed": malformed, "diagnostics": diagnostics})
+        if not minor and not title:
+            continue  # a bare '\u00a7 12' is not a citation
+        designators, pos, suffix = _read_designators(query, m.end()) if minor else ([], m.end(), None)
+        rec = _citation_record(title, part, minor, designators, pos, suffix, query, m.start())
+        out.append(rec)
+        if rec["malformed"]:
+            continue
+        prev, cursor = rec, rec["_end"]
+        while True:
+            sep = LIST_SEP.match(query, cursor)
+            if not sep:
+                break
+            mem = _read_member(query, sep.end(), prev)
+            if mem is None:
+                break
+            out.append(mem)
+            cursor = mem["_end"]
+            if mem["malformed"] and not mem.get("_unsettled"):
+                break  # an unclosed/malformed tail: nothing after it is read as a member
+            prev = mem
     return out
 
 
@@ -118,6 +214,10 @@ CITATION_REASONS = {
                                       "(section-level records are returned, flagged).",
     "ambiguous_title": "The citation names no CFR title and acquired evidence for this section exists under more than one title; "
                        "the titles' evidence is not merged. Name the title (for example `12 CFR 3.22`) to select one.",
+    "ambiguous_shorthand": "A bare paragraph designator follows a citation but the CFR hierarchy does not settle which paragraph it "
+                           "names; it is reported as an unresolved expression and is not guessed or merged into the citation before it.",
+    "shorthand_without_paragraph_context": "A bare paragraph designator follows a citation that names no paragraph to inherit from; "
+                                           "it is reported as an unresolved expression.",
     "excluded_by_part_filter": "A record exists, but the requested part filter excludes it.",
     "excluded_by_requested_scope": "A record exists in the other scope, but not in the requested scope.",
     "excluded_by_scope_and_part_filter": "A record exists, but only in the other scope and outside the requested part filter.",
@@ -413,6 +513,7 @@ class Index:
             record["requested"] = c["requested"]
             record["canonical"] = c["canonical"]
             record["title_resolution"] = resolution
+            record["inherited"] = c["inherited"]
             out.append(record)
         return out
 
@@ -785,6 +886,28 @@ class Index:
                           "from different titles is never merged. Repeat the request with an explicit title, e.g. "
                           + " or ".join(x["citation"] for x in resolution["candidates"]) + "."]}
 
+    def _unsupported_multi_delta(self, citation, cites):
+        """delta() compares one citation; a request naming several (a list, or shorthand members) is reported, not truncated."""
+        seen, members = set(), []
+        for c in cites:
+            if c["label"] in seen:
+                continue
+            seen.add(c["label"])
+            members.append({"requested": c["requested"], "label": c["label"], "canonical": c["canonical"], "inherited": c.get("inherited"),
+                            "unresolved_reason": c["malformed"]})
+        unresolved = {"scope": None, "requested": None, "resolved": False, "achieved": None, "reason": "multiple_citations_not_supported",
+                      "note": "delta() supports one citation per request."}
+        return {"citation": citation, "requested_citation": citation, "canonical_citation": None, "as_of": self.as_of,
+                "requested_precision": None, "requested_path": None, "baseline": None, "section_context": None, "instruments": [],
+                "current_precision": {**unresolved, "scope": "current"}, "future_precision": {**unresolved, "scope": "future"},
+                "evidence_status": "unsupported_multi_citation",
+                "unavailable": {"reason": "multiple_citations_not_supported", "legal_validity": "not_determined",
+                                "note": "delta() compares one citation at a time and does not select the first of several. Request "
+                                        "each member separately.", "citations": members},
+                "legal_validity": "not_determined", "unresolved_candidates": [], "applicability_status": "not_assessed",
+                "notes": ["The request names %d distinct citations; none was selected. Ask for each one: %s." % (
+                    len(members), "; ".join(m["canonical"] or m["label"] for m in members))]}
+
     def delta(self, citation):
         """Current baseline versus each acquired future instrument for one section or part.
 
@@ -795,6 +918,8 @@ class Index:
         cites = parse_query_citations(citation)
         if not cites:
             raise ValueError(f"cannot parse citation: {citation}")
+        if len({c["label"] for c in cites}) > 1:
+            return self._unsupported_multi_delta(citation, cites)  # never select the first member silently
         parsed = cites[0]
         if parsed["malformed"]:
             return self._malformed_delta(citation, parsed)

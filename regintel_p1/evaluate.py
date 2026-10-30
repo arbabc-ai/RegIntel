@@ -940,6 +940,77 @@ def check_titleless_delta(index, item):
     return {"id": item["id"], "titleless": plain, "explicit": explicit, "passed": not failures, "failures": failures[:10]}
 
 
+def check_query_lists(index, item):
+    """Real-corpus guard for list and shorthand completeness in a request. `equivalent`: a comma/and/or list or paragraph
+    shorthand yields one citation per member (the expected canonical labels) and resolves, in every scope, part filter,
+    mode and k, exactly like its fully qualified control; with a missing member the answer is never evidence_found and
+    carries that member's gap. `unresolved`: members the hierarchy does not settle, or malformed tails, are structured
+    unresolved expressions with a gap, never merged into the citation before them. `delta`: a multi-citation request is
+    reported as unsupported, not truncated to its first member."""
+    failures, kind = [], item["kind"]
+    scopes = ("current", "future", "both")
+    gaps = lambda out: sorted(g["topic"] for g in out["coverage_gaps"] if g["topic"].startswith("citation:"))
+    if kind == "equivalent":
+        short, control = item["shorthand"], item["control"]
+        if [c["canonical"] for c in parse_query_citations(short)] != item["members"]:
+            failures.append(f"members {[c['canonical'] for c in parse_query_citations(short)]} != {item['members']}")
+        for scope in scopes:
+            for parts in (None, ["12:3"], ["12:999"]):
+                a, b = index.resolve_citations(short, scope, parts), index.resolve_citations(control, scope, parts)
+                keys = ("citation", "resolved", "achieved", "reason", "by_scope", "future_paragraph_support", "_current_ids", "_future_ids")
+                if [[r[k] for k in keys] for r in a] != [[r[k] for k in keys] for r in b]:
+                    failures.append(f"{scope}/{parts}: resolver differs from the fully qualified control")
+        for mode in ("exact", "hybrid"):
+            for scope in scopes:
+                for parts in (None, ["12:3"], ["12:999"]):
+                    for k in (10, 1):
+                        x, y = (index.answer(q, mode=mode, scope=scope, parts=parts, k=k) for q in (short, control))
+                        tag = f"{mode}/{scope}/{parts or 'nofilter'}/k{k}"
+                        if x["status"] != y["status"] or gaps(x) != gaps(y):
+                            failures.append(f"{tag}: status or citation gaps differ from the control")
+                        if mode == "exact" and [r["provision_id"] for r in x["results"]] != [r["provision_id"] for r in y["results"]]:
+                            failures.append(f"{tag}: results differ from the control")
+                        if not item["complete"] and scope == "current" and x["status"] == "evidence_found":
+                            failures.append(f"{tag}: evidence_found although a member is missing")
+        cur = index.answer(short, mode="exact", scope="current", k=10)
+        if (cur["status"] == "evidence_found") != item["complete"]:
+            failures.append(f"current exact status {cur['status']} does not match complete={item['complete']}")
+        if item.get("gap") and item["gap"] not in gaps(cur):
+            failures.append(f"missing gap {item['gap']}")
+    elif kind == "unresolved":
+        q = item["request"]
+        cites = parse_query_citations(q)
+        bad = [c for c in cites if c["malformed"]]
+        if [(c["requested"], c["malformed"]) for c in bad] != [(x["requested"], x["reason"]) for x in item["expressions"]]:
+            failures.append(f"unresolved expressions {[(c['requested'], c['malformed']) for c in bad]} != expected")
+        if any(c["diagnostics"]["accepted_valid_prefix"] for c in bad):
+            failures.append("a resolved prefix was accepted")
+        for mode in ("exact", "hybrid"):
+            for scope in scopes:
+                for parts in (None, ["12:3"], ["12:999"]):
+                    for k in (10, 1):
+                        out = index.answer(q, mode=mode, scope=scope, parts=parts, k=k)
+                        tag = f"{mode}/{scope}/{parts or 'nofilter'}/k{k}"
+                        if out["status"] == "evidence_found":
+                            failures.append(f"{tag}: evidence_found")
+                        for c in bad:
+                            if f"citation:{c['label']}" not in gaps(out):
+                                failures.append(f"{tag}: no gap for {c['label']}")
+        d = index.delta(q)
+        if d["evidence_status"] != "unsupported_multi_citation":
+            failures.append("delta did not report the multi-citation request")
+    elif kind == "delta":
+        d = index.delta(item["request"])
+        if d["evidence_status"] != "unsupported_multi_citation" or d["baseline"] or d["instruments"]:
+            failures.append("delta selected a member instead of reporting the unsupported request")
+        if [c["label"] for c in d["unavailable"]["citations"]] != item["members"]:
+            failures.append("delta did not list every member")
+        single = index.delta(item["single"])
+        if single["evidence_status"] == "unsupported_multi_citation" or not single["instruments"] == index.delta(item["single_control"])["instruments"]:
+            failures.append("single-citation delta changed")
+    return {"id": item["id"], "kind": kind, "passed": not failures, "failures": failures[:10]}
+
+
 def run_regressions(index, path):
     spec = json.loads(Path(path).read_text())
     out = {"version": spec["version"], "task": spec["task"],
@@ -957,7 +1028,8 @@ def run_regressions(index, path):
            "query_citations": [check_query_citations(index, x) for x in spec.get("query_citations", [])],
            "suffix_integrity": [check_suffix_integrity(index, x) for x in spec.get("suffix_integrity", [])],
            "appendix_evidence": [check_appendix_evidence(index, x) for x in spec.get("appendix_evidence", [])],
-           "titleless_delta": [check_titleless_delta(index, x) for x in spec.get("titleless_delta", [])]}
+           "titleless_delta": [check_titleless_delta(index, x) for x in spec.get("titleless_delta", [])],
+           "query_lists": [check_query_lists(index, x) for x in spec.get("query_lists", [])]}
     out["passed"] = (all(d["passed"] for d in out["delta"]) and out["relationship_integrity"]["passed"]
                      and all(c["passed"] for c in out["citation_scope"]) and all(x["passed"] for x in out["status"])
                      and all(x["passed"] for x in out["citation_completeness"])
@@ -970,12 +1042,13 @@ def run_regressions(index, path):
                      and all(x["passed"] for x in out["query_citations"])
                      and all(x["passed"] for x in out["suffix_integrity"])
                      and all(x["passed"] for x in out["appendix_evidence"])
-                     and all(x["passed"] for x in out["titleless_delta"]))
+                     and all(x["passed"] for x in out["titleless_delta"])
+                     and all(x["passed"] for x in out["query_lists"]))
     return out
 
 
 REGRESSION_GROUPS = ("delta", "relationship_integrity", "citation_scope", "status", "citation_completeness",
-                     "mixed_source", "delta_precision", "instruction_boundary", "current_agreement", "amendatory_lists", "designator_integrity", "query_citations", "suffix_integrity", "appendix_evidence", "titleless_delta")
+                     "mixed_source", "delta_precision", "instruction_boundary", "current_agreement", "amendatory_lists", "designator_integrity", "query_citations", "suffix_integrity", "appendix_evidence", "titleless_delta", "query_lists")
 
 
 def overall(report):
@@ -1058,6 +1131,8 @@ def render(report):
         lines.append(f"  {ri['id']} {'PASS' if ri['passed'] else 'FAIL'} relationship integrity violations={ri['violations']} {'; '.join(ri['failures'])}")
         for c in reg["citation_scope"]:
             lines.append(f"  {c['id']} {'PASS' if c['passed'] else 'FAIL'} citation scope '{c['query']}' {'; '.join(c['failures'])}")
+        for x in reg.get("query_lists", []):
+            lines.append(f"  {x['id']} {'PASS' if x['passed'] else 'FAIL'} query lists [{x['kind']}] {'; '.join(x['failures'])}")
         for x in reg.get("titleless_delta", []):
             lines.append(f"  {x['id']} {'PASS' if x['passed'] else 'FAIL'} titleless delta '{x['titleless']}' = '{x['explicit']}' {'; '.join(x['failures'])}")
         for x in reg.get("appendix_evidence", []):
