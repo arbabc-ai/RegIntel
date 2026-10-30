@@ -1,6 +1,6 @@
 {
- "version": "p1-regress-0.3",
- "task": "S7-P1-EVIDENCE-BOUNDARIES-01 + S7-P1-EVIDENCE-COMPLETENESS-02 + S7-P1-COVERAGE-GUARDS-03",
+ "version": "p1-regress-0.4",
+ "task": "S7-P1-EVIDENCE-BOUNDARIES-01 + S7-P1-EVIDENCE-COMPLETENESS-02 + S7-P1-COVERAGE-GUARDS-03 + S7-P1-CITATION-COMPLETENESS-04",
  "note": "Deterministic regression checks over the acquired corpus for amendment-target integrity and retrieval scope filtering. Kept separate from questions.json so the 37-item baseline stays frozen. A pass means the contract holds, not that any rule applies to a bank.",
  "delta": [
   {
@@ -217,7 +217,8 @@
  ],
  "changelog": [
   "v0.2 (COMPLETENESS-02): citation-scope checks now exercise exact AND hybrid for every scope (v0.1 stopped after the exact mode) and require nonempty current results for acquired citations; added range, part-lookup and partial-coverage checks. G01-G08 are unchanged.",
-  "v0.3 (COVERAGE-GUARDS-03): status checks P04-P12 added for queries that match no catalog topic (coverage unassessed), the LCR/NSFR partial-coverage topics, and citation-only controls. Earlier checks unchanged."
+  "v0.3 (COVERAGE-GUARDS-03): status checks P04-P12 added for queries that match no catalog topic (coverage unassessed), the LCR/NSFR partial-coverage topics, and citation-only controls. Earlier checks unchanged.",
+  "v0.4 (CITATION-COMPLETENESS-04): citation_completeness checks K01-K09 exercise exact and hybrid across current/future/both, with and without part filters; earlier checks unchanged."
  ],
  "status": [
   {
@@ -318,6 +319,116 @@
    ],
    "expect_status_not": "evidence_found",
    "note": "negative control, future scope"
+  }
+ ],
+ "citation_completeness": [
+  {
+   "id": "K01",
+   "query": "12 CFR 3.22(z)(999)",
+   "expect_unresolved_somewhere": [
+    "12 CFR 3.22(z)(999)"
+   ],
+   "expect_reasons": {
+    "12 CFR 3.22(z)(999)": [
+     "paragraph_not_found_in_acquired_section",
+     "paragraph_precision_unresolved"
+    ]
+   }
+  },
+  {
+   "id": "K02",
+   "query": "12 CFR 3.22 and 12 CFR 50.1",
+   "expect_unresolved_somewhere": [
+    "12 CFR 50.1"
+   ],
+   "expect_reasons": {
+    "12 CFR 50.1": [
+     "part_not_acquired"
+    ]
+   }
+  },
+  {
+   "id": "K03",
+   "query": "12 CFR 3.22 and 12 CFR 999.999",
+   "expect_unresolved_somewhere": [
+    "12 CFR 999.999"
+   ],
+   "expect_reasons": {
+    "12 CFR 999.999": [
+     "part_not_acquired"
+    ]
+   }
+  },
+  {
+   "id": "K04",
+   "query": "12 CFR 3.22 and 12 CFR 217.22",
+   "parts": [
+    "12:3"
+   ],
+   "expect_unresolved_somewhere": [
+    "12 CFR 217.22"
+   ],
+   "expect_reasons": {
+    "12 CFR 217.22": [
+     "excluded_by_part_filter"
+    ]
+   }
+  },
+  {
+   "id": "K05",
+   "query": "CET1 12 CFR 999.999",
+   "expect_unresolved_somewhere": [
+    "12 CFR 999.999"
+   ],
+   "expect_reasons": {
+    "12 CFR 999.999": [
+     "part_not_acquired"
+    ]
+   },
+   "note": "an acquired topic (CET1) matches but must not hide the unresolved citation"
+  },
+  {
+   "id": "K06",
+   "query": "12 CFR 3.12(c)(1)",
+   "expect_all_resolved": true,
+   "note": "valid section/paragraph control"
+  },
+  {
+   "id": "K07",
+   "query": "12 CFR 3.22 and 12 CFR 217.22",
+   "expect_all_resolved": true,
+   "small_k_citations_in_parts": [
+    "3",
+    "217"
+   ],
+   "note": "fully resolved multi-citation control; k=2 shows both citations"
+  },
+  {
+   "id": "K08",
+   "query": "12 CFR 3.22(i)",
+   "expect_unresolved_somewhere": [
+    "12 CFR 3.22(i)"
+   ],
+   "expect_reasons": {
+    "12 CFR 3.22(i)": [
+     "paragraph_not_found_in_acquired_section"
+    ]
+   },
+   "note": "(i) exists only in the proposed/final amendments, not in the current baseline"
+  },
+  {
+   "id": "K09",
+   "query": "12 CFR 327.31",
+   "expect_unresolved_somewhere": [
+    "12 CFR 327.31"
+   ],
+   "expect_reasons": {
+    "12 CFR 327.31": [
+     "part_not_acquired",
+     "excluded_by_requested_scope"
+    ]
+   },
+   "note": "range-membership interior stays discoverable in future scope; current scope has no Part 327 baseline"
   }
  ]
 }

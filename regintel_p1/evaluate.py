@@ -294,15 +294,66 @@ def check_status_regression(index, item):
             "coverage_gaps": [(g["topic"], g["coverage"]) for g in out["coverage_gaps"]]}
 
 
+def check_citation_completeness(index, item):
+    """Every (mode, scope) run: each unresolved citation has its own gap, a resolved citation never hides it, and
+    evidence_found appears only when every citation resolved. Unresolved requests are partial_evidence exactly when
+    results exist, otherwise missing_evidence."""
+    q, parts, failures = item["query"], item.get("parts"), []
+    reasons = item.get("expect_reasons", {})
+    seen_unresolved = set()
+    for mode in ("exact", "hybrid"):
+        for scope in ("current", "future", "both"):
+            out = index.answer(q, mode=mode, scope=scope, parts=parts, k=10)
+            tag = f"{mode}/{scope}"
+            unresolved = [c for c in out["citations"] if not c["resolved"]]
+            gaps = {g["topic"]: g for g in out["coverage_gaps"]}
+            for c in unresolved:
+                seen_unresolved.add(c["citation"])
+                g = gaps.get(f"citation:{c['citation']}")
+                if not g:
+                    failures.append(f"{tag}: no gap for unresolved {c['citation']}")
+                elif "not a determination that the citation is invalid" not in g["note"]:
+                    failures.append(f"{tag}: gap for {c['citation']} does not separate unavailable from invalid")
+                if c["legal_validity"] != "not_determined":
+                    failures.append(f"{tag}: legal validity asserted for {c['citation']}")
+                if c["citation"] in reasons and c["reason"] not in reasons[c["citation"]]:
+                    failures.append(f"{tag}: {c['citation']} reason {c['reason']} not in {reasons[c['citation']]}")
+            if unresolved:
+                want = "partial_evidence" if out["results"] else "missing_evidence"
+                if out["status"] != want:
+                    failures.append(f"{tag}: status {out['status']} != {want} with unresolved citations")
+            elif out["status"] == "evidence_found" and not all(c["resolved"] for c in out["citations"]):
+                failures.append(f"{tag}: evidence_found with unresolved citation")
+            if item.get("expect_all_resolved") is True and (unresolved or out["status"] != "evidence_found"):
+                failures.append(f"{tag}: expected fully resolved evidence_found, got {out['status']}")
+            failures += [f"{tag}: {f}" for f in invariant_failures(out, scope)]
+            if parts:
+                for r in out["results"]:
+                    row = index.conn.execute("SELECT title_no, part_no FROM provision WHERE id=?", (r["provision_id"],)).fetchone()
+                    if f"{row['title_no']}:{row['part_no']}" not in parts:
+                        failures.append(f"{tag}: part filter violated by {r['citation']}")
+    for label in item.get("expect_unresolved_somewhere", []):
+        if label not in seen_unresolved:
+            failures.append(f"{label} was never reported unresolved")
+    small = index.exact(q, 2, "current", parts)
+    if item.get("small_k_citations_in_parts"):
+        got = {index.conn.execute("SELECT part_no FROM provision WHERE id=?", (pid,)).fetchone()["part_no"] for pid, _ in small}
+        if got != set(item["small_k_citations_in_parts"]):
+            failures.append(f"k=2 current exact covered parts {sorted(got)}, wanted {item['small_k_citations_in_parts']}")
+    return {"id": item["id"], "query": q, "parts": parts, "passed": not failures, "failures": failures[:12]}
+
+
 def run_regressions(index, path):
     spec = json.loads(open(path).read())
     out = {"version": spec["version"], "task": spec["task"],
            "delta": [check_boundary_delta(index, d) for d in spec["delta"]],
            "relationship_integrity": check_relationship_integrity(index, spec["relationship_integrity"]),
            "citation_scope": [check_citation_scope(index, c) for c in spec["citation_scope"]],
-           "status": [check_status_regression(index, x) for x in spec.get("status", [])]}
+           "status": [check_status_regression(index, x) for x in spec.get("status", [])],
+           "citation_completeness": [check_citation_completeness(index, x) for x in spec.get("citation_completeness", [])]}
     out["passed"] = (all(d["passed"] for d in out["delta"]) and out["relationship_integrity"]["passed"]
-                     and all(c["passed"] for c in out["citation_scope"]) and all(x["passed"] for x in out["status"]))
+                     and all(c["passed"] for c in out["citation_scope"]) and all(x["passed"] for x in out["status"])
+                     and all(x["passed"] for x in out["citation_completeness"]))
     return out
 
 
@@ -353,6 +404,8 @@ def render(report):
         lines.append(f"  {ri['id']} {'PASS' if ri['passed'] else 'FAIL'} relationship integrity violations={ri['violations']} {'; '.join(ri['failures'])}")
         for c in reg["citation_scope"]:
             lines.append(f"  {c['id']} {'PASS' if c['passed'] else 'FAIL'} citation scope '{c['query']}' {'; '.join(c['failures'])}")
+        for x in reg.get("citation_completeness", []):
+            lines.append(f"  {x['id']} {'PASS' if x['passed'] else 'FAIL'} citation completeness '{x['query']}' {x.get('parts') or ''} {'; '.join(x['failures'])}")
         for x in reg.get("status", []):
             lines.append(f"  {x['id']} {'PASS' if x['passed'] else 'FAIL'} status={x['status']} results={x['results']} '{x['query']}' {'; '.join(x['failures'])}")
     lines.append("Filter checks: " + ", ".join(f"{c['id']}/{c['retriever']}={'ok' if c['respected'] else 'VIOLATED'}" for c in report["filter_checks"]))

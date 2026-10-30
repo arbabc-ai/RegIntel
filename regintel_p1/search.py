@@ -60,6 +60,16 @@ def terms_of(query):
     return [w.lower() for w in words if w.lower() not in STOP and len(w) > 1]
 
 
+CITATION_REASONS = {
+    "paragraph_precision_unresolved": "Only section-level amendment evidence was found; the requested paragraph is not "
+                                      "confirmed in it (section-level records are returned, flagged).",
+    "excluded_by_part_filter": "A record exists, but the requested part filter excludes it.",
+    "excluded_by_requested_scope": "A record exists in the other scope, but not in the requested scope.",
+    "excluded_by_scope_and_part_filter": "A record exists, but only in the other scope and outside the requested part filter.",
+    "part_not_acquired": "No record was acquired for this part, in baseline or in an acquired amendment.",
+    "paragraph_not_found_in_acquired_section": "The section is acquired but the requested paragraph is not in it.",
+    "not_found_in_acquired_part": "The part is acquired but no record for this section was found.",
+}
 CITATION_WORDS = {"section", "sections", "cfr", "part", "parts", "title"}
 
 
@@ -197,30 +207,105 @@ class Index:
                 for r in self.conn.execute(sql, topic_ids + [expr] + params + [k])]
 
     def exact(self, query, k=20, scope="both", parts=None):
-        """Direct lookup when the query names a CFR citation such as '12 CFR 217.11(b)' or '§ 3.12'.
+        """Direct lookup for every CFR citation in the query, e.g. '12 CFR 217.11(b)' or '§ 3.12'.
 
-        Scope and part filters are applied in SQL before ranking and truncation. `current` returns eCFR baseline
-        provisions of the cited section/part; `future` returns only amendment units whose explicit amends target is
-        the cited section/part (never a baseline record); `both` interleaves the two so neither crowds out the
-        other when truncated to k.
+        Each citation is resolved independently in the requested scope and part filter (see `resolve_citations`);
+        their records are interleaved round-robin before truncation to k, so one citation cannot crowd out another.
+        `current` returns eCFR baseline provisions only; `future` returns only amendment units whose explicit amends
+        target (or numeric range) covers the citation, never a baseline record; `both` interleaves the two.
+        A paragraph that is not in the acquired section is not replaced by its parent section in current scope;
+        section-level amendment units stay discoverable and are flagged by `resolve_citations`.
         """
-        current, future = [], []
+        lists = []
+        for c in self.resolve_citations(query, scope, parts):
+            lists.append([pid for pair in zip_longest(c["_current_ids"], c["_future_ids"]) for pid in pair if pid is not None])
+        merged, seen = [], set()
+        for group in zip_longest(*lists):
+            for pid in group:
+                if pid is not None and pid not in seen:
+                    seen.add(pid)
+                    merged.append(pid)
+        return [(pid, float(len(merged) - i)) for i, pid in enumerate(merged[:k])]
+
+    def resolve_citations(self, query, scope="both", parts=None):
+        """One resolution record per distinct citation in the query, in the requested scope and part filter.
+
+        `resolved` is true only at the requested precision. A paragraph-qualified citation that exists only as a
+        section-level amendment is `resolved: False, achieved: section_only` and keeps its records discoverable.
+        Unresolved records carry a `reason` and always state that an unavailable record is not a determination
+        that the citation is legally invalid or nonexistent.
+        """
+        out, seen = [], set()
         for m in CITE.finditer(query):
             title, part, minor, paras = m.groups()
             section = f"{part}.{minor}" if minor else None
             if not section and not title:
                 continue  # a bare '§ 12' is not a citation
-            if scope in ("current", "both"):
-                current += self._exact_current(title, part, section, paras, parts)
-            if scope in ("future", "both"):
-                future += self._exact_future(title, part, section, parts, minor)
-        merged, seen = [], set()
-        for pair in zip_longest(current, future):
-            for pid in pair:
-                if pid is not None and pid not in seen:
-                    seen.add(pid)
-                    merged.append(pid)
-        return [(pid, float(len(merged) - i)) for i, pid in enumerate(merged[:k])]
+            label = (f"{title} CFR " if title else "§ ") + (f"{section}{paras}" if section else f"Part {part}")
+            if label in seen:
+                continue
+            seen.add(label)
+            out.append(self._resolve_one(label, title, part, section, paras or "", scope, parts))
+        return out
+
+    def _paragraph_in_leads(self, ids, paras):
+        """Unreviewed text-pattern check: does an amendment unit open with the requested first paragraph designator?"""
+        first = re.match(r"\([A-Za-z0-9]+\)", paras)
+        if not first or not ids:
+            return False
+        for (leads,) in self.conn.execute(
+                f"SELECT paragraph_leads FROM provision WHERE id IN ({','.join('?' * len(ids))})", ids):
+            if any(lead.startswith(first.group(0)) for lead in json.loads(leads or "[]")):
+                return True
+        return False
+
+    def _resolve_one(self, label, title, part, section, paras, scope, parts):
+        cur = self._exact_current(title, part, section, paras, parts) if scope in ("current", "both") else []
+        fut = self._exact_future(title, part, section, parts, section and section.split(".", 1)[1]) \
+            if scope in ("future", "both") else []
+        precision = "paragraph" if (section and paras) else ("section" if section else "part")
+        fut_precise = bool(fut) and (not paras or self._paragraph_in_leads(fut, paras))
+        resolved = bool(cur) or fut_precise
+        achieved = precision if resolved else ("section_only" if (paras and fut) else None)
+        record = {"citation": label, "requested_precision": precision, "resolved": resolved, "achieved": achieved,
+                  "by_scope": {"current": len(cur), "future": len(fut)}, "legal_validity": "not_determined",
+                  "_current_ids": cur, "_future_ids": fut}
+        if resolved:
+            record["reason"] = None
+            record["note"] = ""
+            return record
+        reason = self._diagnose_unresolved(title, part, section, paras, scope, parts, fut)
+        record["reason"] = reason
+        record["note"] = (CITATION_REASONS[reason] + " This reports unavailable evidence only; it is not a determination "
+                          "that the citation is invalid or does not exist.")
+        return record
+
+    def _found(self, scopes, title, part, section, paras, parts):
+        minor = section and section.split(".", 1)[1]
+        if "current" in scopes and self._exact_current(title, part, section, paras, parts):
+            return True
+        return "future" in scopes and bool(self._exact_future(title, part, section, parts, minor))
+
+    def _diagnose_unresolved(self, title, part, section, paras, scope, parts, fut):
+        requested = ("current", "future") if scope == "both" else (scope,)
+        other = tuple(x for x in ("current", "future") if x not in requested)
+        if paras and fut:
+            return "paragraph_precision_unresolved"
+        if paras and "current" in requested and self._exact_current(title, part, section, "", parts):
+            return "paragraph_not_found_in_acquired_section"
+        if parts and self._found(requested, title, part, section, paras, None):
+            return "excluded_by_part_filter"
+        if other and self._found(other, title, part, section, paras, parts):
+            return "excluded_by_requested_scope"
+        if parts and other and self._found(other, title, part, section, paras, None):
+            return "excluded_by_scope_and_part_filter"
+        row = self.conn.execute("SELECT 1 FROM provision WHERE kind='part' AND part_no=?" + (" AND title_no=?" if title else ""),
+                                [part] + ([title] if title else [])).fetchone()
+        if not row:
+            return "part_not_acquired"
+        if paras and section and self._exact_current(title, part, section, "", None):
+            return "paragraph_not_found_in_acquired_section"
+        return "not_found_in_acquired_part"
 
     def _exact_current(self, title, part, section, paras, parts):
         if section:
@@ -239,10 +324,9 @@ class Index:
             f"""SELECT p.id, p.locator FROM provision p JOIN source_document d ON d.id=p.doc_id
                 LEFT JOIN rulemaking r ON r.doc_key=d.doc_key WHERE {where} AND {cond} ORDER BY p.ordinal""",
             params + cparams).fetchall()
-        if section and paras:
+        if section and paras:  # a missing paragraph stays unresolved; it is never replaced by its parent section
             wanted = f"{section}{paras}"
-            narrowed = [r for r in rows if r["locator"] == wanted or r["locator"].startswith(wanted + "(")]
-            rows = narrowed or rows
+            rows = [r for r in rows if r["locator"] == wanted or r["locator"].startswith(wanted + "(")]
         return [r["id"] for r in rows]
 
     def _exact_future(self, title, part, section, parts, minor=None):
@@ -344,8 +428,12 @@ class Index:
         # A citation-only query is self-describing: it resolves to named provisions in the requested scope and part
         # filter, so it needs no topic. Any other query that matches no catalog topic has unassessed source
         # coverage, and a lexical hit alone does not establish that the sources it needs are acquired.
-        resolved_citation = (not topic_hits and citation_only(query)
-                             and bool(self.exact(query, 1, scope, parts)))
+        citations = self.resolve_citations(query, scope, parts)
+        unresolved = [c for c in citations if not c["resolved"]]
+        for c in unresolved:  # one gap per unresolved citation, whatever else resolved or matched a topic
+            gaps.append({"topic": f"citation:{c['citation']}", "coverage": "unresolved_citation", "reason": c["reason"],
+                         "note": c["note"]})
+        resolved_citation = (not topic_hits and citation_only(query) and bool(citations) and not unresolved)
         unassessed = not topic_hits and not resolved_citation
         if unassessed:
             gaps.append({"topic": "none_matched", "coverage": "unassessed",
@@ -353,8 +441,8 @@ class Index:
                                  "does not show that the sources needed to answer it are acquired."})
         if not results:
             status = "missing_evidence"
-        elif blocked or partial or unassessed:
-            status = "partial_evidence"   # results exist, but a matched topic's coverage is incomplete or unassessed
+        elif blocked or partial or unassessed or unresolved:
+            status = "partial_evidence"   # results exist, but coverage or a requested citation is incomplete
         else:
             status = "evidence_found"
         return {
@@ -364,6 +452,7 @@ class Index:
                                   "scope, size/risk category, elections) is required before any applies / does_not_apply "
                                   "conclusion.",
             "topics_matched": [t["id"] for t, _ in topic_hits], "coverage_gaps": gaps, "results": results,
+            "citations": [{k: v for k, v in c.items() if not k.startswith("_")} for c in citations],
             "index": {"manifest_sha256": self.meta.get("manifest_sha256"), "built_at": self.meta.get("built_at")},
         }
 
