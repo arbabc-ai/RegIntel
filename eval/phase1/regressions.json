@@ -498,10 +498,11 @@
    ],
    "expect_reasons": {
     "12 CFR 327.16(e)(4)": [
-     "part_not_acquired"
+     "part_not_acquired",
+     "excluded_by_requested_scope"
     ]
    },
-   "note": "2026-13192 names (e)(4) so future scope resolves it; current scope has no Part 327 baseline"
+   "note": "2026-13192 names (e)(4) so future scope resolves it; current scope has no Part 327 baseline; first draft allowed only part_not_acquired, but in current scope a future-only record exists, so excluded_by_requested_scope is the accurate reason"
   }
  ]
 }
