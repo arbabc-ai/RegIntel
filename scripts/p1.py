@@ -1,5 +1,8 @@
 """CLI for the RegIntel Phase 1 index: build | search | delta | eval.
 
+Exit status: 0 on success. `eval` exits 1 when the overall evaluation fails (any failed delta/status check, invalid
+gold matcher, violated part filter or failed regression group); the --out report is written first.
+
 Run as `python3 -I scripts/p1.py ...`; the repo root is added to sys.path explicitly because -I drops the
 script directory from the import path.
 """
@@ -15,6 +18,8 @@ from regintel_p1 import build as build_mod  # noqa: E402
 DEFAULT_CORPUS = "/home/arbab/projects/regintel-corpus/phase1"
 DEFAULT_DB = "/home/arbab/projects/regintel-corpus/phase1-index/regintel_p1.sqlite"
 DEFAULT_AS_OF = "2026-10-29"
+EXIT_OK = 0
+EXIT_EVAL_FAILED = 1  # eval: any failed check, invalid gold matcher, violated part filter or failed regression group
 
 
 def main(argv=None):
@@ -43,7 +48,7 @@ def main(argv=None):
         conn, counts = build_mod.build(args.corpus, args.db, args.as_of)
         conn.close()
         print(json.dumps(counts, indent=1))
-        return 0
+        return EXIT_OK
     from regintel_p1 import search as search_mod
     index = search_mod.Index(args.db, args.as_of)
     if args.cmd == "search":
@@ -54,10 +59,11 @@ def main(argv=None):
     elif args.cmd == "eval":
         from regintel_p1 import evaluate
         report = evaluate.run(index, args.questions, args.regressions)
-        print(evaluate.render(report))
-        if args.out:
+        if args.out:  # the full report is persisted before any failure status is returned
             Path(args.out).write_text(json.dumps(report, indent=1, ensure_ascii=False))
-    return 0
+        print(evaluate.render(report))
+        return EXIT_OK if report["overall"]["passed"] else EXIT_EVAL_FAILED
+    return EXIT_OK
 
 
 if __name__ == "__main__":

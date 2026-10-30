@@ -8,6 +8,7 @@ Gold matchers are validated against the index first; a matcher that matches noth
 rather than silently counted as a miss.
 """
 import json
+from pathlib import Path
 from collections import defaultdict
 
 from .search import CITE, Index
@@ -555,7 +556,7 @@ def check_current_agreement(index, item):
 
 
 def run_regressions(index, path):
-    spec = json.loads(open(path).read())
+    spec = json.loads(Path(path).read_text())
     out = {"version": spec["version"], "task": spec["task"],
            "delta": [check_boundary_delta(index, d) for d in spec["delta"]],
            "relationship_integrity": check_relationship_integrity(index, spec["relationship_integrity"]),
@@ -576,17 +577,54 @@ def run_regressions(index, path):
     return out
 
 
+REGRESSION_GROUPS = ("delta", "relationship_integrity", "citation_scope", "status", "citation_completeness",
+                     "mixed_source", "delta_precision", "instruction_boundary", "current_agreement")
+
+
+def overall(report):
+    """One explicit pass/fail for the whole evaluation.
+
+    It fails when any frozen delta or status check fails, a gold matcher is invalid, a part filter is violated, or any
+    regression group has a failing check. Retrieval hit rates and MRR are measurements only: no ranking threshold is
+    invented here, so a low rate never fails the evaluation by itself. Nothing is waived: a failing check stays a
+    failure whatever its history.
+    """
+    failures = {
+        "delta_checks": [d["id"] for d in report["delta"] if not d["passed"]],
+        "status_checks": [s["id"] for s in report["status"] if not s["passed"]],
+        "invalid_gold": [i["id"] for i in report["retrieval_items"] if i["invalid_gold"]],
+        "part_filter_violations": [f"{c['id']}/{c['retriever']}" for c in report["filter_checks"] if not c["respected"]],
+        "regression_groups": {},
+    }
+    reg = report.get("regressions")
+    if reg:
+        for group in REGRESSION_GROUPS:
+            value = reg.get(group)
+            items = [value] if isinstance(value, dict) else (value or [])
+            bad = [x.get("id", "?") for x in items if not x.get("passed")]
+            if bad:
+                failures["regression_groups"][group] = bad
+        if not reg.get("passed") and not failures["regression_groups"]:
+            failures["regression_groups"]["regression_summary"] = ["regressions.passed is false"]
+    counts = {k: (sum(len(v) for v in val.values()) if isinstance(val, dict) else len(val)) for k, val in failures.items()}
+    return {"passed": not any(counts.values()), "failure_counts": counts, "failures": failures,
+            "regressions_run": bool(reg),
+            "retrieval": "reported as measurements only; no ranking threshold is applied"}
+
+
 def run(index, questions_path, regressions_path=None):
-    spec = json.loads(open(questions_path).read())
+    spec = json.loads(Path(questions_path).read_text())
     per_item, summary = run_retrieval(index, spec["retrieval"])
     deltas = [check_delta(index, d) for d in spec["delta"]]
     statuses = [check_status(index, s) for s in spec["status"]]
     filters = [(r["id"], r["retrievers"][n]["filter_respected"], n) for r in per_item for n in RETRIEVERS
                if "filter_respected" in r["retrievers"][n]]
     regressions = run_regressions(index, regressions_path) if regressions_path else None
-    return {"questions_version": spec["version"], "as_of": index.as_of, "index": index.meta, "regressions": regressions,
-            "retrieval_summary": summary, "retrieval_items": per_item, "delta": deltas, "status": statuses,
-            "filter_checks": [{"id": i, "retriever": n, "respected": ok} for i, ok, n in filters]}
+    report = {"questions_version": spec["version"], "as_of": index.as_of, "index": index.meta, "regressions": regressions,
+              "retrieval_summary": summary, "retrieval_items": per_item, "delta": deltas, "status": statuses,
+              "filter_checks": [{"id": i, "retriever": n, "respected": ok} for i, ok, n in filters]}
+    report["overall"] = overall(report)
+    return report
 
 
 def render(report):
@@ -636,4 +674,19 @@ def render(report):
         for x in reg.get("status", []):
             lines.append(f"  {x['id']} {'PASS' if x['passed'] else 'FAIL'} status={x['status']} results={x['results']} '{x['query']}' {'; '.join(x['failures'])}")
     lines.append("Filter checks: " + ", ".join(f"{c['id']}/{c['retriever']}={'ok' if c['respected'] else 'VIOLATED'}" for c in report["filter_checks"]))
+    ov = report.get("overall") or overall(report)
+    lines.append("")
+    lines.append(f"Overall evaluation: {'PASS' if ov['passed'] else 'FAIL'}")
+    c = ov["failure_counts"]
+    lines.append(f"  failed delta checks: {c['delta_checks']}; failed status checks: {c['status_checks']}; "
+                 f"invalid gold matchers: {c['invalid_gold']}; part-filter violations: {c['part_filter_violations']}; "
+                 f"failed regression checks: {c['regression_groups']}")
+    for key in ("delta_checks", "status_checks", "invalid_gold", "part_filter_violations"):
+        if ov["failures"][key]:
+            lines.append(f"  {key}: {', '.join(ov['failures'][key])}")
+    for group, ids in ov["failures"]["regression_groups"].items():
+        lines.append(f"  regression group {group}: {', '.join(ids)}")
+    if not ov["regressions_run"]:
+        lines.append("  (regression groups were not run)")
+    lines.append("  retrieval hit rates and MRR above are measurements; no ranking threshold is applied")
     return "\n".join(lines)

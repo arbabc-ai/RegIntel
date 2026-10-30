@@ -45,6 +45,16 @@ python3 -m unittest discover -s tests -p "test_*.py"
 - Topics whose sources are not acquired (FASB ASC, state law, Call Report instructions) return `missing_evidence`, or
   `partial_evidence` with the gap reported when asked together with an acquired topic.
 
+## Evaluation exit status
+
+`python3 -I scripts/p1.py [--db …] [--as-of …] eval [--out report.json]` writes `--out` first, prints the report with an
+explicit `Overall evaluation: PASS|FAIL` section, and exits **0 only when the overall result passes**, otherwise 1. The overall
+result fails on any failed frozen delta or status check, any invalid gold matcher, any violated part filter, or any failed
+check in a regression group (`delta`, `relationship_integrity`, `citation_scope`, `status`, `citation_completeness`,
+`mixed_source`, `delta_precision`, `instruction_boundary`, `current_agreement`). Retrieval hit rates and MRR are
+measurements; no ranking threshold is applied. Failing frozen expectations (S05, S06) are reported as failures, not waived.
+The report's `overall` object lists the failing ids per category.
+
 ## Not done
 
 No dense/neural retriever (no embedding model was available without installing packages or downloading weights), so
