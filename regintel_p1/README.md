@@ -26,7 +26,9 @@ python3 -m unittest discover -s tests -p "test_*.py"
 
 ## Rules the code enforces
 
-- Relationships carry `review_status` (`parsed_unreviewed`, `regex_unreviewed`, `candidate_unreviewed`); none is reviewed.
+- Relationships carry `review_status` (`parsed_unreviewed`, `regex_unreviewed`, `candidate_unreviewed`, `unresolved_candidate`); none is reviewed.
+- `amends` comes only from an instruction's explicit targets (verb-object, "In § N,", "§ N is amended", `consisting of`, part-level forms), read outside quotation marks. Any other citation in an instruction is a `references` row, never a target. Carried section text is paired only with an instruction that targets that section (`pairing_status`: `explicit`, `multiple_instructions_same_target`, `instruction_only`, `carried_text_unpaired`, `instruction_no_explicit_target`); unpaired text and its candidate instructions stay in `unresolved_candidates` / `amends_candidate` and are listed separately from `delta()` instruments.
+- Citation queries honor `scope` and `parts` in SQL before ranking and truncation; `future` returns only amendment units that explicitly amend the cited section/part, never a baseline record.
 - Rulemaking state is a label computed from publisher metadata and an as-of date at query time. A proposal is never
   labelled final or current; closed comments are not finalization; a passed effective date is "operative effect
   unreviewed". `effective_on` on a proposal is not legal effect.

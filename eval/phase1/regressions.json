@@ -1,0 +1,119 @@
+{
+ "version": "p1-regress-0.1",
+ "task": "S7-P1-EVIDENCE-BOUNDARIES-01",
+ "note": "Deterministic regression checks over the acquired corpus for amendment-target integrity and retrieval scope filtering. Kept separate from questions.json so the 37-item baseline stays frozen. A pass means the contract holds, not that any rule applies to a bank.",
+ "delta": [
+  {
+   "id": "G01",
+   "citation": "12 CFR 3.22",
+   "note": "2026-21706 and its proposal 2026-04089 each amend 3.22 and separately amend 6.2; the 6.2 amendment only cites 3.22 inside quoted text",
+   "expect": {
+    "instruments": {
+     "fr:2026-21706": {
+      "state": "final_effective_date_pending"
+     },
+     "fr:2026-04089": {}
+    },
+    "carried_text_contains": {
+     "fr:2026-21706": "Permitted Payment Stablecoin Issuers",
+     "fr:2026-04089": "Permitted Payment Stablecoin Issuers"
+    },
+    "no_unit_locator_contains": {
+     "fr:2026-21706": ":6.2:",
+     "fr:2026-04089": ":6.2:"
+    },
+    "all_units_target_queried": true
+   }
+  },
+  {
+   "id": "G02",
+   "citation": "12 CFR 6.2",
+   "note": "the genuine 6.2 amendments are retained",
+   "expect": {
+    "instruments": {
+     "fr:2026-21706": {},
+     "fr:2026-04089": {}
+    },
+    "all_units_target_queried": true
+   }
+  },
+  {
+   "id": "G03",
+   "citation": "12 CFR 3.12",
+   "expect": {
+    "instruments": {
+     "fr:2026-08298": {}
+    },
+    "all_units_target_queried": true
+   }
+  },
+  {
+   "id": "G04",
+   "citation": "12 CFR 3.10",
+   "expect": {
+    "all_units_target_queried": true
+   }
+  },
+  {
+   "id": "G05",
+   "citation": "12 CFR 217.22",
+   "expect": {
+    "all_units_target_queried": true
+   }
+  },
+  {
+   "id": "G06",
+   "citation": "12 CFR 324.2",
+   "expect": {
+    "all_units_target_queried": true
+   }
+  },
+  {
+   "id": "G07",
+   "citation": "12 CFR 252.5",
+   "expect": {
+    "all_units_target_queried": true
+   }
+  }
+ ],
+ "relationship_integrity": {
+  "id": "G08",
+  "note": "every amends row traces to an explicit target of its own provision; no references row duplicates an explicit target; nothing is marked reviewed"
+ },
+ "citation_scope": [
+  {
+   "id": "C01",
+   "query": "12 CFR 3.22",
+   "future_nonempty": true
+  },
+  {
+   "id": "C02",
+   "query": "§ 217.12",
+   "future_nonempty": true
+  },
+  {
+   "id": "C03",
+   "query": "12 CFR Part 252",
+   "future_nonempty": true
+  },
+  {
+   "id": "C04",
+   "query": "12 CFR 3.12(c)(1)",
+   "future_nonempty": true
+  },
+  {
+   "id": "C05",
+   "query": "12 CFR 249.10",
+   "future_nonempty": false,
+   "note": "no acquired instrument explicitly amends this section (matches baseline D04); my first draft used 12 CFR 3.1, which the March capital proposals do amend explicitly, so that expectation was wrong"
+  },
+  {
+   "id": "C06",
+   "query": "12 CFR 3.22 and § 217.22",
+   "future_nonempty": true,
+   "parts": [
+    "12:217"
+   ]
+  }
+ ]
+}

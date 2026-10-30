@@ -1,7 +1,7 @@
 """Relational schema for the Phase 1 evidence index (SQLite, standard library)."""
 import sqlite3
 
-SCHEMA_VERSION = "p1-0.1"
+SCHEMA_VERSION = "p1-0.2"
 
 DDL = """
 CREATE TABLE index_meta (key TEXT PRIMARY KEY, value TEXT);
@@ -56,7 +56,14 @@ CREATE TABLE provision (
   fr_page TEXT,
   instruction TEXT,                        -- amendment only: the agency's amendatory instruction, verbatim
   operations TEXT,                         -- JSON, regex signal from the instruction (unreviewed)
-  instruction_sections TEXT,               -- JSON, section numbers named by the instruction (unreviewed)
+  explicit_targets TEXT,                   -- JSON, sections this row's instruction explicitly amends (unreviewed)
+  explicit_parts TEXT,                     -- JSON, parts it explicitly amends (authority citation, "Amend part N")
+  referenced_citations TEXT,               -- JSON, citations named in the instruction but NOT amended
+  unresolved_candidates TEXT,              -- JSON, instructions that might apply but could not be paired explicitly
+  pairing_status TEXT,                     -- explicit | multiple_instructions_same_target | instruction_only |
+                                           -- carried_text_unpaired | instruction_no_explicit_target
+  instruction_targets_all TEXT,            -- JSON, every target the paired instruction(s) name (provenance)
+  instruction_ordinals TEXT,               -- JSON, 1-based position of the paired instruction(s) in the document run
   paragraph_leads TEXT,                    -- JSON, paragraph designators that open the carried text
   UNIQUE (doc_id, locator)
 );
@@ -86,12 +93,12 @@ CREATE TABLE provision_topic (
 CREATE TABLE relationship (
   id INTEGER PRIMARY KEY,
   src_provision_id INTEGER NOT NULL REFERENCES provision(id),
-  rel_type TEXT NOT NULL,                  -- amends | references | uses_definition | defines
+  rel_type TEXT NOT NULL,                  -- amends | amends_candidate | references | uses_definition | defines
   dst_citation TEXT NOT NULL,
   dst_provision_id INTEGER REFERENCES provision(id),   -- NULL when the target is not in the corpus
   basis TEXT NOT NULL,
   source_locator TEXT NOT NULL,
-  review_status TEXT NOT NULL              -- parsed_unreviewed | regex_unreviewed | reviewed
+  review_status TEXT NOT NULL              -- parsed_unreviewed | regex_unreviewed | unresolved_candidate | reviewed
 );
 CREATE INDEX relationship_src ON relationship(src_provision_id);
 CREATE INDEX relationship_dst ON relationship(dst_provision_id);

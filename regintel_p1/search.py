@@ -8,6 +8,7 @@ import json
 import re
 import sqlite3
 from collections import defaultdict
+from itertools import zip_longest
 
 STOP = set("""a an and are as at be by can do does for from has have how if in into is it its of on or that the their
 there this to under what when where which who whom why will with within would must should shall may not any all
@@ -158,31 +159,67 @@ class Index:
                 for r in self.conn.execute(sql, topic_ids + [expr] + params + [k])]
 
     def exact(self, query, k=20, scope="both", parts=None):
-        """Direct lookup when the query names a CFR citation such as '12 CFR 217.11(b)' or '§ 3.12'."""
-        out = []
+        """Direct lookup when the query names a CFR citation such as '12 CFR 217.11(b)' or '§ 3.12'.
+
+        Scope and part filters are applied in SQL before ranking and truncation. `current` returns eCFR baseline
+        provisions of the cited section/part; `future` returns only amendment units whose explicit amends target is
+        the cited section/part (never a baseline record); `both` interleaves the two so neither crowds out the
+        other when truncated to k.
+        """
+        current, future = [], []
         for m in CITE.finditer(query):
             title, part, minor, paras = m.groups()
             section = f"{part}.{minor}" if minor else None
             if not section and not title:
-                continue
-            if section:
-                rows = self.conn.execute(
-                    """SELECT p.id, p.locator FROM provision p WHERE p.section_no=? AND p.kind IN ('paragraph','definition','table','section')
-                       AND (? IS NULL OR p.title_no=?) ORDER BY p.ordinal""", (section, title, title)).fetchall()
-                if paras:
-                    wanted = f"{section}{paras}"
-                    rows = [r for r in rows if r["locator"] == wanted or r["locator"].startswith(wanted + "(")] or rows
-            else:
-                rows = self.conn.execute("SELECT id, locator FROM provision WHERE title_no=? AND part_no=? AND kind='part'",
-                                         (title, part)).fetchall()
-            out += [(r["id"], float(len(rows) - i)) for i, r in enumerate(rows[:k])]
-        if parts:
-            keep = {r[0] for r in self.conn.execute(
-                f"SELECT id FROM provision p WHERE id IN ({','.join('?' * len(out))}) AND "
-                + "(" + " OR ".join("(title_no=? AND part_no=?)" for _ in parts) + ")",
-                [o[0] for o in out] + [x for s in parts for x in s.split(":")])} if out else set()
-            out = [o for o in out if o[0] in keep]
-        return out
+                continue  # a bare '§ 12' is not a citation
+            if scope in ("current", "both"):
+                current += self._exact_current(title, part, section, paras, parts)
+            if scope in ("future", "both"):
+                future += self._exact_future(title, part, section, parts)
+        merged, seen = [], set()
+        for pair in zip_longest(current, future):
+            for pid in pair:
+                if pid is not None and pid not in seen:
+                    seen.add(pid)
+                    merged.append(pid)
+        return [(pid, float(len(merged) - i)) for i, pid in enumerate(merged[:k])]
+
+    def _exact_current(self, title, part, section, paras, parts):
+        where, params = self._where("current", parts)
+        if section:
+            cond, cparams = "p.section_no=? AND p.kind IN ('paragraph','definition','table','section')", [section]
+        else:
+            cond, cparams = "p.part_no=? AND p.kind='part'", [part]
+        if title:
+            cond += " AND p.title_no=?"
+            cparams.append(title)
+        rows = self.conn.execute(
+            f"""SELECT p.id, p.locator FROM provision p JOIN source_document d ON d.id=p.doc_id
+                LEFT JOIN rulemaking r ON r.doc_key=d.doc_key WHERE {where} AND {cond} ORDER BY p.ordinal""",
+            params + cparams).fetchall()
+        if section and paras:
+            wanted = f"{section}{paras}"
+            narrowed = [r for r in rows if r["locator"] == wanted or r["locator"].startswith(wanted + "(")]
+            rows = narrowed or rows
+        return [r["id"] for r in rows]
+
+    def _exact_future(self, title, part, section, parts):
+        where, params = self._where("future", parts)
+        if section and title:
+            dst, dparams = "rel.dst_citation = ?", [f"{title} CFR {section}"]
+        elif section:
+            dst, dparams = "rel.dst_citation LIKE ?", [f"% CFR {section}"]
+        elif title:
+            dst, dparams = "(rel.dst_citation = ? OR rel.dst_citation LIKE ?)", [f"{title} CFR Part {part}", f"{title} CFR {part}.%"]
+        else:
+            return []
+        rows = self.conn.execute(
+            f"""SELECT DISTINCT p.id, p.ordinal FROM provision p JOIN source_document d ON d.id=p.doc_id
+                LEFT JOIN rulemaking r ON r.doc_key=d.doc_key
+                JOIN relationship rel ON rel.src_provision_id=p.id AND rel.rel_type='amends'
+                WHERE {where} AND p.kind='amendment' AND {dst} ORDER BY r.publication_date DESC, p.ordinal""",
+            params + dparams).fetchall()
+        return [r["id"] for r in rows]
 
     def hybrid(self, query, k=50, scope="both", parts=None):
         runs = [self.bm25(query, k, scope, parts), self.topic_guided(query, k, scope, parts),
@@ -216,6 +253,9 @@ class Index:
             out["fr_page"] = row["fr_page"]
             if row["kind"] == "amendment":
                 out["instruction"] = row["instruction"]
+                out["explicit_targets"] = json.loads(row["explicit_targets"] or "[]")
+                out["explicit_parts"] = json.loads(row["explicit_parts"] or "[]")
+                out["pairing_status"] = row["pairing_status"]
         else:
             out["status"] = {"state": "current_baseline_requires_operative_effect_review",
                              "publisher_issue_date": row["publisher_issue_date"],
@@ -281,7 +321,7 @@ class Index:
                    WHERE p.title_no=? AND p.section_no=? AND p.kind IN ('section','paragraph','definition','table')
                    ORDER BY p.ordinal""", (title, section)).fetchall()
             amend = self.conn.execute(
-                """SELECT DISTINCT p.id FROM relationship r JOIN provision p ON p.id=r.src_provision_id
+                """SELECT DISTINCT r.src_provision_id FROM relationship r
                    WHERE r.rel_type='amends' AND r.dst_citation=?""", (f"{title} CFR {section}",)).fetchall()
         else:
             base_rows = self.conn.execute(
@@ -289,8 +329,9 @@ class Index:
                    JOIN source_document d ON d.id=p.doc_id WHERE p.title_no=? AND p.part_no=? AND p.kind='part'""",
                 (title, part)).fetchall()
             amend = self.conn.execute(
-                """SELECT DISTINCT p.id FROM provision p WHERE p.kind='amendment' AND p.title_no=? AND p.part_no=?""",
-                (title, part)).fetchall()
+                """SELECT DISTINCT r.src_provision_id FROM relationship r
+                   WHERE r.rel_type='amends' AND (r.dst_citation=? OR r.dst_citation LIKE ?)""",
+                (f"{title} CFR Part {part}", f"{title} CFR {part}.%")).fetchall()
         if not base_rows and section:  # target may sit inside a reserved/range section such as 3.4-3.9
             for r in self.conn.execute("SELECT DISTINCT section_no FROM provision WHERE title_no=? AND part_no=? AND section_no LIKE '%-%'",
                                        (title, part)):
@@ -315,7 +356,8 @@ class Index:
                                                    "source_sha256": ev["source_sha256"], "source_url": ev["source_url"],
                                                    "units": []})
             g["units"].append({"locator": ev["locator"], "fr_page": ev.get("fr_page"), "instruction": ev.get("instruction"),
-                               "carried_text": ev["text"]})
+                               "carried_text": ev["text"], "explicit_targets": ev.get("explicit_targets"),
+                               "explicit_parts": ev.get("explicit_parts"), "pairing_status": ev.get("pairing_status")})
         instruments = sorted(grouped.values(), key=lambda g: self._rulemaking[g["doc_key"]]["publication_date"] or "")
         for g in instruments:
             rm = self._rulemaking[g["doc_key"]]
@@ -333,7 +375,17 @@ class Index:
                                       (g["doc_key"], g["doc_key"])).fetchall()
             g["candidate_links"] = [{"other": r["b_doc_key"] if r["a_doc_key"] == g["doc_key"] else r["a_doc_key"],
                                      "rel": r["rel_type"], "basis": r["basis"], "review": r["review_status"]} for r in links]
+        candidates = []
+        like = (f"{title} CFR {section}",) if section else (f"{title} CFR {part}.%",)
+        op = "=" if section else "LIKE"
+        for r in self.conn.execute(
+                f"""SELECT DISTINCT d.doc_key, p.locator, p.pairing_status, p.unresolved_candidates FROM relationship rel
+                    JOIN provision p ON p.id=rel.src_provision_id JOIN source_document d ON d.id=p.doc_id
+                    WHERE rel.rel_type='amends_candidate' AND rel.dst_citation {op} ?""", like):
+            candidates.append({"doc_key": r["doc_key"], "locator": r["locator"], "pairing_status": r["pairing_status"],
+                               "candidate_instructions": json.loads(r["unresolved_candidates"] or "[]")})
         return {"citation": citation, "as_of": self.as_of, "baseline": baseline, "instruments": instruments,
-                "applicability_status": "not_assessed",
+                "unresolved_candidates": candidates, "applicability_status": "not_assessed",
                 "notes": ["Instruments are independent; no cumulative future rulebook is constructed.",
+                          "Only explicit amendment targets appear as instruments; unpaired or ambiguous matches are listed under unresolved_candidates.",
                           "baseline_relation compares publisher dates only; confirm against the text before relying on it."]}

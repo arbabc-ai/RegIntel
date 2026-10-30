@@ -83,7 +83,7 @@ class FedRegParserTests(unittest.TestCase):
         s1 = next(u for u in units if u["section_no"] == "3.1")
         self.assertTrue(s1["instruction"].startswith("2. Amend § 3.1 by:"))
         self.assertIn("Revising paragraph (a)", s1["instruction"])  # lettered sub-step merged
-        self.assertEqual(s1["instruction_sections"], ["3.1"])
+        self.assertEqual(s1["explicit_targets"], ["3.1"])
         s2 = next(u for u in units if u["section_no"] == "3.2")
         self.assertIn("3. Amend § 3.2", s2["instruction"])
         self.assertEqual(s2["paragraph_leads"], ["(a)"])

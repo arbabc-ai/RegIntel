@@ -10,7 +10,7 @@ rather than silently counted as a miss.
 import json
 from collections import defaultdict
 
-from .search import Index
+from .search import CITE, Index
 
 RETRIEVERS = ("bm25", "topic", "hybrid")
 CUTOFFS = (1, 3, 5, 10)
@@ -161,14 +161,111 @@ def invariant_failures(out, scope):
     return failures
 
 
-def run(index, questions_path):
+def _all_units_target(out, citation):
+    """Every unit of every instrument must explicitly target the queried section (or part)."""
+    m = CITE.search(citation)
+    title, part, minor, _ = m.groups()
+    bad = []
+    for g in out["instruments"]:
+        for u in g["units"]:
+            if minor:
+                ok = f"{part}.{minor}" in (u["explicit_targets"] or [])
+            else:
+                ok = part in (u["explicit_parts"] or []) or any(
+                    t.startswith(part + ".") for t in (u["explicit_targets"] or []))
+            if not ok:
+                bad.append(f"{g['doc_key']} {u['locator']} targets {u['explicit_targets']}/{u['explicit_parts']}")
+    return bad
+
+
+def check_boundary_delta(index, item):
+    out, exp, failures = index.delta(item["citation"]), item["expect"], []
+    got = {g["doc_key"]: g for g in out["instruments"]}
+    for key, want in exp.get("instruments", {}).items():
+        if key not in got:
+            failures.append(f"missing instrument {key}")
+        elif "state" in want and got[key]["status"]["state"] != want["state"]:
+            failures.append(f"{key} state {got[key]['status']['state']}")
+    for key, needle in exp.get("carried_text_contains", {}).items():
+        if key in got and not any(needle in u["carried_text"] for u in got[key]["units"]):
+            failures.append(f"{key} lost its genuine amendment text '{needle}'")
+    for key, needle in exp.get("no_unit_locator_contains", {}).items():
+        if key in got and any(needle in u["locator"] for u in got[key]["units"]):
+            failures.append(f"{key} carries a unit from another section ({needle})")
+    if exp.get("all_units_target_queried"):
+        failures += _all_units_target(out, item["citation"])
+    return {"id": item["id"], "citation": item["citation"], "passed": not failures, "failures": failures,
+            "instruments_found": sorted(got), "unresolved_candidates": len(out["unresolved_candidates"])}
+
+
+def check_relationship_integrity(index, item):
+    failures, c = [], index.conn
+    rows = c.execute("SELECT id, title_no, explicit_targets, explicit_parts FROM provision WHERE kind='amendment'").fetchall()
+    explicit = {r["id"]: {f"{r['title_no']} CFR {t}" for t in json.loads(r["explicit_targets"] or "[]")}
+                | {f"{r['title_no']} CFR Part {p}" for p in json.loads(r["explicit_parts"] or "[]")} for r in rows}
+    for r in c.execute("SELECT src_provision_id, rel_type, dst_citation, review_status FROM relationship "
+                       "WHERE src_provision_id IN (SELECT id FROM provision WHERE kind='amendment')"):
+        cites = explicit[r["src_provision_id"]]
+        if r["rel_type"] == "amends" and r["dst_citation"] not in cites:
+            failures.append(f"amends {r['dst_citation']} is not an explicit target of provision {r['src_provision_id']}")
+        if r["rel_type"] == "references" and r["dst_citation"] in cites:
+            failures.append(f"references duplicates explicit target {r['dst_citation']}")
+        if r["review_status"] == "reviewed":
+            failures.append("a relationship is marked reviewed")
+    return {"id": item["id"], "passed": not failures, "failures": failures[:10], "violations": len(failures)}
+
+
+def check_citation_scope(index, item):
+    """Citation queries must honor scope and part filters in every retriever that uses the exact lookup."""
+    q, parts, failures = item["query"], item.get("parts"), []
+    for mode in ("exact", "hybrid"):
+        for scope in ("current", "future", "both"):
+            out = index.answer(q, mode=mode, scope=scope, parts=parts, k=20)
+            res = out["results"]
+            tag = f"{mode}/{scope}"
+            for r in res:
+                state = r["status"]["state"]
+                if scope == "future" and (state.startswith("current") or r["kind"] not in ("amendment", "fr_preamble", "fr_table")):
+                    failures.append(f"{tag}: current-baseline record {r['citation']}")
+                if scope == "current" and not state.startswith("current_baseline"):
+                    failures.append(f"{tag}: future record {r['citation']}")
+                if parts:
+                    row = index.conn.execute("SELECT title_no, part_no FROM provision WHERE id=?", (r["provision_id"],)).fetchone()
+                    if f"{row['title_no']}:{row['part_no']}" not in parts:
+                        failures.append(f"{tag}: part filter violated by {r['citation']}")
+            if scope == "future" and mode == "exact" and item.get("future_nonempty") is True and not res:
+                failures.append(f"{tag}: no future records")
+            if scope == "future" and mode == "exact" and item.get("future_nonempty") is False and res:
+                failures.append(f"{tag}: unexpected future records")
+        small = index.exact(q, 2, "both", parts)
+        kinds = {index.evidence(pid, with_context=False)["kind"] == "amendment" for pid, _ in small}
+        if item.get("future_nonempty") and index.exact(q, 50, "future", parts) and index.exact(q, 50, "current", parts) \
+                and kinds != {True, False}:
+            failures.append("both/k=2: one scope crowded out the other")
+        break
+    return {"id": item["id"], "query": q, "passed": not failures, "failures": failures[:10]}
+
+
+def run_regressions(index, path):
+    spec = json.loads(open(path).read())
+    out = {"version": spec["version"], "task": spec["task"],
+           "delta": [check_boundary_delta(index, d) for d in spec["delta"]],
+           "relationship_integrity": check_relationship_integrity(index, spec["relationship_integrity"]),
+           "citation_scope": [check_citation_scope(index, c) for c in spec["citation_scope"]]}
+    out["passed"] = (all(d["passed"] for d in out["delta"]) and out["relationship_integrity"]["passed"]
+                     and all(c["passed"] for c in out["citation_scope"]))
+    return out
+
+
+def run(index, questions_path, regressions_path=None):
     spec = json.loads(open(questions_path).read())
     per_item, summary = run_retrieval(index, spec["retrieval"])
     deltas = [check_delta(index, d) for d in spec["delta"]]
     statuses = [check_status(index, s) for s in spec["status"]]
     filters = [(r["id"], r["retrievers"][n]["filter_respected"], n) for r in per_item for n in RETRIEVERS
                if "filter_respected" in r["retrievers"][n]]
-    return {"questions_version": spec["version"], "as_of": index.as_of, "index": index.meta,
+    regressions = run_regressions(index, regressions_path) if regressions_path else None
+    return {"questions_version": spec["version"], "as_of": index.as_of, "index": index.meta, "regressions": regressions,
             "retrieval_summary": summary, "retrieval_items": per_item, "delta": deltas, "status": statuses,
             "filter_checks": [{"id": i, "retriever": n, "respected": ok} for i, ok, n in filters]}
 
@@ -198,5 +295,14 @@ def render(report):
     lines.append("Status / refusal checks")
     for s in report["status"]:
         lines.append(f"  {s['id']} {'PASS' if s['passed'] else 'FAIL'} status={s['status']} results={s['results']} {'; '.join(s['failures'])}")
+    reg = report.get("regressions")
+    if reg:
+        lines.append(f"Boundary regressions ({reg['task']}, {reg['version']}): {'PASS' if reg['passed'] else 'FAIL'}")
+        for d in reg["delta"]:
+            lines.append(f"  {d['id']} {'PASS' if d['passed'] else 'FAIL'} delta {d['citation']} instruments={len(d['instruments_found'])} candidates={d['unresolved_candidates']} {'; '.join(d['failures'])}")
+        ri = reg["relationship_integrity"]
+        lines.append(f"  {ri['id']} {'PASS' if ri['passed'] else 'FAIL'} relationship integrity violations={ri['violations']} {'; '.join(ri['failures'])}")
+        for c in reg["citation_scope"]:
+            lines.append(f"  {c['id']} {'PASS' if c['passed'] else 'FAIL'} citation scope '{c['query']}' {'; '.join(c['failures'])}")
     lines.append("Filter checks: " + ", ".join(f"{c['id']}/{c['retriever']}={'ok' if c['respected'] else 'VIOLATED'}" for c in report["filter_checks"]))
     return "\n".join(lines)

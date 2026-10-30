@@ -31,14 +31,19 @@ def insert_provision(conn, doc_id, p):
     cur = conn.execute(
         """INSERT INTO provision (doc_id, locator, citation, kind, title_no, part_no, section_no, subpart, heading,
            context, text, defined_term, parent_locator, ordinal, char_start, char_end, fr_page, instruction,
-           operations, instruction_sections, paragraph_leads)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+           operations, explicit_targets, explicit_parts, referenced_citations, unresolved_candidates,
+           pairing_status, instruction_targets_all, instruction_ordinals, paragraph_leads)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
         (doc_id, p["locator"], p.get("citation"), p["kind"], p.get("title_no"), p.get("part_no"),
          p.get("section_no"), p.get("subpart"), p.get("heading"), p.get("context"), p["text"],
          p.get("defined_term"), p.get("parent_locator"), p.get("ordinal"), p.get("char_start"), p.get("char_end"),
          p.get("fr_page"), p.get("instruction"),
          json.dumps(p["operations"]) if "operations" in p else None,
-         json.dumps(p["instruction_sections"]) if "instruction_sections" in p else None,
+         *(json.dumps(p[k]) if k in p else None for k in (
+             "explicit_targets", "explicit_parts", "referenced_citations", "unresolved_candidates")),
+         p.get("pairing_status"),
+         json.dumps(p["instruction_targets_all"]) if "instruction_targets_all" in p else None,
+         json.dumps(p["instruction_ordinals"]) if "instruction_ordinals" in p else None,
          json.dumps(p["paragraph_leads"]) if "paragraph_leads" in p else None))
     pid = cur.lastrowid
     if p["kind"] not in FTS_SKIP_KINDS:
@@ -97,7 +102,11 @@ def build(corpus_dir, db_path, as_of, log=print):
                     "title_no": u["title_no"], "part_no": u["part_no"], "section_no": u["section_no"],
                     "heading": u["subject"], "context": u["subject"] or "", "text": u["text"] or u["instruction"],
                     "instruction": u["instruction"], "operations": u["operations"],
-                    "instruction_sections": u["instruction_sections"], "paragraph_leads": u["paragraph_leads"],
+                    "explicit_targets": u["explicit_targets"], "explicit_parts": u["explicit_parts"],
+                    "referenced_citations": u["referenced_citations"],
+                    "unresolved_candidates": u["unresolved_candidates"], "pairing_status": u["pairing_status"],
+                    "instruction_targets_all": u["instruction_targets_all"],
+                    "instruction_ordinals": u["instruction_ordinals"], "paragraph_leads": u["paragraph_leads"],
                     "fr_page": u["fr_page"], "ordinal": 100000 + n})
             stats = {**stats, "provisions": len(provs)}
         cur = conn.execute(
@@ -150,35 +159,68 @@ def build(corpus_dir, db_path, as_of, log=print):
 
 
 def link_amendments(conn, section_ids, range_ids, part_ids, counts):
-    n = resolved = 0
-    rows = conn.execute("SELECT id, title_no, part_no, section_no, instruction_sections, locator FROM provision "
-                        "WHERE kind='amendment'").fetchall()
-    for pid, title, part, section, instr_sections, locator in rows:
-        targets = []
-        if section:
-            targets.append((title, section, "SECTNO element of the amendment text"))
-        for ref in json.loads(instr_sections or "[]"):
-            if (title, ref) not in [(t[0], t[1]) for t in targets]:
-                targets.append((title, ref, "section named in amendatory instruction"))
-        if not targets and title and part:
-            targets.append((title, None, "part-level amendment"))
-        for t_title, t_sec, basis in targets:
-            if not t_title:
-                continue
-            if t_sec:
-                dst, cite = section_ids.get((t_title, t_sec)), f"{t_title} CFR {t_sec}"
-                if dst is None and (t_title, t_sec) in range_ids:
-                    dst, span = range_ids[(t_title, t_sec)]
-                    basis += f" (resolved to range section {span})"
-            else:
-                dst, cite = part_ids.get((t_title, part)), f"{t_title} CFR Part {part}"
+    """amends only from explicit targets; citations merely referenced stay `references`; ambiguity stays a candidate."""
+    n = resolved = refs = cands = 0
+
+    def resolve(title, section):
+        dst = section_ids.get((title, section))
+        note = ""
+        if dst is None and (title, section) in range_ids:
+            dst, span = range_ids[(title, section)]
+            note = f" (resolved to range section {span})"
+        return dst, note
+
+    rows = conn.execute("SELECT id, title_no, part_no, section_no, locator, pairing_status, explicit_targets, "
+                        "explicit_parts, referenced_citations, unresolved_candidates, instruction_targets_all "
+                        "FROM provision WHERE kind='amendment'").fetchall()
+    for pid, title, part, section, locator, status, targets, parts, refs_json, cand_json, all_json in rows:
+        if not title:
+            continue
+        named = set(json.loads(all_json or "{}").get("targets", []))
+        for sec in json.loads(targets or "[]"):
+            dst, note = resolve(title, sec)
+            how = ("explicit target of the paired amendatory instruction" if sec in named
+                   else "inside a range named by the paired instruction")
             conn.execute("INSERT INTO relationship (src_provision_id, rel_type, dst_citation, dst_provision_id, basis, "
                          "source_locator, review_status) VALUES (?,?,?,?,?,?,?)",
-                         (pid, "amends", cite, dst, basis, locator, "parsed_unreviewed"))
+                         (pid, "amends", f"{title} CFR {sec}", dst, f"{how} [{status}]{note}", locator,
+                          "parsed_unreviewed"))
             n += 1
             resolved += dst is not None
+        for prt in json.loads(parts or "[]"):
+            dst = part_ids.get((title, prt))
+            conn.execute("INSERT INTO relationship (src_provision_id, rel_type, dst_citation, dst_provision_id, basis, "
+                         "source_locator, review_status) VALUES (?,?,?,?,?,?,?)",
+                         (pid, "amends", f"{title} CFR Part {prt}", dst,
+                          f"explicit part-level target of the paired instruction [{status}]", locator,
+                          "parsed_unreviewed"))
+            n += 1
+            resolved += dst is not None
+        for ref in json.loads(refs_json or "[]"):
+            dst, note = resolve(title, ref["section"])
+            conn.execute("INSERT INTO relationship (src_provision_id, rel_type, dst_citation, dst_provision_id, basis, "
+                         "source_locator, review_status) VALUES (?,?,?,?,?,?,?)",
+                         (pid, "references", f"{title} CFR {ref['section']}", dst,
+                          "citation inside amendatory instruction, not an amendment target"
+                          + (" (quoted text)" if ref["quoted"] else "") + note, locator, "regex_unreviewed"))
+            refs += 1
+        candidate_sections = set()
+        if status == "carried_text_unpaired" and section:
+            candidate_sections.add(section)
+        for cand in json.loads(cand_json or "[]"):
+            candidate_sections.update(cand.get("candidate_sections", []))
+        for sec in sorted(candidate_sections):
+            dst, note = resolve(title, sec)
+            conn.execute("INSERT INTO relationship (src_provision_id, rel_type, dst_citation, dst_provision_id, basis, "
+                         "source_locator, review_status) VALUES (?,?,?,?,?,?,?)",
+                         (pid, "amends_candidate", f"{title} CFR {sec}", dst,
+                          f"could not be paired explicitly [{status}]; see unresolved_candidates{note}", locator,
+                          "unresolved_candidate"))
+            cands += 1
     counts["amends_relationships"] = n
     counts["amends_resolved_to_acquired_section"] = resolved
+    counts["amendment_instruction_references"] = refs
+    counts["amends_candidates_unresolved"] = cands
 
 
 def link_ecfr_text(conn, section_ids, definitions, ecfr_rows, counts):

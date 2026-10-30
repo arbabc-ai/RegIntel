@@ -34,6 +34,7 @@ def main(argv=None):
     d.add_argument("citation", help='e.g. "12 CFR 3.22" or "12 CFR Part 217"')
     e = sub.add_parser("eval")
     e.add_argument("--questions", default=str(Path(__file__).resolve().parent.parent / "eval" / "phase1" / "questions.json"))
+    e.add_argument("--regressions", default=str(Path(__file__).resolve().parent.parent / "eval" / "phase1" / "regressions.json"))
     e.add_argument("--out", help="write full JSON results here")
     args = ap.parse_args(argv)
 
@@ -52,7 +53,7 @@ def main(argv=None):
         print(json.dumps(index.delta(args.citation), indent=1, ensure_ascii=False))
     elif args.cmd == "eval":
         from regintel_p1 import evaluate
-        report = evaluate.run(index, args.questions)
+        report = evaluate.run(index, args.questions, args.regressions)
         print(evaluate.render(report))
         if args.out:
             Path(args.out).write_text(json.dumps(report, indent=1, ensure_ascii=False))
