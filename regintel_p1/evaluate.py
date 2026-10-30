@@ -422,10 +422,11 @@ def check_delta_precision(index, item):
     keys = [g["doc_key"] for g in d["instruments"]]
     if len(keys) != len(set(keys)):
         failures.append("instruments are not independent")
-    cres = index.resolve_citations(item["citation"], "current")[0]
-    fres = index.resolve_citations(item["citation"], "future")[0]
-    if cur["resolved"] != cres["resolved"] or fut["resolved"] != fres["resolved"] and d["requested_precision"] == "paragraph":
-        failures.append("delta precision disagrees with resolve_citations")
+    if d["requested_precision"] == "paragraph":  # section/part deltas also resolve numeric minors inside reserved ranges
+        cres = index.resolve_citations(item["citation"], "current")[0]
+        fres = index.resolve_citations(item["citation"], "future")[0]
+        if cur["resolved"] != cres["resolved"] or fut["resolved"] != fres["resolved"]:
+            failures.append("delta precision disagrees with resolve_citations")
     return {"id": item["id"], "citation": item["citation"], "passed": not failures, "failures": failures[:8],
             "evidence_status": d["evidence_status"],
             "supported": [k for k, g in inst.items() if (g.get("paragraph_precision") or {}).get("resolved")],
