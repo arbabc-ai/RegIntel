@@ -278,15 +278,20 @@ def check_citation_scope(index, item):
 
 
 def check_status_regression(index, item):
-    out = index.answer(item["query"], mode="hybrid", scope=item.get("scope", "both"), k=10)
+    out = index.answer(item["query"], mode="hybrid", scope=item.get("scope", "both"), parts=item.get("parts"), k=10)
     failures = []
-    if out["status"] != item["expect_status"]:
+    if item.get("expect_status") and out["status"] != item["expect_status"]:
         failures.append(f"status {out['status']} != {item['expect_status']}")
+    if item.get("expect_status_not") and out["status"] == item["expect_status_not"]:
+        failures.append(f"status must not be {item['expect_status_not']}")
     if item.get("gap_topic") and item["gap_topic"] not in [g["topic"] for g in out["coverage_gaps"]]:
         failures.append(f"coverage gap {item['gap_topic']} not reported")
+    if item.get("gap_coverage") and item["gap_coverage"] not in [g["coverage"] for g in out["coverage_gaps"]]:
+        failures.append(f"no coverage gap with coverage '{item['gap_coverage']}'")
     failures += invariant_failures(out, item.get("scope", "both"))
-    return {"id": item["id"], "query": item["query"], "passed": not failures, "failures": failures,
-            "status": out["status"], "results": len(out["results"])}
+    return {"id": item["id"], "query": item["query"], "scope": item.get("scope", "both"), "parts": item.get("parts"),
+            "passed": not failures, "failures": failures, "status": out["status"], "results": len(out["results"]),
+            "coverage_gaps": [(g["topic"], g["coverage"]) for g in out["coverage_gaps"]]}
 
 
 def run_regressions(index, path):

@@ -217,7 +217,8 @@ class CompletenessIndexTests(unittest.TestCase):
         self.assertEqual(out["applicability_status"], "not_assessed")
 
     def test_fully_acquired_topics_stay_evidence_found_and_unacquired_only_stays_missing(self):
-        self.assertEqual(self.index.answer("minimum capital", scope="current")["status"], "evidence_found")
+        self.assertEqual(self.index.answer("minimum common equity tier 1 capital ratio", scope="current")["status"],
+                         "evidence_found")
         self.assertEqual(self.index.answer("CECL under ASC 326")["status"], "missing_evidence")
         self.assertEqual(self.index.answer("ASC 326 CECL and the community bank leverage ratio minimum capital")["status"],
                          "partial_evidence")

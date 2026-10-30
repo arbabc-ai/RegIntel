@@ -1,6 +1,6 @@
 {
- "version": "p1-regress-0.2",
- "task": "S7-P1-EVIDENCE-BOUNDARIES-01 + S7-P1-EVIDENCE-COMPLETENESS-02",
+ "version": "p1-regress-0.3",
+ "task": "S7-P1-EVIDENCE-BOUNDARIES-01 + S7-P1-EVIDENCE-COMPLETENESS-02 + S7-P1-COVERAGE-GUARDS-03",
  "note": "Deterministic regression checks over the acquired corpus for amendment-target integrity and retrieval scope filtering. Kept separate from questions.json so the 37-item baseline stays frozen. A pass means the contract holds, not that any rule applies to a bank.",
  "delta": [
   {
@@ -216,7 +216,8 @@
   }
  ],
  "changelog": [
-  "v0.2 (COMPLETENESS-02): citation-scope checks now exercise exact AND hybrid for every scope (v0.1 stopped after the exact mode) and require nonempty current results for acquired citations; added range, part-lookup and partial-coverage checks. G01-G08 are unchanged."
+  "v0.2 (COMPLETENESS-02): citation-scope checks now exercise exact AND hybrid for every scope (v0.1 stopped after the exact mode) and require nonempty current results for acquired citations; added range, part-lookup and partial-coverage checks. G01-G08 are unchanged.",
+  "v0.3 (COVERAGE-GUARDS-03): status checks P04-P12 added for queries that match no catalog topic (coverage unassessed), the LCR/NSFR partial-coverage topics, and citation-only controls. Earlier checks unchanged."
  ],
  "status": [
   {
@@ -240,6 +241,83 @@
    "scope": "current",
    "expect_status": "evidence_found",
    "note": "fully acquired topic stays evidence_found"
+  },
+  {
+   "id": "P04",
+   "query": "New York lending limits",
+   "scope": "both",
+   "expect_status": "partial_evidence",
+   "gap_topic": "none_matched",
+   "gap_coverage": "unassessed",
+   "note": "state law is not acquired but no catalog synonym matches; coverage must read unassessed, not found"
+  },
+  {
+   "id": "P05",
+   "query": "Texas minimum capital",
+   "scope": "both",
+   "expect_status": "partial_evidence",
+   "gap_topic": "none_matched",
+   "gap_coverage": "unassessed"
+  },
+  {
+   "id": "P06",
+   "query": "How should a bank recognize expected loan losses?",
+   "scope": "both",
+   "expect_status": "partial_evidence",
+   "gap_topic": "none_matched",
+   "gap_coverage": "unassessed",
+   "note": "an accounting question; ASC is not acquired but the catalog synonyms do not match this phrasing"
+  },
+  {
+   "id": "P07",
+   "query": "liquidity coverage ratio requirements for a national bank",
+   "scope": "both",
+   "expect_status": "partial_evidence",
+   "gap_topic": "liquidity_lcr",
+   "gap_coverage": "partial",
+   "note": "only Fed Part 249 acquired; OCC/FDIC sources missing; no applicability inferred"
+  },
+  {
+   "id": "P08",
+   "query": "net stable funding ratio requirements for an FDIC supervised bank",
+   "scope": "both",
+   "expect_status": "partial_evidence",
+   "gap_topic": "liquidity_nsfr",
+   "gap_coverage": "partial"
+  },
+  {
+   "id": "P09",
+   "query": "12 CFR 3.22",
+   "scope": "current",
+   "expect_status": "evidence_found",
+   "note": "positive control: citation-only query resolving in scope"
+  },
+  {
+   "id": "P10",
+   "query": "12 CFR 3.22",
+   "scope": "future",
+   "expect_status": "evidence_found",
+   "note": "positive control: citation-only, future scope resolves to explicit amendments"
+  },
+  {
+   "id": "P11",
+   "query": "12 CFR 3.22",
+   "scope": "current",
+   "parts": [
+    "12:217"
+   ],
+   "expect_status_not": "evidence_found",
+   "note": "negative control: the part filter excludes the cited section; lexical hits must not establish coverage"
+  },
+  {
+   "id": "P12",
+   "query": "12 CFR 3.22",
+   "scope": "future",
+   "parts": [
+    "12:217"
+   ],
+   "expect_status_not": "evidence_found",
+   "note": "negative control, future scope"
   }
  ]
 }

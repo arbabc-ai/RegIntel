@@ -60,6 +60,16 @@ def terms_of(query):
     return [w.lower() for w in words if w.lower() not in STOP and len(w) > 1]
 
 
+CITATION_WORDS = {"section", "sections", "cfr", "part", "parts", "title"}
+
+
+def citation_only(query):
+    """True when the query is nothing but CFR citations (e.g. `12 CFR 3.22`, `§ 217.12`) and filler words."""
+    if not CITE.search(query):
+        return False
+    return not [w for w in terms_of(CITE.sub(" ", query)) if w not in CITATION_WORDS]
+
+
 def fts_expression(terms):
     if not terms:
         return None
@@ -319,8 +329,10 @@ class Index:
         """Evidence bundle. `status` is evidence_found | partial_evidence | missing_evidence.
 
         missing_evidence: the query names only topics whose sources are not acquired (no results returned).
-        partial_evidence: results exist but a matched topic is `not_acquired` (alongside acquired ones) or `partial`;
-        the gaps are reported in `coverage_gaps`, so the results must not be read as complete for that topic.
+        partial_evidence: results exist but a matched topic is `not_acquired` (alongside acquired ones) or `partial`,
+        or no catalog topic matched (coverage `unassessed`); the gaps are reported in `coverage_gaps`, so the results
+        must not be read as complete. evidence_found requires every matched topic fully acquired, or a citation-only
+        query whose exact lookup resolves in the requested scope and part filter.
         """
         topic_hits = self.match_topics(query)
         gaps = [{"topic": t["id"], "coverage": t["coverage"], "note": t["coverage_note"]}
@@ -329,10 +341,20 @@ class Index:
         only_blocked = bool(blocked) and len(blocked) == len(topic_hits) and not self.exact(query)
         results = [] if only_blocked else [self.evidence(pid) for pid, _ in self.retrieve(query, mode, k, scope, parts)]
         partial = [t for t, _ in topic_hits if t["coverage"] == "partial"]
+        # A citation-only query is self-describing: it resolves to named provisions in the requested scope and part
+        # filter, so it needs no topic. Any other query that matches no catalog topic has unassessed source
+        # coverage, and a lexical hit alone does not establish that the sources it needs are acquired.
+        resolved_citation = (not topic_hits and citation_only(query)
+                             and bool(self.exact(query, 1, scope, parts)))
+        unassessed = not topic_hits and not resolved_citation
+        if unassessed:
+            gaps.append({"topic": "none_matched", "coverage": "unassessed",
+                         "note": "No catalog topic matched this query, so source coverage is unassessed. A lexical hit "
+                                 "does not show that the sources needed to answer it are acquired."})
         if not results:
             status = "missing_evidence"
-        elif blocked or partial:
-            status = "partial_evidence"   # results exist, but a matched topic's source coverage is incomplete
+        elif blocked or partial or unassessed:
+            status = "partial_evidence"   # results exist, but a matched topic's coverage is incomplete or unassessed
         else:
             status = "evidence_found"
         return {

@@ -176,7 +176,9 @@ class BuildSearchTests(unittest.TestCase):
 
     def test_search_scopes_and_applicability(self):
         cur = self.index.answer("minimum capital", scope="current")
-        self.assertEqual(cur["status"], "evidence_found")
+        # no catalog topic matches this lexical-only query, so coverage is unassessed (S7-P1-COVERAGE-GUARDS-03)
+        self.assertEqual(cur["status"], "partial_evidence")
+        self.assertIn("none_matched", [g["topic"] for g in cur["coverage_gaps"]])
         self.assertTrue(all(r["status"]["state"].startswith("current_baseline") for r in cur["results"]))
         fut = self.index.answer("revised minimum capital text", scope="future")
         self.assertTrue(fut["results"])
