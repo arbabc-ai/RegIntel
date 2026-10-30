@@ -154,19 +154,44 @@ def expand_shorthand(previous, designator):
     return None
 
 
+DESIGNATOR_SPACES = re.compile(r"\(\s*([A-Za-z0-9]{1,8})\s*\)")
+FRAGMENT_AFTER = re.compile(r"\s*\(\s*([A-Za-z0-9]{1,6})(?:\s*\)|(?![A-Za-z0-9]))")
+
+
+def parsing_view(text):
+    """A normalized copy of instruction text used only for pattern matching.
+
+    Whitespace inside a designator (`( 1 )`, `( xiii )`, from newlines or tabs around inline XML emphasis) is removed so
+    the designator is read whole. The stored instruction, the source bytes and their hashes are never altered.
+    """
+    return DESIGNATOR_SPACES.sub(r"(\1)", text)
+
+
+def incomplete_after(view, position):
+    """True when a designator-like fragment follows a path (`(C)(1` unclosed, or `(C) (1)` set apart by whitespace).
+
+    A path followed by such a fragment is a valid prefix of something that was not read to its end, so it is not
+    accepted as an explicitly named parent: the sequence is incomplete or ambiguous and stays unresolved.
+    """
+    m = FRAGMENT_AFTER.match(view, position)
+    return bool(m and designator_classes(m.group(1)))
+
+
 def named_paragraph_paths(text):
     """Complete paragraph paths an instruction names as objects of an action, e.g. `(c)(1)`, `(a)(2)(i)`, `(i)`.
 
-    Paths written out in full count. A bare designator after a path in the same list is expanded only where the CFR
+    Whitespace inside a designator (from inline-emphasis markup) is normalized in a parsing view only. Paths written out in full count. A bare designator after a path in the same list is expanded only where the CFR
     hierarchy supports it (see `expand_shorthand`): `(c)(5) through (7)` names (c)(5) and (c)(7) and not the interior;
     `(c)(4)(i), (e) and (f)` names (c)(4)(i), (e), (f); `(b)(1), (c), (d)` names (b)(1), (c), (d). Ambiguous shorthand,
     and every bare designator after it, is left unresolved. Descendants of a named paragraph are never inferred.
     """
-    stripped = QUOTED.sub(" \u2039q\u203a ", text)
+    stripped = parsing_view(QUOTED.sub(" \u2039q\u203a ", text))
     paths = []
     for m in PARA_ACTION.finditer(stripped):
         previous = None  # list of designators of the previous path; "unknown" once shorthand could not be settled
         for token in re.finditer(PARA_TOKEN, m.group(1)):
+            if incomplete_after(stripped, m.start(1) + token.end()):
+                break  # a valid prefix of an unread designator sequence is never a named parent; drop the rest of the list
             parts = PARA_PART.findall(token.group(0))
             if len(parts) > 1 or previous is None:
                 resolved = parts  # written in full, or the first item of a list

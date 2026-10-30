@@ -586,6 +586,72 @@ def check_amendatory_lists(index, item):
     return {"id": item["id"], "doc_key": item["doc_key"], "units": len(rows), "passed": not failures, "failures": failures[:8]}
 
 
+def check_designator_integrity(index, item):
+    """Real-corpus guard for designator tokens: complete paths read whole (whitespace around inline emphasis ignored),
+    their truncated ancestors are not named, the stored instruction text is untouched, and one instrument's support
+    never establishes another's."""
+    from .fedreg import named_paragraph_paths
+    c, failures = index.conn, []
+    rows = c.execute(
+        """SELECT p.instruction, p.explicit_paragraphs, p.instruction_ordinals FROM provision p JOIN source_document d ON d.id=p.doc_id
+           WHERE d.doc_key=? AND p.kind='amendment' AND p.section_no=? AND p.instruction LIKE ?""",
+        (item["doc_key"], item["section"], item["instruction_prefix"] + "%")).fetchall()
+    if not rows:
+        return {"id": item["id"], "doc_key": item["doc_key"], "passed": False, "failures": ["no amendment units found"]}
+    got = sorted({x for r in rows for x in json.loads(r["explicit_paragraphs"] or "{}").get("paths", [])})
+    if got != sorted(item["expect_paths"]):
+        failures.append(f"paths {got} != {sorted(item['expect_paths'])}")
+    for path in item["truncated_ancestors"]:
+        if path in got:
+            failures.append(f"truncated ancestor {path} was accepted as a named path")
+    for text in item["instruction_contains"]:
+        if not all(text in r["instruction"] for r in rows):
+            failures.append(f"stored instruction text altered: missing {text!r}")
+    cite = lambda p: f"12 CFR {item['section']}{p}"
+    for path in item["complete_paths"]:
+        rec = index.resolve_citations(cite(path), "future")[0]
+        d = index.delta(cite(path))
+        if not (rec["resolved"] and rec["achieved"] == "paragraph"):
+            failures.append(f"{path} should resolve at paragraph precision")
+        if item["doc_key"] not in d["future_precision"]["supported_instruments"]:
+            failures.append(f"{path} not supported by {item['doc_key']}")
+        for mode in ("exact", "hybrid"):
+            out = index.answer(cite(path), mode=mode, scope="future", k=10)
+            if out["status"] != "evidence_found":
+                failures.append(f"{path} {mode}/future status {out['status']}")
+            if index.answer(cite(path), mode=mode, scope="future", parts=["12:999"], k=10)["results"] and mode == "exact":
+                failures.append(f"{path}: excluding filter returned exact results")
+    for path in item["truncated_ancestors"]:
+        rec = index.resolve_citations(cite(path), "future")[0]
+        d = index.delta(cite(path))
+        if rec["resolved"] or rec["achieved"] != "section_only" or item["doc_key"] in d["future_precision"]["supported_instruments"]:
+            failures.append(f"truncated ancestor {path} resolved or was supported by {item['doc_key']}")
+        if any(g["doc_key"] == item["doc_key"] and g.get("role") != "section_context" for g in d["instruments"]):
+            failures.append(f"{path}: {item['doc_key']} is not section context")
+        for mode in ("exact", "hybrid"):
+            for scope in ("current", "future", "both"):
+                for parts in (None, ["12:999"]):
+                    for k in (10, 1):
+                        out = index.answer(cite(path), mode=mode, scope=scope, parts=parts, k=k)
+                        tag = f"{path} {mode}/{scope}/{parts or 'nofilter'}/k{k}"
+                        if out["status"] == "evidence_found":
+                            failures.append(f"{tag}: evidence_found")
+                        if f"citation:{cite(path)}" not in {g["topic"] for g in out["coverage_gaps"]}:
+                            failures.append(f"{tag}: no citation gap")
+                        if parts and out["results"]:
+                            failures.append(f"{tag}: excluding filter returned results")
+                        failures += [f"{tag}: {f}" for f in invariant_failures(out, scope)]
+    bad = 0  # corpus-wide: stored paths of single-instruction units equal what the normalized parse of their instruction yields
+    for ins, ep, ords in c.execute("SELECT instruction, explicit_paragraphs, instruction_ordinals FROM provision WHERE kind='amendment' AND explicit_paragraphs IS NOT NULL"):
+        data = json.loads(ep)
+        if data.get("status") == "attributed" and len(json.loads(ords or "[]")) == 1 and set(data["paths"]) != set(named_paragraph_paths(ins)):
+            bad += 1
+    if bad:
+        failures.append(f"{bad} units store paths that differ from the normalized parse of their instruction")
+    return {"id": item["id"], "doc_key": item["doc_key"], "section": item["section"], "units": len(rows),
+            "passed": not failures, "failures": failures[:10]}
+
+
 def run_regressions(index, path):
     spec = json.loads(Path(path).read_text())
     out = {"version": spec["version"], "task": spec["task"],
@@ -598,7 +664,8 @@ def run_regressions(index, path):
            "delta_precision": [check_delta_precision(index, x) for x in spec.get("delta_precision", [])],
            "instruction_boundary": [check_instruction_boundary(index, x) for x in spec.get("instruction_boundary", [])],
            "current_agreement": [check_current_agreement(index, x) for x in spec.get("current_agreement", [])],
-           "amendatory_lists": [check_amendatory_lists(index, x) for x in spec.get("amendatory_lists", [])]}
+           "amendatory_lists": [check_amendatory_lists(index, x) for x in spec.get("amendatory_lists", [])],
+           "designator_integrity": [check_designator_integrity(index, x) for x in spec.get("designator_integrity", [])]}
     out["passed"] = (all(d["passed"] for d in out["delta"]) and out["relationship_integrity"]["passed"]
                      and all(c["passed"] for c in out["citation_scope"]) and all(x["passed"] for x in out["status"])
                      and all(x["passed"] for x in out["citation_completeness"])
@@ -606,12 +673,13 @@ def run_regressions(index, path):
                      and all(x["passed"] for x in out["delta_precision"])
                      and all(x["passed"] for x in out["instruction_boundary"])
                      and all(x["passed"] for x in out["current_agreement"])
-                     and all(x["passed"] for x in out["amendatory_lists"]))
+                     and all(x["passed"] for x in out["amendatory_lists"])
+                     and all(x["passed"] for x in out["designator_integrity"]))
     return out
 
 
 REGRESSION_GROUPS = ("delta", "relationship_integrity", "citation_scope", "status", "citation_completeness",
-                     "mixed_source", "delta_precision", "instruction_boundary", "current_agreement", "amendatory_lists")
+                     "mixed_source", "delta_precision", "instruction_boundary", "current_agreement", "amendatory_lists", "designator_integrity")
 
 
 def overall(report):
@@ -694,6 +762,8 @@ def render(report):
         lines.append(f"  {ri['id']} {'PASS' if ri['passed'] else 'FAIL'} relationship integrity violations={ri['violations']} {'; '.join(ri['failures'])}")
         for c in reg["citation_scope"]:
             lines.append(f"  {c['id']} {'PASS' if c['passed'] else 'FAIL'} citation scope '{c['query']}' {'; '.join(c['failures'])}")
+        for x in reg.get("designator_integrity", []):
+            lines.append(f"  {x['id']} {'PASS' if x['passed'] else 'FAIL'} designator integrity {x.get('doc_key')} § {x.get('section')} units={x.get('units')} {'; '.join(x['failures'])}")
         for x in reg.get("amendatory_lists", []):
             lines.append(f"  {x['id']} {'PASS' if x['passed'] else 'FAIL'} amendatory lists {x.get('doc_key')} units={x.get('units')} {'; '.join(x['failures'])}")
         for x in reg.get("current_agreement", []):
