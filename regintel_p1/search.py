@@ -70,6 +70,8 @@ CITATION_REASONS = {
     "excluded_by_scope_and_part_filter": "A record exists, but only in the other scope and outside the requested part filter.",
     "part_not_acquired": "No record was acquired for this part, in baseline or in an acquired amendment.",
     "paragraph_not_found_in_acquired_section": "The section is acquired but the requested paragraph is not in it.",
+    "paragraph_not_found_in_acquired_range": "The section lies inside an acquired eCFR range section (typically reserved) "
+                                             "that has no such paragraph; the paragraph is not resolved through the range.",
     "not_found_in_acquired_part": "The part is acquired but no record for this section was found.",
 }
 CITATION_WORDS = {"section", "sections", "cfr", "part", "parts", "title"}
@@ -323,7 +325,12 @@ class Index:
         fut_precise = bool(fut) and (not paras or bool(support))
         resolved = bool(cur) or fut_precise
         achieved = precision if resolved else ("section_only" if (paras and fut) else None)
+        match = None
+        if section and scope in ("current", "both"):
+            cb = self.current_baseline(title, part, section, parts)
+            match = {"via": cb["via"] if (cb["via"] == "exact_section" or not paras) else None, "range": cb["range"] if not paras else None}
         record = {"citation": label, "requested_precision": precision, "resolved": resolved, "achieved": achieved,
+                  "baseline_match": match,
                   "by_scope": {"current": len(cur), "future": len(fut)}, "legal_validity": "not_determined",
                   "future_paragraph_support": [{"doc_key": d, "locator": loc} for d, loc in support],
                   "_current_ids": cur, "_future_ids": fut}
@@ -348,8 +355,11 @@ class Index:
         other = tuple(x for x in ("current", "future") if x not in requested)
         if paras and fut:
             return "paragraph_precision_unresolved"
-        if paras and "current" in requested and self._exact_current(title, part, section, "", parts):
-            return "paragraph_not_found_in_acquired_section"
+        if paras and "current" in requested and section:
+            cb = self.current_baseline(title, part, section, parts)
+            if cb["via"]:
+                return ("paragraph_not_found_in_acquired_range" if cb["via"] == "range_section"
+                        else "paragraph_not_found_in_acquired_section")
         if parts and self._found(requested, title, part, section, paras, None):
             return "excluded_by_part_filter"
         if other and self._found(other, title, part, section, paras, parts):
@@ -360,30 +370,72 @@ class Index:
                                 [part] + ([title] if title else [])).fetchone()
         if not row:
             return "part_not_acquired"
-        if paras and section and self._exact_current(title, part, section, "", None):
-            return "paragraph_not_found_in_acquired_section"
+        if paras and section:
+            via = self.current_baseline(title, part, section, None)["via"]
+            if via:
+                return "paragraph_not_found_in_acquired_range" if via == "range_section" else "paragraph_not_found_in_acquired_section"
         return "not_found_in_acquired_part"
+
+    RANGE_SECTION = re.compile(r"^(\d+)\.(\d+)-(\d+)\.(\d+)$")
+    BASELINE_COLUMNS = ("p.*, d.doc_key, d.sha256, d.publisher_issue_date, d.publisher_up_to_date_as_of")
+
+    def current_baseline(self, title, part, section, parts=None):
+        """The one current-baseline lookup, shared by resolve_citations / exact / answer and delta.
+
+        Returns {"rows", "via", "range"}. `via` is "exact_section" when the acquired eCFR has the section itself
+        (always preferred), or "range_section" when the numeric section lies inside an acquired range section such
+        as `3.4-3.9`; otherwise None. Range membership needs the same title and part, a plain numeric minor, ordered
+        numeric endpoints within one part, and the requested part filter. Lettered minors never match a range, and
+        rows are the publisher's own records (original locator, citation, hash, dates). A range section is acquired
+        evidence of that range, usually "[Reserved]", not an operative obligation for the requested section.
+        """
+        clause, params = self._parts_clause(parts)
+        tclause, tparams = (" AND p.title_no=?", [title]) if title else ("", [])
+        base = (f"SELECT {self.BASELINE_COLUMNS} FROM provision p JOIN source_document d ON d.id=p.doc_id "
+                f"WHERE d.publisher='eCFR'{clause}{tclause}")
+        rows = self.conn.execute(
+            base + " AND p.section_no=? AND p.kind IN ('section','paragraph','definition','table') ORDER BY p.ordinal",
+            params + tparams + [section]).fetchall()
+        if rows:
+            return {"rows": rows, "via": "exact_section", "range": None}
+        minor = section.split(".", 1)[1]
+        if not minor.isdigit():  # lettered sections are never inferred to belong to a range
+            return {"rows": [], "via": None, "range": None}
+        for r in self.conn.execute(base + " AND p.part_no=? AND p.kind='section' AND p.section_no LIKE '%-%' ORDER BY p.ordinal",
+                                   params + tparams + [part]).fetchall():
+            span = self.RANGE_SECTION.match(r["section_no"] or "")
+            if not span or not (span.group(1) == span.group(3) == part == r["part_no"]):
+                continue  # not a numeric same-part range
+            lo, hi = int(span.group(2)), int(span.group(4))
+            if lo <= hi and lo <= int(minor) <= hi:
+                return {"rows": [r], "via": "range_section",
+                        "range": {"requested_section": section, "range_section": r["section_no"], "range_locator": r["locator"],
+                                  "range_citation": r["citation"], "lo": f"{part}.{lo}", "hi": f"{part}.{hi}",
+                                  "note": "The requested section lies inside an acquired eCFR range section (typically "
+                                          "[Reserved]). That text is acquired evidence of the range, not an operative "
+                                          "obligation for the requested section."}}
+        return {"rows": [], "via": None, "range": None}
 
     def _exact_current(self, title, part, section, paras, parts):
         if section:
-            where, params = self._where("current", parts)
-            cond, cparams = "p.section_no=? AND p.kind IN ('paragraph','definition','table','section')", [section]
-        else:
-            # Part citation: the part record then its sections, from eCFR documents only. The generic current filter
-            # excludes kind 'part', so it is not used here; the publisher test keeps Federal Register rows out.
-            clause, params = self._parts_clause(parts)
-            where = "d.publisher = 'eCFR'" + clause
-            cond, cparams = "p.part_no=? AND p.kind IN ('part','section')", [part]
+            if paras:
+                # A paragraph is never resolved through its section or range ancestor: only an acquired exact section
+                # can contain it, and only a locator match (or a descendant) counts.
+                rows = self.current_baseline(title, part, section, parts)
+                wanted = f"{section}{paras}"
+                found = rows["rows"] if rows["via"] == "exact_section" else []
+                return [r["id"] for r in found if r["locator"] == wanted or r["locator"].startswith(wanted + "(")]
+            return [r["id"] for r in self.current_baseline(title, part, section, parts)["rows"]]
+        # Part citation: the part record then its sections, from eCFR documents only (the generic current filter
+        # excludes kind 'part'; the publisher test keeps Federal Register rows out).
+        clause, params = self._parts_clause(parts)
+        cond, cparams = "p.part_no=? AND p.kind IN ('part','section')", [part]
         if title:
             cond += " AND p.title_no=?"
             cparams.append(title)
         rows = self.conn.execute(
-            f"""SELECT p.id, p.locator FROM provision p JOIN source_document d ON d.id=p.doc_id
-                LEFT JOIN rulemaking r ON r.doc_key=d.doc_key WHERE {where} AND {cond} ORDER BY p.ordinal""",
-            params + cparams).fetchall()
-        if section and paras:  # a missing paragraph stays unresolved; it is never replaced by its parent section
-            wanted = f"{section}{paras}"
-            rows = [r for r in rows if r["locator"] == wanted or r["locator"].startswith(wanted + "(")]
+            f"""SELECT p.id FROM provision p JOIN source_document d ON d.id=p.doc_id
+                WHERE d.publisher = 'eCFR'{clause} AND {cond} ORDER BY p.ordinal""", params + cparams).fetchall()
         return [r["id"] for r in rows]
 
     def _exact_future(self, title, part, section, parts, minor=None):
@@ -421,7 +473,17 @@ class Index:
         for run in runs:
             for rank, (pid, _) in enumerate(run, 1):
                 fused[pid] += 1.0 / (RRF_K + rank)
-        return sorted(fused.items(), key=lambda x: -x[1])[:k]
+        ranked = sorted(fused.items(), key=lambda x: -x[1])
+        # Pin the first record of every resolved citation ahead of the fused ranking, in citation order, so a lexical
+        # hit from elsewhere can never crowd a requested citation's own evidence out of a small k (for example a
+        # numeric section whose only baseline record is its reserved range section).
+        pins = []
+        for c in self.resolve_citations(query, scope, parts):
+            lst = [pid for pair in zip_longest(c["_current_ids"], c["_future_ids"]) for pid in pair if pid is not None]
+            if lst and lst[0] not in pins:
+                pins.append(lst[0])
+        pinned = [(pid, fused.get(pid, 0.0) + 1.0) for pid in pins]
+        return (pinned + [x for x in ranked if x[0] not in set(pins)])[:k]
 
     def retrieve(self, query, mode="hybrid", k=10, scope="both", parts=None):
         fn = {"bm25": lambda: self.bm25(query, k, scope, parts),
@@ -489,6 +551,13 @@ class Index:
         # filter, so it needs no topic. Any other query that matches no catalog topic has unassessed source
         # coverage, and a lexical hit alone does not establish that the sources it needs are acquired.
         sources = self.detect_sources(query)
+        citations = self.resolve_citations(query, scope, parts)
+        for c in citations:  # identify range membership on the publisher's own record
+            rng = (c.get("baseline_match") or {}).get("range")
+            if rng:
+                for ev in results:
+                    if ev["provision_id"] in c["_current_ids"]:
+                        ev["range_membership"] = rng
         by_topic = {g["topic"]: g for g in gaps}
         for src in sources:
             topic = next(t for t in self.topics if t["id"] == src["topic"])
@@ -500,7 +569,6 @@ class Index:
             gap.setdefault("detected_by", []).append(f"{src['kind']}: {src['matched']}")
             if src["note"] not in gap["note"]:
                 gap["note"] += " " + src["note"]
-        citations = self.resolve_citations(query, scope, parts)
         unresolved = [c for c in citations if not c["resolved"]]
         for c in unresolved:  # one gap per unresolved citation, whatever else resolved or matched a topic
             gaps.append({"topic": f"citation:{c['citation']}", "coverage": "unresolved_citation", "reason": c["reason"],
@@ -543,13 +611,10 @@ class Index:
         title, part, minor, paras = m.groups()
         section = f"{part}.{minor}" if minor else None
         wanted = "".join(re.findall(r"\([A-Za-z0-9]+\)", paras or ""))  # requested paragraph path, e.g. "(c)(1)"
-        minor_num = int(minor) if minor and minor.isdigit() else None   # lettered minors (3.4a) never reach int()
+        match_via, range_info = None, None
         if section:
-            base_rows = self.conn.execute(
-                """SELECT p.*, d.doc_key, d.sha256, d.publisher_issue_date, d.publisher_up_to_date_as_of FROM provision p
-                   JOIN source_document d ON d.id=p.doc_id
-                   WHERE p.title_no=? AND p.section_no=? AND p.kind IN ('section','paragraph','definition','table')
-                   ORDER BY p.ordinal""", (title, section)).fetchall()
+            cb = self.current_baseline(title, part, section, None)  # the same lookup resolve_citations uses
+            base_rows, match_via, range_info = cb["rows"], cb["via"], cb["range"]
             amend = self.conn.execute(
                 """SELECT DISTINCT r.src_provision_id FROM relationship r
                    WHERE r.rel_type='amends' AND r.dst_citation=?""", (f"{title} CFR {section}",)).fetchall()
@@ -565,22 +630,15 @@ class Index:
                 (f"{title} CFR Part {part}", f"{title} CFR {part}.%")).fetchall()
             ranged = self.range_hits(title, part)
         amend = [r[0] for r in amend] + [pid for pid in ranged if pid not in {r[0] for r in amend}]
-        if not base_rows and section:  # target may sit inside a reserved/range section such as 3.4-3.9
-            for r in self.conn.execute("SELECT DISTINCT section_no FROM provision WHERE title_no=? AND part_no=? AND section_no LIKE '%-%'",
-                                       (title, part)):
-                span = re.match(r"^(\d+)\.(\d+)-(\d+)\.(\d+)$", r["section_no"] or "")
-                if minor_num is not None and span and span.group(1) == part \
-                        and int(span.group(2)) <= minor_num <= int(span.group(4)):
-                    base_rows = self.conn.execute(
-                        """SELECT p.*, d.doc_key, d.sha256, d.publisher_issue_date, d.publisher_up_to_date_as_of FROM provision p
-                           JOIN source_document d ON d.id=p.doc_id WHERE p.title_no=? AND p.section_no=? ORDER BY p.ordinal""",
-                        (title, r["section_no"])).fetchall()
-                    break
         def summarize(rows, **extra):
             b = rows[0]
-            return {"doc_key": b["doc_key"], "sha256": b["sha256"], "issue_date": b["publisher_issue_date"],
+            base = {"doc_key": b["doc_key"], "sha256": b["sha256"], "issue_date": b["publisher_issue_date"],
                     "up_to_date_as_of": b["publisher_up_to_date_as_of"], "provisions_in_scope": len(rows),
-                    "heading": b["heading"], **extra}
+                    "heading": b["heading"], "locator": b["locator"], "citation": b["citation"]}
+            if match_via:
+                base["match"] = match_via
+                base["range_membership"] = range_info
+            return {**base, **extra}
 
         baseline, section_context = None, None
         if base_rows and section and wanted:

@@ -1,6 +1,6 @@
 {
- "version": "p1-regress-0.8",
- "task": "S7-P1-EVIDENCE-BOUNDARIES-01 + S7-P1-EVIDENCE-COMPLETENESS-02 + S7-P1-COVERAGE-GUARDS-03 + S7-P1-CITATION-COMPLETENESS-04 + S7-P1-FUTURE-PARAGRAPH-PRECISION-05 + S7-P1-MIXED-SOURCE-COVERAGE-06 + S7-P1-DELTA-PRECISION-07 + S7-P1-INSTRUCTION-BOUNDARY-08",
+ "version": "p1-regress-0.9",
+ "task": "S7-P1-EVIDENCE-BOUNDARIES-01 + S7-P1-EVIDENCE-COMPLETENESS-02 + S7-P1-COVERAGE-GUARDS-03 + S7-P1-CITATION-COMPLETENESS-04 + S7-P1-FUTURE-PARAGRAPH-PRECISION-05 + S7-P1-MIXED-SOURCE-COVERAGE-06 + S7-P1-DELTA-PRECISION-07 + S7-P1-INSTRUCTION-BOUNDARY-08 + S7-P1-RESERVED-RANGE-CONSISTENCY-09",
  "note": "Deterministic regression checks over the acquired corpus for amendment-target integrity and retrieval scope filtering. Kept separate from questions.json so the 37-item baseline stays frozen. A pass means the contract holds, not that any rule applies to a bank.",
  "delta": [
   {
@@ -222,7 +222,8 @@
   "v0.5 (FUTURE-PARAGRAPH-PRECISION-05): K10-K15 added for deep paragraph paths in future scope. Earlier checks unchanged.",
   "v0.6 (MIXED-SOURCE-COVERAGE-06, finding F1): mixed_source checks M01-M04 (18 runs each: exact/hybrid x current/future/both x k10/k1/excluding filter) and status checks P13-P15. Earlier checks unchanged.",
   "v0.7 (DELTA-PRECISION-07, R1/R2): delta_precision checks DP01-DP09: delta() keeps the requested paragraph path, reports current and future precision separately and per instrument, and returns structured unavailable evidence for lettered sections. Earlier checks unchanged.",
-  "v0.8 (INSTRUCTION-BOUNDARY-08, R1): IB01 checks 2026-13192 instruction 3 (327.8): instruction kept separate from loose paragraphs (e)-(g), paths derived only from instruction text, (e)(3) and other descendants stay section_only across resolve_citations, answer (exact/hybrid, three scopes, excluding filter) and delta. Earlier checks unchanged."
+  "v0.8 (INSTRUCTION-BOUNDARY-08, R1): IB01 checks 2026-13192 instruction 3 (327.8): instruction kept separate from loose paragraphs (e)-(g), paths derived only from instruction text, (e)(3) and other descendants stay section_only across resolve_citations, answer (exact/hybrid, three scopes, excluding filter) and delta. Earlier checks unchanged.",
+  "v0.9 (RESERVED-RANGE-CONSISTENCY-09, F1): current_agreement CA01-CA07 explicitly require delta() and the current-citation resolver to agree for section citations, including 12 CFR 3.5 and 217.5 inside acquired range sections; DP08's paragraph-only agreement check is unchanged and no longer the only guard. Earlier checks unchanged."
  ],
  "status": [
   {
@@ -698,6 +699,85 @@
     "(e)(4)",
     "(e)(4)(i)"
    ]
+  }
+ ],
+ "current_agreement": [
+  {
+   "id": "CA01",
+   "citation": "12 CFR 3.5",
+   "expect_via": "range_section",
+   "expect_doc": "ecfr:12:3",
+   "expect_range_locator": "section-3.4-3.9",
+   "allow": [
+    "12:3"
+   ],
+   "exclude": [
+    "12:217"
+   ]
+  },
+  {
+   "id": "CA02",
+   "citation": "12 CFR 217.5",
+   "expect_via": "range_section",
+   "expect_doc": "ecfr:12:217",
+   "expect_range_locator": "section-217.4-217.9",
+   "allow": [
+    "12:217"
+   ],
+   "exclude": [
+    "12:3"
+   ]
+  },
+  {
+   "id": "CA03",
+   "citation": "12 CFR 3.4",
+   "expect_via": "range_section",
+   "expect_doc": "ecfr:12:3",
+   "expect_range_locator": "section-3.4-3.9",
+   "allow": [
+    "12:3"
+   ],
+   "exclude": [
+    "12:217"
+   ],
+   "note": "range endpoint"
+  },
+  {
+   "id": "CA04",
+   "citation": "12 CFR 3.9",
+   "expect_via": "range_section",
+   "expect_doc": "ecfr:12:3",
+   "expect_range_locator": "section-3.4-3.9",
+   "allow": [
+    "12:3"
+   ],
+   "exclude": [
+    "12:217"
+   ],
+   "note": "range endpoint"
+  },
+  {
+   "id": "CA05",
+   "citation": "12 CFR 3.10",
+   "expect_via": "exact_section",
+   "allow": [
+    "12:3"
+   ],
+   "exclude": [
+    "12:217"
+   ],
+   "note": "control: an acquired exact section, no range"
+  },
+  {
+   "id": "CA06",
+   "citation": "12 CFR 3.4a",
+   "expect_via": null,
+   "note": "lettered sections are never inferred into a range"
+  },
+  {
+   "id": "CA07",
+   "citation": "12 CFR 217.4a",
+   "expect_via": null
   }
  ]
 }

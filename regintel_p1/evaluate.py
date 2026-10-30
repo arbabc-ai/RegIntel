@@ -497,6 +497,63 @@ def check_instruction_boundary(index, item):
             "passed": not failures, "failures": failures[:10]}
 
 
+def check_current_agreement(index, item):
+    """delta() and the current-citation resolver must expose the same baseline for a section citation, including a
+    numeric section inside an acquired range. This is explicit and covers section citations; the paragraph-only
+    agreement inside check_delta_precision does not cover it."""
+    failures, q = [], item["citation"]
+    cur = index.resolve_citations(q, "current")[0]
+    d = index.delta(q)
+    base = d["baseline"]
+    if (base is not None) != cur["resolved"]:
+        failures.append(f"delta baseline {'present' if base else 'absent'} but resolver resolved={cur['resolved']}")
+    via = (cur.get("baseline_match") or {}).get("via")
+    if via != item.get("expect_via"):
+        failures.append(f"resolver via {via} != {item.get('expect_via')}")
+    if base is not None and cur["resolved"]:
+        first = index.evidence(cur["_current_ids"][0], with_context=False)
+        for name, got, want in (("doc_key", base["doc_key"], first["doc_key"]), ("locator", base["locator"], first["locator"]),
+                                ("sha256", base["sha256"], first["source_sha256"]),
+                                ("issue_date", base["issue_date"], first["status"]["publisher_issue_date"]),
+                                ("up_to_date_as_of", base["up_to_date_as_of"], first["status"]["publisher_up_to_date_as_of"])):
+            if got != want:
+                failures.append(f"{name} differs between delta and resolver: {got} vs {want}")
+        if base.get("match") != via:
+            failures.append(f"delta match {base.get('match')} != resolver via {via}")
+        if via == "range_section":
+            if base.get("range_membership") != cur["baseline_match"]["range"]:
+                failures.append("range membership differs between delta and resolver")
+            if base["locator"] != item.get("expect_range_locator") or base["doc_key"] != item.get("expect_doc"):
+                failures.append(f"range provenance {base['doc_key']} {base['locator']} not the publisher's original")
+        if first["status"]["state"] != "current_baseline_requires_operative_effect_review":
+            failures.append("range or section evidence is labelled as anything but a baseline needing operative-effect review")
+    if d["legal_validity"] != "not_determined" or d["applicability_status"] != "not_assessed":
+        failures.append("delta asserted validity or applicability")
+    for mode in ("exact", "hybrid"):
+        for scope in ("current", "future", "both"):
+            for tag, parts in (("nofilter", None), ("allow", item.get("allow")), ("exclude", item.get("exclude"))):
+                if tag != "nofilter" and not parts:
+                    continue
+                for k in (10, 1):
+                    out = index.answer(q, mode=mode, scope=scope, parts=parts, k=k)
+                    label = f"{mode}/{scope}/{tag}/k{k}"
+                    failures += [f"{label}: {f}" for f in invariant_failures(out, scope)]
+                    if tag == "exclude":
+                        if out["status"] == "evidence_found":
+                            failures.append(f"{label}: evidence_found under an excluding filter")
+                        if mode == "exact" and out["results"]:
+                            failures.append(f"{label}: exact returned results under an excluding filter")
+                        continue
+                    if scope == "current" and item.get("expect_via"):
+                        if out["status"] != "evidence_found":
+                            failures.append(f"{label}: status {out['status']}")
+                        if via == "range_section" and not any(r.get("range_membership") for r in out["results"] if r["doc_key"] == item["expect_doc"]):
+                            failures.append(f"{label}: range membership not identified on the result")
+                    if scope == "current" and not item.get("expect_via") and out["status"] == "evidence_found":
+                        failures.append(f"{label}: evidence_found for an unresolved section")
+    return {"id": item["id"], "citation": q, "via": via, "passed": not failures, "failures": failures[:10]}
+
+
 def run_regressions(index, path):
     spec = json.loads(open(path).read())
     out = {"version": spec["version"], "task": spec["task"],
@@ -507,13 +564,15 @@ def run_regressions(index, path):
            "citation_completeness": [check_citation_completeness(index, x) for x in spec.get("citation_completeness", [])],
            "mixed_source": [check_mixed_source(index, x) for x in spec.get("mixed_source", [])],
            "delta_precision": [check_delta_precision(index, x) for x in spec.get("delta_precision", [])],
-           "instruction_boundary": [check_instruction_boundary(index, x) for x in spec.get("instruction_boundary", [])]}
+           "instruction_boundary": [check_instruction_boundary(index, x) for x in spec.get("instruction_boundary", [])],
+           "current_agreement": [check_current_agreement(index, x) for x in spec.get("current_agreement", [])]}
     out["passed"] = (all(d["passed"] for d in out["delta"]) and out["relationship_integrity"]["passed"]
                      and all(c["passed"] for c in out["citation_scope"]) and all(x["passed"] for x in out["status"])
                      and all(x["passed"] for x in out["citation_completeness"])
                      and all(x["passed"] for x in out["mixed_source"])
                      and all(x["passed"] for x in out["delta_precision"])
-                     and all(x["passed"] for x in out["instruction_boundary"]))
+                     and all(x["passed"] for x in out["instruction_boundary"])
+                     and all(x["passed"] for x in out["current_agreement"]))
     return out
 
 
@@ -564,6 +623,8 @@ def render(report):
         lines.append(f"  {ri['id']} {'PASS' if ri['passed'] else 'FAIL'} relationship integrity violations={ri['violations']} {'; '.join(ri['failures'])}")
         for c in reg["citation_scope"]:
             lines.append(f"  {c['id']} {'PASS' if c['passed'] else 'FAIL'} citation scope '{c['query']}' {'; '.join(c['failures'])}")
+        for x in reg.get("current_agreement", []):
+            lines.append(f"  {x['id']} {'PASS' if x['passed'] else 'FAIL'} current agreement '{x['citation']}' via={x.get('via')} {'; '.join(x['failures'])}")
         for x in reg.get("instruction_boundary", []):
             lines.append(f"  {x['id']} {'PASS' if x['passed'] else 'FAIL'} instruction boundary {x.get('doc_key')} § {x.get('section')} units={x.get('units')} {'; '.join(x['failures'])}")
         for x in reg.get("delta_precision", []):
