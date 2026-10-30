@@ -1,7 +1,7 @@
 """Relational schema for the Phase 1 evidence index (SQLite, standard library)."""
 import sqlite3
 
-SCHEMA_VERSION = "p1-0.5"
+SCHEMA_VERSION = "p1-0.6"
 
 DDL = """
 CREATE TABLE index_meta (key TEXT PRIMARY KEY, value TEXT);
@@ -68,6 +68,7 @@ CREATE TABLE provision (
   instruction_targets_all TEXT,            -- JSON, every target the paired instruction(s) name (provenance)
   instruction_ordinals TEXT,               -- JSON, 1-based position of the paired instruction(s) in the document run
   paragraph_leads TEXT,                    -- JSON, paragraph designators that open the carried text
+  appendix TEXT,                           -- JSON, appendix identity/chunk/source proof for appendix text and appendix instructions
   UNIQUE (doc_id, locator)
 );
 CREATE INDEX provision_scope ON provision(title_no, part_no, section_no);

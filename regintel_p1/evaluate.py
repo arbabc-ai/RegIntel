@@ -8,6 +8,7 @@ Gold matchers are validated against the index first; a matcher that matches noth
 rather than silently counted as a miss.
 """
 import json
+import re
 from pathlib import Path
 from collections import defaultdict
 
@@ -813,6 +814,94 @@ def check_suffix_integrity(index, item):
     return {"id": item["id"], "kind": kind, "passed": not failures, "failures": failures[:10]}
 
 
+def check_appendix_evidence(index, item):
+    """Real-corpus guard for appendix text carried as a direct REGTEXT/EXTRACT block. `recovered`: the appendix's passages
+    exist in order with stable locators, the source hash, a complete line count and a token fingerprint equal to the source
+    element's. `retrieval`: the text reaches future retrieval for the appendix's part and stays out of current scope and
+    excluded part filters. `no_targets`: the appendix and its instructions assert no section, part-wide or range
+    target, no relationship, and appendix-internal section numbers become no CFR section. `identity`: distinct
+    publisher-titled appendices, no binding or applicability claim."""
+    from .fedreg import source_tokens, token_fingerprint
+    c, failures, kind = index.conn, [], item["kind"]
+    rows = c.execute("SELECT p.*, d.sha256 AS doc_sha FROM provision p JOIN source_document d ON d.id=p.doc_id WHERE d.doc_key=? AND "
+                     "json_extract(p.appendix,'$.kind')='appendix_extract' AND json_extract(p.appendix,'$.letter')=? ORDER BY p.id",
+                     (item["doc_key"], item.get("letter", ""))).fetchall()
+    if kind == "recovered":
+        aps = [json.loads(r["appendix"]) for r in rows]
+        if len(rows) != item["chunks"]:
+            failures.append(f"{len(rows)} passages != expected {item['chunks']}")
+        if [a["chunk"] for a in aps] != list(range(1, len(rows) + 1)) or {a["chunks"] for a in aps} != {len(rows)}:
+            failures.append("passages are not numbered 1..n in document order")
+        if rows:
+            if sum(a["lines"] for a in aps) != aps[0]["total_lines"] or aps[0]["total_lines"] != item["lines"]:
+                failures.append("line count does not cover the appendix")
+            got = token_fingerprint([t for r in rows for t in source_tokens(r["text"])])
+            if got != aps[0]["source_fingerprint"] or got != item["fingerprint"]:
+                failures.append(f"recovered text does not reproduce the source element ({got['tokens']} tokens)")
+            for r, a in zip(rows, aps):
+                if not (a["source_sha256"] == r["doc_sha"] == item["source_sha256"]) or not a.get("source_url") or not a.get("source_asset_url"):
+                    failures.append(f"{r['locator']}: source hash or URL missing or different")
+                if not re.fullmatch(rf"{re.escape(item['doc_key'][3:])}:reg:\d+:appx-{item['part']}-{item['letter']}:\d{{3}}of\d{{3}}", r["locator"]):
+                    failures.append(f"{r['locator']}: unexpected locator")
+                if (r["heading"], r["part_no"], r["section_no"], r["kind"]) != (item["heading"], item["part"], None, "amendment"):
+                    failures.append(f"{r['locator']}: heading, part or section differs")
+                if (r["char_start"], r["char_end"]) != (rows[0]["char_start"], rows[0]["char_end"]) or not (r["char_start"] or 0) < (r["char_end"] or 0):
+                    failures.append(f"{r['locator']}: source span missing or inconsistent")
+            if (rows[0]["locator"], rows[-1]["locator"]) != (item["first_locator"], item["last_locator"]):
+                failures.append("first/last locator differs from the expected literal")
+    elif kind == "retrieval":
+        marker = f"appx-{item['part']}-{item['letter']}:"
+        for mode in ("hybrid", "bm25"):
+            for k in (10, 5):
+                out = index.answer(item["query"], mode=mode, scope="future", parts=[f"12:{item['part']}"], k=k)
+                if not [r for r in out["results"] if marker in r["locator"]]:
+                    failures.append(f"{mode}/k{k}: future 12:{item['part']} did not reach the appendix")
+                if out["applicability_status"] != "not_assessed":
+                    failures.append("applicability asserted")
+            for scope, parts in (("current", [f"12:{item['part']}"]), ("current", None), ("future", ["12:3"]), ("future", ["12:217"])):
+                out = index.answer(item["query"], mode=mode, scope=scope, parts=parts, k=20)
+                if [r for r in out["results"] if "appx-" in r["locator"]]:
+                    failures.append(f"{mode}/{scope}/{parts}: appendix text returned outside its scope")
+    elif kind == "no_targets":
+        app = c.execute("SELECT p.* FROM provision p JOIN source_document d ON d.id=p.doc_id WHERE d.doc_key=? AND p.appendix IS NOT NULL", (item["doc_key"],)).fetchall()
+        ids = [r["id"] for r in app]
+        if not ids:
+            failures.append("no appendix records")
+        for r in app:
+            if any(json.loads(r[k] or "[]") for k in ("explicit_targets", "explicit_parts", "explicit_ranges", "referenced_citations")) or r["section_no"]:
+                failures.append(f"{r['locator']}: asserts a section, part or range target")
+        if ids and c.execute(f"SELECT COUNT(*) FROM relationship WHERE src_provision_id IN ({','.join('?' * len(ids))})", ids).fetchone()[0]:
+            failures.append("appendix records source relationships")
+        marks = ",".join("?" * len(item["internal_sections"]))
+        if c.execute(f"SELECT COUNT(*) FROM provision p JOIN source_document d ON d.id=p.doc_id WHERE d.doc_key=? AND p.section_no IN ({marks})",
+                     (item["doc_key"], *item["internal_sections"])).fetchone()[0]:
+            failures.append("an appendix-internal section number became a CFR section")
+        for sec in item["internal_sections"]:
+            d = index.delta(f"12 CFR {sec}")
+            if [g for g in d["instruments"] if g["doc_key"] == item["doc_key"]]:
+                failures.append(f"delta 12 CFR {sec} lists the appendix document as an instrument")
+        for cite in item["delta_citations"]:
+            d = index.delta(cite)
+            if "appx-" in json.dumps(d["instruments"], default=str):
+                failures.append(f"delta {cite} lists appendix text as an instrument")
+    elif kind == "identity":
+        heads = {r["heading"] for r in rows}
+        if heads != {item["heading"]}:
+            failures.append(f"heading {heads} != {item['heading']}")
+        for r in rows:
+            a = json.loads(r["appendix"])
+            if a["binding_status"] != "not_determined" or r["pairing_status"] != "appendix_text":
+                failures.append(f"{r['locator']}: status or binding claim")
+            if item.get("policy_statement") and not a["policy_statement"]:
+                failures.append(f"{r['locator']}: publisher's policy-statement identity lost")
+            if json.loads(r["explicit_paragraphs"] or "{}").get("status") != "appendix_scope_not_attributed":
+                failures.append(f"{r['locator']}: paragraph attribution asserted")
+        rec = index.evidence(rows[0]["id"]) if rows else {}
+        if rec.get("appendix", {}).get("letter") != item["letter"]:
+            failures.append("evidence record lacks the appendix identity")
+    return {"id": item["id"], "kind": kind, "passed": not failures, "failures": failures[:10]}
+
+
 def run_regressions(index, path):
     spec = json.loads(Path(path).read_text())
     out = {"version": spec["version"], "task": spec["task"],
@@ -828,7 +917,8 @@ def run_regressions(index, path):
            "amendatory_lists": [check_amendatory_lists(index, x) for x in spec.get("amendatory_lists", [])],
            "designator_integrity": [check_designator_integrity(index, x) for x in spec.get("designator_integrity", [])],
            "query_citations": [check_query_citations(index, x) for x in spec.get("query_citations", [])],
-           "suffix_integrity": [check_suffix_integrity(index, x) for x in spec.get("suffix_integrity", [])]}
+           "suffix_integrity": [check_suffix_integrity(index, x) for x in spec.get("suffix_integrity", [])],
+           "appendix_evidence": [check_appendix_evidence(index, x) for x in spec.get("appendix_evidence", [])]}
     out["passed"] = (all(d["passed"] for d in out["delta"]) and out["relationship_integrity"]["passed"]
                      and all(c["passed"] for c in out["citation_scope"]) and all(x["passed"] for x in out["status"])
                      and all(x["passed"] for x in out["citation_completeness"])
@@ -839,12 +929,13 @@ def run_regressions(index, path):
                      and all(x["passed"] for x in out["amendatory_lists"])
                      and all(x["passed"] for x in out["designator_integrity"])
                      and all(x["passed"] for x in out["query_citations"])
-                     and all(x["passed"] for x in out["suffix_integrity"]))
+                     and all(x["passed"] for x in out["suffix_integrity"])
+                     and all(x["passed"] for x in out["appendix_evidence"]))
     return out
 
 
 REGRESSION_GROUPS = ("delta", "relationship_integrity", "citation_scope", "status", "citation_completeness",
-                     "mixed_source", "delta_precision", "instruction_boundary", "current_agreement", "amendatory_lists", "designator_integrity", "query_citations", "suffix_integrity")
+                     "mixed_source", "delta_precision", "instruction_boundary", "current_agreement", "amendatory_lists", "designator_integrity", "query_citations", "suffix_integrity", "appendix_evidence")
 
 
 def overall(report):
@@ -927,6 +1018,8 @@ def render(report):
         lines.append(f"  {ri['id']} {'PASS' if ri['passed'] else 'FAIL'} relationship integrity violations={ri['violations']} {'; '.join(ri['failures'])}")
         for c in reg["citation_scope"]:
             lines.append(f"  {c['id']} {'PASS' if c['passed'] else 'FAIL'} citation scope '{c['query']}' {'; '.join(c['failures'])}")
+        for x in reg.get("appendix_evidence", []):
+            lines.append(f"  {x['id']} {'PASS' if x['passed'] else 'FAIL'} appendix evidence [{x['kind']}] {'; '.join(x['failures'])}")
         for x in reg.get("suffix_integrity", []):
             lines.append(f"  {x['id']} {'PASS' if x['passed'] else 'FAIL'} suffix integrity [{x['kind']}] {'; '.join(x['failures'])}")
         for x in reg.get("query_citations", []):

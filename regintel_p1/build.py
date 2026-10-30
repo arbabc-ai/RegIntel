@@ -8,7 +8,7 @@ from pathlib import Path
 
 from . import schema
 from .ecfr import parse_ecfr
-from .fedreg import parse_fr
+from .fedreg import extract_spans, parse_fr
 
 TOPICS_PATH = Path(__file__).with_name("topics.json")
 RANGE_SECTION = re.compile(r"^(\d+)\.(\d+)-(\d+)\.(\d+)$")
@@ -32,8 +32,8 @@ def insert_provision(conn, doc_id, p):
         """INSERT INTO provision (doc_id, locator, citation, kind, title_no, part_no, section_no, subpart, heading,
            context, text, defined_term, parent_locator, ordinal, char_start, char_end, fr_page, instruction,
            operations, explicit_targets, explicit_parts, explicit_ranges, carried_text_origin, explicit_paragraphs, referenced_citations, unresolved_candidates,
-           pairing_status, instruction_targets_all, instruction_ordinals, paragraph_leads)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+           pairing_status, instruction_targets_all, instruction_ordinals, paragraph_leads, appendix)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
         (doc_id, p["locator"], p.get("citation"), p["kind"], p.get("title_no"), p.get("part_no"),
          p.get("section_no"), p.get("subpart"), p.get("heading"), p.get("context"), p["text"],
          p.get("defined_term"), p.get("parent_locator"), p.get("ordinal"), p.get("char_start"), p.get("char_end"),
@@ -46,7 +46,8 @@ def insert_provision(conn, doc_id, p):
          p.get("pairing_status"),
          json.dumps(p["instruction_targets_all"]) if "instruction_targets_all" in p else None,
          json.dumps(p["instruction_ordinals"]) if "instruction_ordinals" in p else None,
-         json.dumps(p["paragraph_leads"]) if "paragraph_leads" in p else None))
+         json.dumps(p["paragraph_leads"]) if "paragraph_leads" in p else None,
+         json.dumps(p["appendix"]) if p.get("appendix") else None))
     pid = cur.lastrowid
     if p["kind"] not in FTS_SKIP_KINDS:
         head, body = fts_rows(p)
@@ -96,7 +97,33 @@ def build(corpus_dir, db_path, as_of, log=print):
                     "citation": f"FR Doc. {doc_no}" + (f", p. {passage['fr_page']}" if passage["fr_page"] else ""),
                     "heading": passage["heading"], "context": passage["heading"], "text": passage["text"],
                     "fr_page": passage["fr_page"], "ordinal": n})
-            for n, u in enumerate(units, 1):
+            spans = extract_spans(raw.decode("utf-8")) if any(u.get("appendix") for u in units) else []
+            n = 0  # position among non-appendix-text units: unchanged by recovered appendix chunks, so earlier locators are stable
+            for k, u in enumerate(units, 1):
+                ap = u.get("appendix")
+                if ap and ap.get("kind") == "appendix_extract" and u["text"]:
+                    span = spans[ap["extract_index"]] if ap.get("extract_index") is not None and ap["extract_index"] < len(spans) else (None, None)
+                    ap = {**ap, "source_sha256": digest, "source_asset_url": asset.get("url"), "source_url": d.get("source_url"),
+                          "source_span": "whole EXTRACT element, characters of the UTF-8-decoded source",
+                          "policy_statement": bool(re.search(r"policy statement", ap.get("title") or "", re.I)),
+                          "note": "text as published; binding effect, applicability and amended passages are not determined"}
+                    where = f"appx-{ap['part']}-{ap['letter'] or 'unknown'}"
+                    provs.append({
+                        "locator": f"{u['unit_id']}:{where}:{ap['chunk']:03d}of{ap['chunks']:03d}", "kind": "amendment",
+                        "citation": (f"FR Doc. {doc_no}, appendix text: {u['title_no'] or '?'} CFR Part {ap['part']}, "
+                                     f"Appendix {ap['letter'] or '?'} (passage {ap['chunk']} of {ap['chunks']})"),
+                        "title_no": u["title_no"], "part_no": u["part_no"], "section_no": None,
+                        "heading": ap["heading"], "context": ap["heading"] or "", "text": u["text"],
+                        "instruction": u["instruction"], "operations": u["operations"],
+                        "explicit_targets": [], "explicit_parts": [], "explicit_ranges": [],
+                        "explicit_paragraphs": u["explicit_paragraphs"], "carried_text_origin": u["carried_text_origin"],
+                        "referenced_citations": [], "unresolved_candidates": u["unresolved_candidates"],
+                        "pairing_status": u["pairing_status"], "instruction_targets_all": u["instruction_targets_all"],
+                        "instruction_ordinals": u["instruction_ordinals"], "paragraph_leads": u["paragraph_leads"],
+                        "fr_page": u["fr_page"], "ordinal": 200000 + k, "char_start": span[0], "char_end": span[1],
+                        "appendix": ap})
+                    continue
+                n += 1
                 label = u["section_no"] or (f"Part {u['part_no']}" if u["part_no"] else "regulatory text")
                 provs.append({
                     "locator": f"{u['unit_id']}:{u['section_no'] or 'part'}:{n}", "kind": "amendment",
@@ -111,7 +138,8 @@ def build(corpus_dir, db_path, as_of, log=print):
                     "unresolved_candidates": u["unresolved_candidates"], "pairing_status": u["pairing_status"],
                     "instruction_targets_all": u["instruction_targets_all"],
                     "instruction_ordinals": u["instruction_ordinals"], "paragraph_leads": u["paragraph_leads"],
-                    "fr_page": u["fr_page"], "ordinal": 100000 + n})
+                    "fr_page": u["fr_page"], "ordinal": 100000 + n,
+                    **({"appendix": ap} if ap else {})})
             stats = {**stats, "provisions": len(provs)}
         cur = conn.execute(
             """INSERT INTO source_document (doc_key, source_class, publisher, citation, title, source_url, asset_path,

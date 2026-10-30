@@ -65,6 +65,79 @@ def split_chunks(paragraphs, limit):
     return chunks
 
 
+# --- appendix text ---
+# A REGTEXT can carry an appendix as `<HD>Appendix A to Part 252—Title</HD><EXTRACT>…</EXTRACT>` with no SECTION wrapper.
+APPENDIX_HD = re.compile(r"^\s*Appendix\s+([A-Z][A-Za-z0-9]*)\s+to\s+Part\s+(\d+)\s*(?:[\u2014\u2013-]+\s*(.*))?$", re.I)
+APPENDIX_SUBJECT = re.compile(r"^\W*(?:\d+\.\s*)?(?:In\s+)?appendix\s+([A-Z][A-Za-z0-9]*)\s+to\s+part\s+(\d+)", re.I)
+TOKEN = re.compile(r"[A-Za-z0-9]+")
+
+
+def appendix_subject(text):
+    """(letter, part) when an instruction is about an appendix as a whole (`Appendix A to part 252 is revised`,
+    `In appendix B to part 252:`), else None. Section numbers inside such an instruction belong to the appendix."""
+    m = APPENDIX_SUBJECT.match(text)
+    return (m.group(1).upper(), m.group(2)) if m else None
+
+
+def extract_lines(extract, page):
+    """Everything inside an appendix EXTRACT in document order: headings, paragraphs, footnotes, tables, elision
+    marks (`* * *`) and anything else with text. Returns [(line, page_at_start)], nothing dropped."""
+    out = []
+
+    def emit(text):
+        if text:
+            out.append((text, page[0]))
+
+    def visit(parent):
+        for child in parent:
+            tag = child.tag
+            if tag == "PRTPAGE":
+                page[0] = child.get("P") or page[0]
+            elif tag == "STARS":
+                emit("* * *")
+            elif tag == "GPOTABLE":
+                emit(table_text(child))
+                for note in child:  # table notes and sources follow the rows; table_text alone would drop them
+                    if note.tag not in ("TTITLE", "BOXHD", "ROW"):
+                        emit(text_of(note))
+            elif tag == "FTNT":
+                emit("[footnote] " + text_of(child))
+            elif tag == "EXTRACT":
+                visit(child)
+            else:  # HD, P, FP, LI, E, NOTE, EXAMPLE, ...
+                emit(text_of(child))
+                for pg in child.iter("PRTPAGE"):  # a page break inside the element applies to what follows
+                    page[0] = pg.get("P") or page[0]
+
+    visit(extract)
+    return out
+
+
+def extract_spans(source_text):
+    """(start, end) character offsets of every top-level EXTRACT element in the decoded source, in document order.
+    Index n matches the n-th EXTRACT of `root.iter("EXTRACT")` as long as EXTRACTs are not nested (checked by depth)."""
+    spans, stack = [], []
+    for m in re.finditer(r"<(/?)EXTRACT\b[^>]*?(/?)>", source_text):
+        if m.group(2):  # self-closing
+            spans.append((m.start(), m.end()))
+        elif not m.group(1):
+            stack.append(m.start())
+        elif stack:
+            start = stack.pop()
+            spans.append((start, m.end()))
+    return sorted(spans)
+
+
+def source_tokens(text):
+    """Alphanumeric tokens of appendix text with the `[footnote]` marker removed: the basis of the completeness proof."""
+    return TOKEN.findall(text.replace("[footnote]", " "))
+
+
+def token_fingerprint(tokens):
+    import hashlib
+    return {"tokens": len(tokens), "sorted_tokens_sha256": hashlib.sha256("\n".join(sorted(tokens)).encode("utf-8")).hexdigest()}
+
+
 QUOTED = re.compile(r"\u201c[^\u201d]*\u201d|\"[^\"]*\"|\u2018[^\u2019]*\u2019")
 SEC_ITEM = r"\d+\.\d+[A-Za-z]?(?:\([A-Za-z0-9]+\))*"
 # List separators, longest first so an Oxford comma (", and" / ", or") is consumed as one separator, not as a bare comma
@@ -327,6 +400,13 @@ def targeted(parsed, section):
 class FrParser:
     def __init__(self, root, doc_number, default_title):
         self.root = root
+        self.extract_index, self.extract_page, page = {}, {}, None  # document order and the page each EXTRACT opens on
+        for e in root.iter():
+            if e.tag == "PRTPAGE":
+                page = e.get("P") or page
+            elif e.tag == "EXTRACT":
+                self.extract_index[id(e)] = len(self.extract_index)
+                self.extract_page[id(e)] = page
         self.doc = doc_number
         self.default_title = default_title
         self.passages = []
@@ -464,8 +544,17 @@ class FrParser:
 
     def collect_rows(self, el, part, rows):
         """Carried regulatory text in document order, each row with the part it sits in."""
+        heading = None  # the HD directly before an EXTRACT: an appendix's own title
         for child in el:
-            if child.tag == "PART":
+            if child.tag == "HD":
+                heading = text_of(child)
+            elif child.tag == "EXTRACT":
+                if APPENDIX_HD.match(heading or ""):
+                    rows.append(self.appendix_row(child, heading, part))
+                else:  # bounded to titled appendices: any other direct EXTRACT is still not recovered, and is counted
+                    self.stats["direct_extract_not_recovered"] = self.stats.get("direct_extract_not_recovered", 0) + 1
+                heading = None
+            elif child.tag == "PART":
                 hd = child.find("HD")
                 m = PART_HD.search(text_of(hd)) if hd is not None else None
                 self.collect_rows(child, m.group(1) if m else part, rows)
@@ -486,6 +575,33 @@ class FrParser:
                 rows.append({"authority": False, "section_no": f"{ref.group(1)}.{ref.group(2)}" if ref else None,
                              "part_no": ref.group(1) if ref else part,
                              "subject": text_of(subj) if subj is not None else None, "paragraphs": paragraphs})
+
+    @staticmethod
+    def parse_item(text):
+        """parse_instruction, except that an instruction about an appendix as a whole targets no section and no part:
+        `Appendix A to part 252 is revised` must not read as an amendment of Part 252, and `section 2.1` inside
+        `In appendix B to part 252:` is the appendix's own numbering, not § 2.1."""
+        parsed = parse_instruction(text)
+        subject = appendix_subject(text)
+        if subject:
+            parsed = {**parsed, "targets": [], "parts": [], "ranges": [], "references": [],
+                      "appendix": {"letter": subject[0], "part": subject[1]}}
+        return parsed
+
+    def appendix_row(self, extract, heading, part):
+        """A direct REGTEXT/EXTRACT block (appendix text): its ordered lines and its own identity.
+
+        The appendix is not a CFR section: `section_no` stays empty, so an appendix-internal `2.1` is never `§ 2.1`.
+        """
+        m = APPENDIX_HD.match(heading or "")
+        lines = extract_lines(extract, [self.extract_page.get(id(extract)) or self.page])
+        identity = {"part": m.group(2) if m else part, "letter": m.group(1).upper() if m else None,
+                    "heading": heading, "title": (m.group(3) or "").strip() or None if m else None,
+                    "kind": "appendix_extract", "extract_index": self.extract_index.get(id(extract)),
+                    "source_fingerprint": token_fingerprint(source_tokens(clean("".join(extract.itertext())))),
+                    "binding_status": "not_determined"}
+        return {"authority": False, "appendix": identity, "section_no": None, "part_no": identity["part"],
+                "subject": heading, "paragraphs": [t for t, _ in lines], "pages": [pg for _, pg in lines]}
 
     @staticmethod
     def paragraph_evidence(row, items):
@@ -525,7 +641,7 @@ class FrParser:
                     instructions[-1] += " " + text
                 else:
                     instructions.append(text)
-        items = [{"idx": n, "text": t, "parsed": parse_instruction(t), "covered": set(), "used": False}
+        items = [{"idx": n, "text": t, "parsed": self.parse_item(t), "covered": set(), "used": False}
                  for n, t in enumerate(instructions, 1) if t]
         rows = []
         self.collect_rows(el, part, rows)
@@ -544,6 +660,24 @@ class FrParser:
             return found
 
         for r in rows:
+            if r.get("appendix"):  # appendix text: pair by appendix identity only; assert no section or part target
+                ident = r["appendix"]
+                matched = [i for i in items if i["parsed"].get("appendix") == {"letter": ident["letter"], "part": ident["part"]}]
+                for i in matched:
+                    i["used"] = True
+                out.append({
+                    "section_no": None, "part_no": r["part_no"], "subject": r["subject"], "appendix": ident,
+                    "instruction": "\n".join(i["text"] for i in matched),
+                    "instruction_ordinals": [i["idx"] for i in matched],
+                    "instruction_targets_all": {"targets": [], "ranges": []}, "explicit_targets": [], "explicit_parts": [],
+                    "referenced_citations": [],
+                    "unresolved_candidates": [{"instruction": i["text"], "instruction_ordinal": i["idx"],
+                                               "reason": "appendix-scoped instruction: which passages inside the appendix change is not "
+                                                         "resolved, and no CFR section or part-wide target is asserted"} for i in matched],
+                    "pairing_status": "appendix_text" if matched else "appendix_text_unpaired",
+                    "explicit_paragraphs": {"paths": [], "status": "appendix_scope_not_attributed"},
+                    "paragraphs": r["paragraphs"], "pages": r["pages"], "carried_text_origin": "appendix_extract"})
+                continue
             if r["authority"]:
                 matched = [i for i in items if re.search(r"authority citation", i["text"], re.I)
                            and r["part_no"] in i["parsed"]["parts"]]
@@ -602,6 +736,17 @@ class FrParser:
                     "carried_text_origin": "loose_paragraphs"})
         for i in items:  # instruction-only amendments: targets not covered by a carried-text row
             parsed = i["parsed"]
+            if parsed.get("appendix"):  # the instruction stays its own record; it names an appendix, never a section or part
+                ident = {"part": parsed["appendix"]["part"], "letter": parsed["appendix"]["letter"], "kind": "appendix_instruction",
+                         "binding_status": "not_determined"}
+                out.append({
+                    "section_no": None, "part_no": ident["part"], "subject": None, "appendix": ident, "instruction": i["text"],
+                    "instruction_ordinals": [i["idx"]], "instruction_targets_all": {"targets": [], "ranges": []},
+                    "explicit_targets": [], "explicit_parts": [], "referenced_citations": [],
+                    "unresolved_candidates": [{"instruction": i["text"], "instruction_ordinal": i["idx"],
+                                               "reason": "instruction names an appendix as a whole; no CFR section or part-wide target is asserted"}],
+                    "pairing_status": "appendix_instruction", "paragraphs": []})
+                continue
             remaining = [t for t in parsed["targets"] if t not in i["covered"]]
             part_only = [p for p in parsed["parts"] if not re.search(r"authority citation", i["text"], re.I)]
             ranges = classify_ranges(parsed["ranges"])
@@ -633,8 +778,16 @@ class FrParser:
             if not r["instruction"] and not r["paragraphs"] and not r["unresolved_candidates"]:
                 continue
             operations = [name for name, rx in OPERATIONS if rx.search(r["instruction"])]
-            r["explicit_paragraphs"] = self.paragraph_evidence(r, items)
-            for chunk_no, chunk in enumerate(split_chunks(r["paragraphs"], UNIT_CHARS) or [[]], 1):
+            r["explicit_paragraphs"] = r.get("explicit_paragraphs") or self.paragraph_evidence(r, items)
+            chunks = split_chunks(r["paragraphs"], UNIT_CHARS) or [[]]
+            offset = 0
+            for chunk_no, chunk in enumerate(chunks, 1):
+                appendix = None
+                if r.get("appendix") and r["paragraphs"]:
+                    appendix = {**r["appendix"], "chunk": chunk_no, "chunks": len(chunks), "first_line": offset + 1,
+                                "lines": len(chunk), "total_lines": len(r["paragraphs"])}
+                    page = r["pages"][offset] if r.get("pages") else None
+                    offset += len(chunk)
                 leads = []
                 for para in chunk:
                     m = PARA_LEAD.match(para)
@@ -650,7 +803,8 @@ class FrParser:
                     "instruction_targets_all": r["instruction_targets_all"],
                     "referenced_citations": r["referenced_citations"],
                     "unresolved_candidates": r["unresolved_candidates"], "pairing_status": r["pairing_status"],
-                    "paragraph_leads": leads, "text": "\n".join(chunk), "fr_page": self.page,
+                    "paragraph_leads": leads, "text": "\n".join(chunk), "fr_page": (page if appendix else self.page),
+                    "appendix": appendix if appendix else (r.get("appendix") if r.get("appendix") and not r["paragraphs"] else None),
                     "from_regtext": is_regtext, "carried_text_origin": r.get("carried_text_origin", "section_element")})
         self.stats["amendment_units"] += 1
 
