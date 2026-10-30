@@ -539,8 +539,10 @@ class Index:
         m = CITE.search(citation)
         if not m:
             raise ValueError(f"cannot parse citation: {citation}")
-        title, part, minor, _ = m.groups()
+        title, part, minor, paras = m.groups()
         section = f"{part}.{minor}" if minor else None
+        wanted = "".join(re.findall(r"\([A-Za-z0-9]+\)", paras or ""))  # requested paragraph path, e.g. "(c)(1)"
+        minor_num = int(minor) if minor and minor.isdigit() else None   # lettered minors (3.4a) never reach int()
         if section:
             base_rows = self.conn.execute(
                 """SELECT p.*, d.doc_key, d.sha256, d.publisher_issue_date, d.publisher_up_to_date_as_of FROM provision p
@@ -566,21 +568,37 @@ class Index:
             for r in self.conn.execute("SELECT DISTINCT section_no FROM provision WHERE title_no=? AND part_no=? AND section_no LIKE '%-%'",
                                        (title, part)):
                 span = re.match(r"^(\d+)\.(\d+)-(\d+)\.(\d+)$", r["section_no"] or "")
-                if span and span.group(1) == part and int(span.group(2)) <= int(minor or 0) <= int(span.group(4)) and minor.isdigit():
+                if minor_num is not None and span and span.group(1) == part \
+                        and int(span.group(2)) <= minor_num <= int(span.group(4)):
                     base_rows = self.conn.execute(
                         """SELECT p.*, d.doc_key, d.sha256, d.publisher_issue_date, d.publisher_up_to_date_as_of FROM provision p
                            JOIN source_document d ON d.id=p.doc_id WHERE p.title_no=? AND p.section_no=? ORDER BY p.ordinal""",
                         (title, r["section_no"])).fetchall()
                     break
-        baseline = None
-        if base_rows:
-            b = base_rows[0]
-            baseline = {"doc_key": b["doc_key"], "sha256": b["sha256"], "issue_date": b["publisher_issue_date"],
-                        "up_to_date_as_of": b["publisher_up_to_date_as_of"], "provisions_in_scope": len(base_rows),
-                        "heading": b["heading"]}
+        def summarize(rows, **extra):
+            b = rows[0]
+            return {"doc_key": b["doc_key"], "sha256": b["sha256"], "issue_date": b["publisher_issue_date"],
+                    "up_to_date_as_of": b["publisher_up_to_date_as_of"], "provisions_in_scope": len(rows),
+                    "heading": b["heading"], **extra}
+
+        baseline, section_context = None, None
+        if base_rows and section and wanted:
+            # A paragraph is in the baseline only if it (or something beneath it) is; it never resolves via its parent.
+            target = f"{section}{wanted}"
+            para_rows = [r for r in base_rows if r["locator"] == target or r["locator"].startswith(target + "(")]
+            if para_rows:
+                baseline = summarize(para_rows, precision="paragraph", requested_path=wanted)
+            else:
+                section_context = summarize(base_rows, role="section_context_not_the_requested_paragraph",
+                                            requested_path=wanted)
+        elif base_rows:
+            baseline = summarize(base_rows)
+        reference = baseline or section_context  # dates for baseline_relation come from whichever baseline text exists
         grouped = {}
+        ids_by_doc = {}
         for pid in amend:
             ev = self.evidence(pid, with_context=False)
+            ids_by_doc.setdefault(ev["doc_key"], []).append(pid)
             g = grouped.setdefault(ev["doc_key"], {"doc_key": ev["doc_key"], "document_number": ev["status"]["document_number"],
                                                    "document_type": ev["status"]["document_type"], "status": ev["status"],
                                                    "source_sha256": ev["source_sha256"], "source_url": ev["source_url"],
@@ -596,9 +614,9 @@ class Index:
             rm = self._rulemaking[g["doc_key"]]
             g["rins"] = json.loads(rm["rins"] or "[]")
             g["publication_date"] = rm["publication_date"]
-            if baseline and g["document_type"] == "Rule" and rm["effective_on"]:
+            if reference and g["document_type"] == "Rule" and rm["effective_on"]:
                 g["baseline_relation"] = ("effective_on_or_before_baseline_issue_date_baseline_may_already_reflect"
-                                          if rm["effective_on"] <= baseline["issue_date"]
+                                          if rm["effective_on"] <= reference["issue_date"]
                                           else "effective_after_baseline_issue_date_not_in_baseline")
             elif g["document_type"] == "Proposed Rule":
                 g["baseline_relation"] = "proposal_not_in_baseline"
@@ -608,6 +626,22 @@ class Index:
                                       (g["doc_key"], g["doc_key"])).fetchall()
             g["candidate_links"] = [{"other": r["b_doc_key"] if r["a_doc_key"] == g["doc_key"] else r["a_doc_key"],
                                      "rel": r["rel_type"], "basis": r["basis"], "review": r["review_status"]} for r in links]
+        # Paragraph precision is decided per instrument from that instrument's own units only; one instrument's
+        # explicitly attributed path never establishes another's. Instruments without it stay as section context.
+        if section and wanted:
+            for g in instruments:
+                support = self._paragraph_support(ids_by_doc[g["doc_key"]], wanted)
+                supported = {loc for _, loc in support}
+                g["paragraph_precision"] = {
+                    "requested_path": wanted, "resolved": bool(support),
+                    "achieved": "paragraph" if support else "section_only",
+                    "supported_by": sorted(supported),
+                    "reason": None if support else "paragraph_precision_unresolved",
+                    "evidence": "explicit_paragraphs: complete path named by an attributed amendatory instruction "
+                                "(unreviewed text pattern)"}
+                g["role"] = "paragraph_supported" if support else "section_context"
+                for u in g["units"]:
+                    u["paragraph_supported"] = u["locator"] in supported
         candidates = []
         like = (f"{title} CFR {section}",) if section else (f"{title} CFR {part}.%",)
         op = "=" if section else "LIKE"
@@ -629,8 +663,48 @@ class Index:
                                                                "instruction_ordinal": r["instruction_ordinal"],
                                                                "range": [r["lo_section"], r["hi_section"]],
                                                                "reason": r["basis"]}]})
-        return {"citation": citation, "as_of": self.as_of, "baseline": baseline, "instruments": instruments,
+        precision = "paragraph" if (section and wanted) else ("section" if section else "part")
+        cur_rec = fut_rec = None
+        if precision == "paragraph":  # reuse the citation resolver, once per scope, so precision is reported separately
+            cur_rec = self.resolve_citations(citation, "current")[0]
+            fut_rec = self.resolve_citations(citation, "future")[0]
+        supported_docs = [g["doc_key"] for g in instruments if (g.get("paragraph_precision") or {}).get("resolved")]
+        if precision == "paragraph":
+            current_precision = {"scope": "current", "requested": precision, "requested_path": wanted,
+                                 "resolved": baseline is not None, "achieved": "paragraph" if baseline else None,
+                                 "reason": None if baseline else cur_rec["reason"],
+                                 "note": "" if baseline else cur_rec["note"]}
+            future_precision = {"scope": "future", "requested": precision, "requested_path": wanted,
+                                "resolved": bool(supported_docs),
+                                "achieved": "paragraph" if supported_docs else ("section_only" if instruments else None),
+                                "supported_instruments": supported_docs,
+                                "section_context_instruments": [g["doc_key"] for g in instruments if g["doc_key"] not in supported_docs],
+                                "reason": None if supported_docs else (fut_rec["reason"] if not instruments
+                                                                       else "paragraph_precision_unresolved"),
+                                "note": "" if supported_docs else (fut_rec["note"] if fut_rec else "")}
+        else:
+            current_precision = {"scope": "current", "requested": precision, "resolved": baseline is not None,
+                                 "achieved": precision if baseline else None}
+            future_precision = {"scope": "future", "requested": precision, "resolved": bool(instruments),
+                                "achieved": precision if instruments else None}
+        if precision == "paragraph":
+            evidence_status = ("available" if (baseline or supported_docs) else
+                               "section_context_only" if (section_context or instruments) else "unavailable")
+        else:
+            evidence_status = "available" if (baseline or instruments) else "unavailable"
+        unavailable = None
+        if evidence_status == "unavailable":
+            reason = self._diagnose_unresolved(title, part, section, paras or "", "both", None, [])
+            unavailable = {"reason": reason, "legal_validity": "not_determined",
+                           "note": CITATION_REASONS[reason] + " This reports unavailable evidence only; it is not a "
+                                   "determination that the citation is invalid or does not exist."}
+        return {"citation": citation, "as_of": self.as_of, "requested_precision": precision, "requested_path": wanted or None,
+                "baseline": baseline, "section_context": section_context, "instruments": instruments,
+                "current_precision": current_precision, "future_precision": future_precision,
+                "evidence_status": evidence_status, "unavailable": unavailable, "legal_validity": "not_determined",
                 "unresolved_candidates": candidates, "applicability_status": "not_assessed",
                 "notes": ["Instruments are independent; no cumulative future rulebook is constructed.",
+                          "For a paragraph citation, section_context and instruments with role section_context are broader "
+                          "section evidence only; paragraph precision is resolved separately for current and for each instrument.",
                           "Only explicit amendment targets appear as instruments; unpaired or ambiguous matches are listed under unresolved_candidates.",
                           "baseline_relation compares publisher dates only; confirm against the text before relying on it."]}

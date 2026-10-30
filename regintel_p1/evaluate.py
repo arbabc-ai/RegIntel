@@ -376,6 +376,62 @@ def check_mixed_source(index, item):
     return {"id": item["id"], "query": q, "runs": runs, "passed": not failures, "failures": failures[:12]}
 
 
+def check_delta_precision(index, item):
+    """delta() on a paragraph or lettered citation: no crash, precision reported separately for current and for each
+    instrument, no precision through the parent section, unavailable evidence structured and not a validity finding."""
+    failures = []
+    try:
+        d = index.delta(item["citation"])
+    except Exception as exc:  # a crash is a failure, never an acceptable answer
+        return {"id": item["id"], "citation": item["citation"], "passed": False, "failures": [f"crashed: {exc!r}"]}
+    exp = item["expect"]
+    cur, fut = d["current_precision"], d["future_precision"]
+    if d["applicability_status"] != "not_assessed" or d["legal_validity"] != "not_determined":
+        failures.append("applicability or legal validity asserted")
+    if "evidence_status" in exp and d["evidence_status"] != exp["evidence_status"]:
+        failures.append(f"evidence_status {d['evidence_status']} != {exp['evidence_status']}")
+    if "current_resolved" in exp and cur["resolved"] != exp["current_resolved"]:
+        failures.append(f"current resolved {cur['resolved']} != {exp['current_resolved']}")
+    if exp.get("current_reason") and cur.get("reason") != exp["current_reason"]:
+        failures.append(f"current reason {cur.get('reason')} != {exp['current_reason']}")
+    if exp.get("baseline_doc") and (not d["baseline"] or d["baseline"]["doc_key"] != exp["baseline_doc"]):
+        failures.append("baseline missing or from the wrong document")
+    if exp.get("baseline_none") and d["baseline"] is not None:
+        failures.append("a baseline resolved for a paragraph the current text does not contain")
+    if exp.get("section_context") is True and not d["section_context"]:
+        failures.append("section context missing")
+    inst = {g["doc_key"]: g for g in d["instruments"]}
+    for key in exp.get("supported", []):
+        if key not in inst or not (inst[key].get("paragraph_precision") or {}).get("resolved"):
+            failures.append(f"{key} should be paragraph-supported")
+    for key in exp.get("not_supported", []):
+        if key in inst and (inst[key].get("paragraph_precision") or {}).get("resolved"):
+            failures.append(f"{key} must not be paragraph-supported")
+        if key not in inst:
+            failures.append(f"{key} should be listed as section context")
+    if exp.get("no_instrument_supported") and (fut["resolved"] or any(
+            (g.get("paragraph_precision") or {}).get("resolved") for g in d["instruments"])):
+        failures.append("an instrument established precision for an unsupported path")
+    if exp.get("future_achieved") and fut["achieved"] != exp["future_achieved"]:
+        failures.append(f"future achieved {fut['achieved']} != {exp['future_achieved']}")
+    if exp.get("unavailable_reason"):
+        if not d["unavailable"] or d["unavailable"]["reason"] != exp["unavailable_reason"]:
+            failures.append(f"unavailable reason {d['unavailable'] and d['unavailable']['reason']}")
+        elif "not a determination that the citation is invalid" not in d["unavailable"]["note"]:
+            failures.append("unavailable note does not separate unavailable from invalid")
+    keys = [g["doc_key"] for g in d["instruments"]]
+    if len(keys) != len(set(keys)):
+        failures.append("instruments are not independent")
+    cres = index.resolve_citations(item["citation"], "current")[0]
+    fres = index.resolve_citations(item["citation"], "future")[0]
+    if cur["resolved"] != cres["resolved"] or fut["resolved"] != fres["resolved"] and d["requested_precision"] == "paragraph":
+        failures.append("delta precision disagrees with resolve_citations")
+    return {"id": item["id"], "citation": item["citation"], "passed": not failures, "failures": failures[:8],
+            "evidence_status": d["evidence_status"],
+            "supported": [k for k, g in inst.items() if (g.get("paragraph_precision") or {}).get("resolved")],
+            "section_context": [k for k, g in inst.items() if g.get("role") == "section_context"]}
+
+
 def run_regressions(index, path):
     spec = json.loads(open(path).read())
     out = {"version": spec["version"], "task": spec["task"],
@@ -384,11 +440,13 @@ def run_regressions(index, path):
            "citation_scope": [check_citation_scope(index, c) for c in spec["citation_scope"]],
            "status": [check_status_regression(index, x) for x in spec.get("status", [])],
            "citation_completeness": [check_citation_completeness(index, x) for x in spec.get("citation_completeness", [])],
-           "mixed_source": [check_mixed_source(index, x) for x in spec.get("mixed_source", [])]}
+           "mixed_source": [check_mixed_source(index, x) for x in spec.get("mixed_source", [])],
+           "delta_precision": [check_delta_precision(index, x) for x in spec.get("delta_precision", [])]}
     out["passed"] = (all(d["passed"] for d in out["delta"]) and out["relationship_integrity"]["passed"]
                      and all(c["passed"] for c in out["citation_scope"]) and all(x["passed"] for x in out["status"])
                      and all(x["passed"] for x in out["citation_completeness"])
-                     and all(x["passed"] for x in out["mixed_source"]))
+                     and all(x["passed"] for x in out["mixed_source"])
+                     and all(x["passed"] for x in out["delta_precision"]))
     return out
 
 
@@ -439,6 +497,8 @@ def render(report):
         lines.append(f"  {ri['id']} {'PASS' if ri['passed'] else 'FAIL'} relationship integrity violations={ri['violations']} {'; '.join(ri['failures'])}")
         for c in reg["citation_scope"]:
             lines.append(f"  {c['id']} {'PASS' if c['passed'] else 'FAIL'} citation scope '{c['query']}' {'; '.join(c['failures'])}")
+        for x in reg.get("delta_precision", []):
+            lines.append(f"  {x['id']} {'PASS' if x['passed'] else 'FAIL'} delta precision '{x['citation']}' status={x.get('evidence_status')} supported={[k[-5:] for k in x.get('supported', [])]} context={[k[-5:] for k in x.get('section_context', [])]} {'; '.join(x['failures'])}")
         for x in reg.get("mixed_source", []):
             lines.append(f"  {x['id']} {'PASS' if x['passed'] else 'FAIL'} mixed source '{x['query']}' runs={x['runs']} {'; '.join(x['failures'])}")
         for x in reg.get("citation_completeness", []):

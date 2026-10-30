@@ -1,6 +1,6 @@
 {
- "version": "p1-regress-0.6",
- "task": "S7-P1-EVIDENCE-BOUNDARIES-01 + S7-P1-EVIDENCE-COMPLETENESS-02 + S7-P1-COVERAGE-GUARDS-03 + S7-P1-CITATION-COMPLETENESS-04 + S7-P1-FUTURE-PARAGRAPH-PRECISION-05 + S7-P1-MIXED-SOURCE-COVERAGE-06",
+ "version": "p1-regress-0.7",
+ "task": "S7-P1-EVIDENCE-BOUNDARIES-01 + S7-P1-EVIDENCE-COMPLETENESS-02 + S7-P1-COVERAGE-GUARDS-03 + S7-P1-CITATION-COMPLETENESS-04 + S7-P1-FUTURE-PARAGRAPH-PRECISION-05 + S7-P1-MIXED-SOURCE-COVERAGE-06 + S7-P1-DELTA-PRECISION-07",
  "note": "Deterministic regression checks over the acquired corpus for amendment-target integrity and retrieval scope filtering. Kept separate from questions.json so the 37-item baseline stays frozen. A pass means the contract holds, not that any rule applies to a bank.",
  "delta": [
   {
@@ -220,7 +220,8 @@
   "v0.3 (COVERAGE-GUARDS-03): status checks P04-P12 added for queries that match no catalog topic (coverage unassessed), the LCR/NSFR partial-coverage topics, and citation-only controls. Earlier checks unchanged.",
   "v0.4 (CITATION-COMPLETENESS-04): citation_completeness checks K01-K09 exercise exact and hybrid across current/future/both, with and without part filters; earlier checks unchanged.",
   "v0.5 (FUTURE-PARAGRAPH-PRECISION-05): K10-K15 added for deep paragraph paths in future scope. Earlier checks unchanged.",
-  "v0.6 (MIXED-SOURCE-COVERAGE-06, finding F1): mixed_source checks M01-M04 (18 runs each: exact/hybrid x current/future/both x k10/k1/excluding filter) and status checks P13-P15. Earlier checks unchanged."
+  "v0.6 (MIXED-SOURCE-COVERAGE-06, finding F1): mixed_source checks M01-M04 (18 runs each: exact/hybrid x current/future/both x k10/k1/excluding filter) and status checks P13-P15. Earlier checks unchanged.",
+  "v0.7 (DELTA-PRECISION-07, R1/R2): delta_precision checks DP01-DP09: delta() keeps the requested paragraph path, reports current and future precision separately and per instrument, and returns structured unavailable evidence for lettered sections. Earlier checks unchanged."
  ],
  "status": [
   {
@@ -556,6 +557,120 @@
    "query": "How should a bank recognize expected loan losses and calculate CET1?",
    "expect_gap_topic": "gaap_asc",
    "expect_acquired_topic": "cet1_capital"
+  }
+ ],
+ "delta_precision": [
+  {
+   "id": "DP01",
+   "citation": "12 CFR 3.22(z)(999)",
+   "expect": {
+    "evidence_status": "section_context_only",
+    "current_resolved": false,
+    "current_reason": "paragraph_not_found_in_acquired_section",
+    "baseline_none": true,
+    "section_context": true,
+    "no_instrument_supported": true,
+    "future_achieved": "section_only"
+   }
+  },
+  {
+   "id": "DP02",
+   "citation": "12 CFR 3.12(c)(999)",
+   "expect": {
+    "evidence_status": "section_context_only",
+    "current_resolved": false,
+    "current_reason": "paragraph_not_found_in_acquired_section",
+    "baseline_none": true,
+    "section_context": true,
+    "no_instrument_supported": true,
+    "future_achieved": "section_only"
+   }
+  },
+  {
+   "id": "DP03",
+   "citation": "12 CFR 3.22(i)(999)",
+   "expect": {
+    "evidence_status": "section_context_only",
+    "current_resolved": false,
+    "current_reason": "paragraph_not_found_in_acquired_section",
+    "baseline_none": true,
+    "section_context": true,
+    "no_instrument_supported": true,
+    "future_achieved": "section_only"
+   }
+  },
+  {
+   "id": "DP04",
+   "citation": "12 CFR 3.12(c)(1)",
+   "note": "supported control: baseline has (c)(1) and the CBLR final rule names it; the March capital proposal amends 3.12 without naming it",
+   "expect": {
+    "evidence_status": "available",
+    "current_resolved": true,
+    "baseline_doc": "ecfr:12:3",
+    "supported": [
+     "fr:2026-08298"
+    ],
+    "not_supported": [
+     "fr:2026-05959"
+    ],
+    "future_achieved": "paragraph"
+   }
+  },
+  {
+   "id": "DP05",
+   "citation": "12 CFR 3.22(i)",
+   "note": "supported control: (i) is not in the baseline; OCC rule 2026-21706 and its proposal 2026-04089 each name it, the March capital proposals do not",
+   "expect": {
+    "evidence_status": "available",
+    "current_resolved": false,
+    "current_reason": "paragraph_not_found_in_acquired_section",
+    "baseline_none": true,
+    "supported": [
+     "fr:2026-21706",
+     "fr:2026-04089"
+    ],
+    "not_supported": [
+     "fr:2026-05959",
+     "fr:2026-05960"
+    ],
+    "future_achieved": "paragraph"
+   }
+  },
+  {
+   "id": "DP06",
+   "citation": "12 CFR 3.4a",
+   "expect": {
+    "evidence_status": "unavailable",
+    "unavailable_reason": "not_found_in_acquired_part",
+    "baseline_none": true
+   }
+  },
+  {
+   "id": "DP07",
+   "citation": "12 CFR 217.4a",
+   "expect": {
+    "evidence_status": "unavailable",
+    "unavailable_reason": "not_found_in_acquired_part",
+    "baseline_none": true
+   }
+  },
+  {
+   "id": "DP08",
+   "citation": "12 CFR 3.5",
+   "note": "numeric minor inside the reserved range 3.4-3.9 still resolves",
+   "expect": {
+    "evidence_status": "available",
+    "baseline_doc": "ecfr:12:3"
+   }
+  },
+  {
+   "id": "DP09",
+   "citation": "12 CFR 3.22",
+   "note": "section-level delta unchanged",
+   "expect": {
+    "evidence_status": "available",
+    "baseline_doc": "ecfr:12:3"
+   }
   }
  ]
 }
