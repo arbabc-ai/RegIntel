@@ -555,6 +555,37 @@ def check_current_agreement(index, item):
     return {"id": item["id"], "citation": q, "via": via, "passed": not failures, "failures": failures[:10]}
 
 
+def check_amendatory_lists(index, item):
+    """Real-corpus guard for amendment-list parsing: literal expected paragraph paths (no fabricated shorthand) and
+    literal explicit section targets (Oxford-comma lists kept whole)."""
+    c, failures = index.conn, []
+    rows = c.execute(
+        """SELECT p.instruction, p.explicit_targets, p.explicit_paragraphs FROM provision p JOIN source_document d ON d.id=p.doc_id
+           WHERE d.doc_key=? AND p.kind='amendment' AND (? IS NULL OR p.section_no=?) AND p.instruction LIKE ?""",
+        (item["doc_key"], item.get("section"), item.get("section"), item.get("instruction_prefix", "") + "%")).fetchall()
+    if not rows:
+        return {"id": item["id"], "doc_key": item["doc_key"], "passed": False, "failures": ["no amendment units found"]}
+    if "expect_paths" in item:
+        got = sorted({x for r in rows for x in json.loads(r["explicit_paragraphs"] or "{}").get("paths", [])})
+        if got != sorted(item["expect_paths"]):
+            failures.append(f"paths {got} != {sorted(item['expect_paths'])}")
+        for path in item.get("forbid_paths", []):
+            if path in got:
+                failures.append(f"fabricated path {path} was produced")
+            rec = index.resolve_citations(f"12 CFR {item['section']}{path}", "future")[0]
+            if rec["resolved"]:
+                failures.append(f"fabricated {path} resolves in future scope")
+        for path in item["expect_paths"]:
+            rec = index.resolve_citations(f"12 CFR {item['section']}{path}", "future")[0]
+            if not (rec["resolved"] and rec["achieved"] == "paragraph"):
+                failures.append(f"{path} should resolve at paragraph precision")
+    if "expect_targets" in item:
+        for r in rows:
+            if sorted(json.loads(r["explicit_targets"])) != sorted(item["expect_targets"]):
+                failures.append(f"targets {json.loads(r['explicit_targets'])} != {item['expect_targets']}")
+    return {"id": item["id"], "doc_key": item["doc_key"], "units": len(rows), "passed": not failures, "failures": failures[:8]}
+
+
 def run_regressions(index, path):
     spec = json.loads(Path(path).read_text())
     out = {"version": spec["version"], "task": spec["task"],
@@ -566,19 +597,21 @@ def run_regressions(index, path):
            "mixed_source": [check_mixed_source(index, x) for x in spec.get("mixed_source", [])],
            "delta_precision": [check_delta_precision(index, x) for x in spec.get("delta_precision", [])],
            "instruction_boundary": [check_instruction_boundary(index, x) for x in spec.get("instruction_boundary", [])],
-           "current_agreement": [check_current_agreement(index, x) for x in spec.get("current_agreement", [])]}
+           "current_agreement": [check_current_agreement(index, x) for x in spec.get("current_agreement", [])],
+           "amendatory_lists": [check_amendatory_lists(index, x) for x in spec.get("amendatory_lists", [])]}
     out["passed"] = (all(d["passed"] for d in out["delta"]) and out["relationship_integrity"]["passed"]
                      and all(c["passed"] for c in out["citation_scope"]) and all(x["passed"] for x in out["status"])
                      and all(x["passed"] for x in out["citation_completeness"])
                      and all(x["passed"] for x in out["mixed_source"])
                      and all(x["passed"] for x in out["delta_precision"])
                      and all(x["passed"] for x in out["instruction_boundary"])
-                     and all(x["passed"] for x in out["current_agreement"]))
+                     and all(x["passed"] for x in out["current_agreement"])
+                     and all(x["passed"] for x in out["amendatory_lists"]))
     return out
 
 
 REGRESSION_GROUPS = ("delta", "relationship_integrity", "citation_scope", "status", "citation_completeness",
-                     "mixed_source", "delta_precision", "instruction_boundary", "current_agreement")
+                     "mixed_source", "delta_precision", "instruction_boundary", "current_agreement", "amendatory_lists")
 
 
 def overall(report):
@@ -661,6 +694,8 @@ def render(report):
         lines.append(f"  {ri['id']} {'PASS' if ri['passed'] else 'FAIL'} relationship integrity violations={ri['violations']} {'; '.join(ri['failures'])}")
         for c in reg["citation_scope"]:
             lines.append(f"  {c['id']} {'PASS' if c['passed'] else 'FAIL'} citation scope '{c['query']}' {'; '.join(c['failures'])}")
+        for x in reg.get("amendatory_lists", []):
+            lines.append(f"  {x['id']} {'PASS' if x['passed'] else 'FAIL'} amendatory lists {x.get('doc_key')} units={x.get('units')} {'; '.join(x['failures'])}")
         for x in reg.get("current_agreement", []):
             lines.append(f"  {x['id']} {'PASS' if x['passed'] else 'FAIL'} current agreement '{x['citation']}' via={x.get('via')} {'; '.join(x['failures'])}")
         for x in reg.get("instruction_boundary", []):

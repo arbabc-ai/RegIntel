@@ -67,9 +67,12 @@ def split_chunks(paragraphs, limit):
 
 QUOTED = re.compile(r"\u201c[^\u201d]*\u201d|\"[^\"]*\"|\u2018[^\u2019]*\u2019")
 SEC_ITEM = r"\d+\.\d+[A-Za-z]?(?:\([A-Za-z0-9]+\))*"
-SEC_LIST_BODY = rf"{SEC_ITEM}(?:\s*(?:,|and|or|through|to|[\-\u2013\u2014])\s*(?:\u00a7+\s*)?{SEC_ITEM})*"
+# List separators, longest first so an Oxford comma (", and" / ", or") is consumed as one separator, not as a bare comma
+# that then fails to find a section number.
+LIST_SEPARATOR = r"(?:,\s*(?:and|or)\b|,|\band\b|\bor\b|through|to|[\-\u2013\u2014])"
+SEC_LIST_BODY = rf"{SEC_ITEM}(?:\s*{LIST_SEPARATOR}\s*(?:\u00a7+\s*)?{SEC_ITEM})*"
 SECTION_TOKEN = re.compile(r"(\d+)\.(\d+[A-Za-z]?)")
-LIST_SEP = re.compile(r"\s*(,|and|or|through|to|[\-\u2013\u2014])\s*(?:\u00a7+\s*)?", re.I)
+LIST_SEP = re.compile(rf"\s*({LIST_SEPARATOR})\s*(?:\u00a7+\s*)?", re.I)
 VERB = (r"(?:amend(?:ing)?|revis(?:e|ing)|add(?:ing)?|remov(?:e|ing)(?:\s+and\s+reserv(?:e|ing))?|redesignat(?:e|ing)"
         r"|reserv(?:e|ing)|suspend(?:ing)?|republish(?:ing)?|delet(?:e|ing)|establish(?:ing)?|designat(?:e|ing))")
 DONE = r"(?:amended|revised|added|removed|redesignated|reserved|suspended|republished|deleted|established)"
@@ -104,30 +107,80 @@ def _list_members(body):
     separators = [m.group(1).lower() for m in LIST_SEP.finditer(re.sub(SEC_ITEM, "\u0000", body))]
     ranges = []
     for i, sep in enumerate(separators[: max(len(tokens) - 1, 0)]):
-        if sep in ("through", "to", "-", "\u2013", "\u2014"):
+        if sep in ("through", "to", "-", "\u2013", "\u2014"):  # an Oxford ", and" is a list separator, never a range
             ranges.append([tokens[i], tokens[i + 1]])
     return list(dict.fromkeys(tokens)), ranges
+
+
+ROMAN_LOWER = {"i", "ii", "iii", "iv", "v", "vi", "vii", "viii", "ix", "x", "xi", "xii", "xiii", "xiv", "xv", "xvi",
+               "xvii", "xviii", "xix", "xx"}
+# CFR paragraph hierarchy by depth: (a) (1) (i) (A) (1) (i); the class a designator at each depth must have.
+DEPTH_CLASS = {1: "letter", 2: "digit", 3: "roman", 4: "upper", 5: "digit", 6: "roman"}
+
+
+def designator_classes(designator):
+    """Hierarchy classes a bare designator could belong to (`i`, `v`, `x` are both a letter and a roman numeral)."""
+    d = designator.strip("()")
+    classes = set()
+    if d.isdigit():
+        classes.add("digit")
+    if d in ROMAN_LOWER:
+        classes.add("roman")
+    if d.islower() and (len(d) == 1 or (len(set(d)) == 1 and len(d) == 2 and d not in ROMAN_LOWER)) and d not in ROMAN_LOWER - {"i", "v", "x"}:
+        classes.add("letter")
+    if d.isupper() and (len(d) == 1 or len(set(d)) == 1 and len(d) == 2):
+        classes.add("upper")
+    return classes
+
+
+def expand_shorthand(previous, designator):
+    """The path a bare designator names after `previous`, or None when the hierarchy does not settle it.
+
+    A bare designator is a sibling of the previous path's last designator (`(c)(5) ... (7)` is (c)(7)) only when its
+    class is the one the hierarchy puts at that depth. Otherwise it is a top-level paragraph (`(c)(4)(i), (e)` names
+    top-level (e), not (c)(4)(e)) only when it can be a top-level letter. If both readings fit and differ
+    (`(a)(1)(i) and (v)`: roman v, or letter v) the shorthand is ambiguous and nothing is claimed.
+    """
+    classes = designator_classes(designator)
+    depth = len(previous)
+    sibling = DEPTH_CLASS.get(depth, "digit") in classes
+    top = "letter" in classes
+    if sibling and top and depth > 1:
+        return None
+    if sibling:
+        return previous[:-1] + [designator]
+    if top:
+        return [designator]
+    return None
 
 
 def named_paragraph_paths(text):
     """Complete paragraph paths an instruction names as objects of an action, e.g. `(c)(1)`, `(a)(2)(i)`, `(i)`.
 
-    Only paths written out in full count. A bare designator that follows a multi-level path in the same list
-    (`(c)(5) through (7)`) inherits that path's parent, which is the standard CFR shorthand; the interior of a
-    `through` range is not named and is not claimed. Descendants of a named paragraph are never inferred.
+    Paths written out in full count. A bare designator after a path in the same list is expanded only where the CFR
+    hierarchy supports it (see `expand_shorthand`): `(c)(5) through (7)` names (c)(5) and (c)(7) and not the interior;
+    `(c)(4)(i), (e) and (f)` names (c)(4)(i), (e), (f); `(b)(1), (c), (d)` names (b)(1), (c), (d). Ambiguous shorthand,
+    and every bare designator after it, is left unresolved. Descendants of a named paragraph are never inferred.
     """
     stripped = QUOTED.sub(" \u2039q\u203a ", text)
     paths = []
     for m in PARA_ACTION.finditer(stripped):
-        body, prev = m.group(1), None
-        for token in re.finditer(PARA_TOKEN, body):
+        previous = None  # list of designators of the previous path; "unknown" once shorthand could not be settled
+        for token in re.finditer(PARA_TOKEN, m.group(1)):
             parts = PARA_PART.findall(token.group(0))
-            if prev and len(prev) > 1 and len(parts) == 1:
-                parts = prev[:-1] + parts
-            path = "".join(parts)
+            if len(parts) > 1 or previous is None:
+                resolved = parts  # written in full, or the first item of a list
+            elif previous == "unknown":
+                resolved = None
+            else:
+                resolved = expand_shorthand(previous, parts[0])
+            if resolved is None:
+                previous = "unknown"
+                continue
+            path = "".join(resolved)
             if path not in paths:
                 paths.append(path)
-            prev = parts
+            previous = resolved
     return paths
 
 
