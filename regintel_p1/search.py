@@ -61,8 +61,9 @@ def terms_of(query):
 
 
 CITATION_REASONS = {
-    "paragraph_precision_unresolved": "Only section-level amendment evidence was found; the requested paragraph is not "
-                                      "confirmed in it (section-level records are returned, flagged).",
+    "paragraph_precision_unresolved": "Only section-level amendment evidence was found; no amendatory instruction names the "
+                                      "complete requested paragraph path, so its hierarchy is not established "
+                                      "(section-level records are returned, flagged).",
     "excluded_by_part_filter": "A record exists, but the requested part filter excludes it.",
     "excluded_by_requested_scope": "A record exists in the other scope, but not in the requested scope.",
     "excluded_by_scope_and_part_filter": "A record exists, but only in the other scope and outside the requested part filter.",
@@ -248,27 +249,38 @@ class Index:
             out.append(self._resolve_one(label, title, part, section, paras or "", scope, parts))
         return out
 
-    def _paragraph_in_leads(self, ids, paras):
-        """Unreviewed text-pattern check: does an amendment unit open with the requested first paragraph designator?"""
-        first = re.match(r"\([A-Za-z0-9]+\)", paras)
-        if not first or not ids:
-            return False
-        for (leads,) in self.conn.execute(
-                f"SELECT paragraph_leads FROM provision WHERE id IN ({','.join('?' * len(ids))})", ids):
-            if any(lead.startswith(first.group(0)) for lead in json.loads(leads or "[]")):
-                return True
-        return False
+    def _paragraph_support(self, ids, paras):
+        """Amendment units whose evidence supports the complete requested paragraph path.
+
+        Evidence is the explicit path an attributed amendatory instruction names as the object of an action
+        (`explicit_paragraphs`, an unreviewed text-pattern signal). Matching a first designator, a lead of the
+        carried text, or an ancestor is not evidence for a deeper path, and hierarchy is not inferred from the order
+        of carried paragraphs. Returns [(doc_key, locator)] of supporting units.
+        """
+        wanted = "".join(re.findall(r"\([A-Za-z0-9]+\)", paras))
+        if not wanted or not ids:
+            return []
+        out = []
+        for row in self.conn.execute(
+                f"""SELECT d.doc_key, p.locator, p.explicit_paragraphs FROM provision p JOIN source_document d ON d.id=p.doc_id
+                    WHERE p.id IN ({','.join('?' * len(ids))})""", ids):
+            ev = json.loads(row["explicit_paragraphs"] or "{}")
+            if ev.get("status") == "attributed" and wanted in ev.get("paths", []):
+                out.append((row["doc_key"], row["locator"]))
+        return out
 
     def _resolve_one(self, label, title, part, section, paras, scope, parts):
         cur = self._exact_current(title, part, section, paras, parts) if scope in ("current", "both") else []
         fut = self._exact_future(title, part, section, parts, section and section.split(".", 1)[1]) \
             if scope in ("future", "both") else []
         precision = "paragraph" if (section and paras) else ("section" if section else "part")
-        fut_precise = bool(fut) and (not paras or self._paragraph_in_leads(fut, paras))
+        support = self._paragraph_support(fut, paras) if (fut and paras) else []
+        fut_precise = bool(fut) and (not paras or bool(support))
         resolved = bool(cur) or fut_precise
         achieved = precision if resolved else ("section_only" if (paras and fut) else None)
         record = {"citation": label, "requested_precision": precision, "resolved": resolved, "achieved": achieved,
                   "by_scope": {"current": len(cur), "future": len(fut)}, "legal_validity": "not_determined",
+                  "future_paragraph_support": [{"doc_key": d, "locator": loc} for d, loc in support],
                   "_current_ids": cur, "_future_ids": fut}
         if resolved:
             record["reason"] = None
@@ -392,6 +404,7 @@ class Index:
                 out["explicit_targets"] = json.loads(row["explicit_targets"] or "[]")
                 out["explicit_parts"] = json.loads(row["explicit_parts"] or "[]")
                 out["explicit_ranges"] = json.loads(row["explicit_ranges"] or "[]")
+                out["explicit_paragraphs"] = json.loads(row["explicit_paragraphs"] or "{}")
                 out["pairing_status"] = row["pairing_status"]
         else:
             out["status"] = {"state": "current_baseline_requires_operative_effect_review",

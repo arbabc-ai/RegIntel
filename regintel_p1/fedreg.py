@@ -76,6 +76,14 @@ EXPLICIT_PART_PATTERNS = (
 )
 
 
+PARA_TOKEN = r"(?:\([A-Za-z0-9]+\))+"
+PARA_LIST = (rf"({PARA_TOKEN}(?:\s*(?:,|and|or|through|to|[\-\u2013\u2014])\s*(?:and\s+)?{PARA_TOKEN})*)")
+# A paragraph counts as named only as the object of an action ("revising paragraph (c)(1)", "In paragraph (a)(2),"),
+# outside quotation marks. A bare mention elsewhere is not evidence.
+PARA_ACTION = re.compile(rf"(?:\b{VERB}\s+(?:new\s+)?|(?<![A-Za-z])In\s+)paragraphs?\s+{PARA_LIST}", re.I)
+PARA_PART = re.compile(r"\([A-Za-z0-9]+\)")
+
+
 def _list_members(body):
     """(sections, ranges) from `3.10, 3.11 and 3.12(a)` or `3.120 through 3.121`; paragraph designators dropped."""
     tokens = [SECTION_TOKEN.search(t).group(0) for t in re.findall(SEC_ITEM, body)]
@@ -85,6 +93,28 @@ def _list_members(body):
         if sep in ("through", "to", "-", "\u2013", "\u2014"):
             ranges.append([tokens[i], tokens[i + 1]])
     return list(dict.fromkeys(tokens)), ranges
+
+
+def named_paragraph_paths(text):
+    """Complete paragraph paths an instruction names as objects of an action, e.g. `(c)(1)`, `(a)(2)(i)`, `(i)`.
+
+    Only paths written out in full count. A bare designator that follows a multi-level path in the same list
+    (`(c)(5) through (7)`) inherits that path's parent, which is the standard CFR shorthand; the interior of a
+    `through` range is not named and is not claimed. Descendants of a named paragraph are never inferred.
+    """
+    stripped = QUOTED.sub(" \u2039q\u203a ", text)
+    paths = []
+    for m in PARA_ACTION.finditer(stripped):
+        body, prev = m.group(1), None
+        for token in re.finditer(PARA_TOKEN, body):
+            parts = PARA_PART.findall(token.group(0))
+            if prev and len(prev) > 1 and len(parts) == 1:
+                parts = prev[:-1] + parts
+            path = "".join(parts)
+            if path not in paths:
+                paths.append(path)
+            prev = parts
+    return paths
 
 
 def parse_instruction(text):
@@ -305,6 +335,28 @@ class FrParser:
                              "part_no": ref.group(1) if ref else part,
                              "subject": text_of(subj) if subj is not None else None, "paragraphs": paragraphs})
 
+    @staticmethod
+    def paragraph_evidence(row, items):
+        """Paragraph paths named by the row's own instruction(s), attributed only when unambiguous.
+
+        If a paired instruction targets several sections or ranges, the paragraph it names cannot be assigned to one
+        of them, so nothing is attributed (`unattributed_multiple_targets`).
+        """
+        ordinals = set(row.get("instruction_ordinals") or [])
+        paired = [i for i in items if i["idx"] in ordinals]
+        paths, status = [], "none_named"
+        for i in paired:
+            named = named_paragraph_paths(i["text"])
+            if not named:
+                continue
+            parsed = i["parsed"]
+            if len(parsed["targets"]) == 1 and not parsed["ranges"] and not parsed["parts"]:
+                paths += [x for x in named if x not in paths]
+                status = "attributed"
+            else:
+                status = "unattributed_multiple_targets" if status != "attributed" else status
+        return {"paths": paths, "status": status}
+
     def add_unit(self, el, title, part, is_regtext, instructions=None):
         """Pair carried section text only with instructions that explicitly target that section.
 
@@ -403,6 +455,7 @@ class FrParser:
             if not r["instruction"] and not r["paragraphs"] and not r["unresolved_candidates"]:
                 continue
             operations = [name for name, rx in OPERATIONS if rx.search(r["instruction"])]
+            r["explicit_paragraphs"] = self.paragraph_evidence(r, items)
             for chunk_no, chunk in enumerate(split_chunks(r["paragraphs"], UNIT_CHARS) or [[]], 1):
                 leads = []
                 for para in chunk:
@@ -415,6 +468,7 @@ class FrParser:
                     "instruction_ordinals": r["instruction_ordinals"], "operations": operations,
                     "explicit_targets": r["explicit_targets"], "explicit_parts": r["explicit_parts"],
                     "explicit_ranges": r.get("explicit_ranges", []),
+                    "explicit_paragraphs": r["explicit_paragraphs"],
                     "instruction_targets_all": r["instruction_targets_all"],
                     "referenced_citations": r["referenced_citations"],
                     "unresolved_candidates": r["unresolved_candidates"], "pairing_status": r["pairing_status"],

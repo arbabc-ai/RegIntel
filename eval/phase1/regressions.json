@@ -1,6 +1,6 @@
 {
- "version": "p1-regress-0.4",
- "task": "S7-P1-EVIDENCE-BOUNDARIES-01 + S7-P1-EVIDENCE-COMPLETENESS-02 + S7-P1-COVERAGE-GUARDS-03 + S7-P1-CITATION-COMPLETENESS-04",
+ "version": "p1-regress-0.5",
+ "task": "S7-P1-EVIDENCE-BOUNDARIES-01 + S7-P1-EVIDENCE-COMPLETENESS-02 + S7-P1-COVERAGE-GUARDS-03 + S7-P1-CITATION-COMPLETENESS-04 + S7-P1-FUTURE-PARAGRAPH-PRECISION-05",
  "note": "Deterministic regression checks over the acquired corpus for amendment-target integrity and retrieval scope filtering. Kept separate from questions.json so the 37-item baseline stays frozen. A pass means the contract holds, not that any rule applies to a bank.",
  "delta": [
   {
@@ -218,7 +218,8 @@
  "changelog": [
   "v0.2 (COMPLETENESS-02): citation-scope checks now exercise exact AND hybrid for every scope (v0.1 stopped after the exact mode) and require nonempty current results for acquired citations; added range, part-lookup and partial-coverage checks. G01-G08 are unchanged.",
   "v0.3 (COVERAGE-GUARDS-03): status checks P04-P12 added for queries that match no catalog topic (coverage unassessed), the LCR/NSFR partial-coverage topics, and citation-only controls. Earlier checks unchanged.",
-  "v0.4 (CITATION-COMPLETENESS-04): citation_completeness checks K01-K09 exercise exact and hybrid across current/future/both, with and without part filters; earlier checks unchanged."
+  "v0.4 (CITATION-COMPLETENESS-04): citation_completeness checks K01-K09 exercise exact and hybrid across current/future/both, with and without part filters; earlier checks unchanged.",
+  "v0.5 (FUTURE-PARAGRAPH-PRECISION-05): K10-K15 added for deep paragraph paths in future scope. Earlier checks unchanged."
  ],
  "status": [
   {
@@ -429,6 +430,78 @@
     ]
    },
    "note": "range-membership interior stays discoverable in future scope; current scope has no Part 327 baseline"
+  },
+  {
+   "id": "K10",
+   "query": "12 CFR 3.12(c)(999)",
+   "expect_unresolved_somewhere": [
+    "12 CFR 3.12(c)(999)"
+   ],
+   "expect_reasons": {
+    "12 CFR 3.12(c)(999)": [
+     "paragraph_not_found_in_acquired_section",
+     "paragraph_precision_unresolved"
+    ]
+   },
+   "note": "(c) matches a first designator; (999) must not resolve in future scope"
+  },
+  {
+   "id": "K11",
+   "query": "12 CFR 3.22(i)(999)",
+   "expect_unresolved_somewhere": [
+    "12 CFR 3.22(i)(999)"
+   ],
+   "expect_reasons": {
+    "12 CFR 3.22(i)(999)": [
+     "paragraph_not_found_in_acquired_section",
+     "paragraph_precision_unresolved"
+    ]
+   }
+  },
+  {
+   "id": "K12",
+   "query": "12 CFR 3.12(c)(1) and 12 CFR 3.12(c)(999)",
+   "expect_unresolved_somewhere": [
+    "12 CFR 3.12(c)(999)"
+   ],
+   "expect_reasons": {
+    "12 CFR 3.12(c)(999)": [
+     "paragraph_not_found_in_acquired_section",
+     "paragraph_precision_unresolved"
+    ]
+   }
+  },
+  {
+   "id": "K13",
+   "query": "12 CFR 3.22(i) and 12 CFR 3.22(i)(999)",
+   "expect_unresolved_somewhere": [
+    "12 CFR 3.22(i)(999)"
+   ],
+   "expect_reasons": {
+    "12 CFR 3.22(i)(999)": [
+     "paragraph_not_found_in_acquired_section",
+     "paragraph_precision_unresolved"
+    ]
+   }
+  },
+  {
+   "id": "K14",
+   "query": "12 CFR 3.12(c)(7)",
+   "expect_all_resolved": true,
+   "note": "supported control: current baseline and the CBLR final rule both carry (c)(7)"
+  },
+  {
+   "id": "K15",
+   "query": "12 CFR 327.16(e)(4)",
+   "expect_unresolved_somewhere": [
+    "12 CFR 327.16(e)(4)"
+   ],
+   "expect_reasons": {
+    "12 CFR 327.16(e)(4)": [
+     "part_not_acquired"
+    ]
+   },
+   "note": "2026-13192 names (e)(4) so future scope resolves it; current scope has no Part 327 baseline"
   }
  ]
 }
