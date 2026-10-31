@@ -1011,6 +1011,70 @@ def check_query_lists(index, item):
     return {"id": item["id"], "kind": kind, "passed": not failures, "failures": failures[:10]}
 
 
+def check_query_ranges(index, item):
+    """Real-corpus guard for ranges in a request. `unsupported`: each request parses to one unresolved `unsupported_range`
+    expression (never an endpoint), the resolver and exact retrieval return nothing for it, answers carry its citation
+    gap and are never evidence_found, and delta() reports it with no baseline or instruments. `independent`: a citation
+    elsewhere in the request still resolves and is the only source of exact results. `prose`: ordinary text around a
+    citation is not a range and the request still equals the plain citation."""
+    failures, kind = [], item["kind"]
+    scopes = ("current", "future", "both")
+    gaps = lambda out: sorted(g["topic"] for g in out["coverage_gaps"] if g["topic"].startswith("citation:"))
+    if kind == "unsupported":
+        for q in item["requests"]:
+            cites = parse_query_citations(q)
+            if len(cites) != 1 or cites[0]["malformed"] != "unsupported_range" or cites[0]["diagnostics"]["interior_inferred"]:
+                failures.append(f"'{q}': not read as one unsupported range expression")
+                continue
+            label = cites[0]["label"]
+            for scope in scopes:
+                for parts in (None, ["12:3"], ["12:999"]):
+                    recs = index.resolve_citations(q, scope, parts)
+                    if len(recs) != 1 or recs[0]["resolved"] or recs[0]["_current_ids"] or recs[0]["_future_ids"] or recs[0]["reason"] != "unsupported_range":
+                        failures.append(f"'{q}' {scope}/{parts}: resolver accepted an endpoint or interior")
+            for mode in ("exact", "hybrid"):
+                for scope in scopes:
+                    for parts in (None, ["12:3"], ["12:999"]):
+                        for k in (10, 1):
+                            out = index.answer(q, mode=mode, scope=scope, parts=parts, k=k)
+                            tag = f"'{q}' {mode}/{scope}/{parts or 'nofilter'}/k{k}"
+                            if out["status"] == "evidence_found":
+                                failures.append(f"{tag}: evidence_found")
+                            if f"citation:{label}" not in gaps(out):
+                                failures.append(f"{tag}: no citation gap")
+                            if mode == "exact" and out["results"]:
+                                failures.append(f"{tag}: exact returned records for the range")
+            d = index.delta(q)
+            if d["evidence_status"] != "unavailable" or d["baseline"] or d["instruments"] or d["unavailable"]["reason"] != "unsupported_range":
+                failures.append(f"'{q}': delta did not report the unsupported range")
+    elif kind == "independent":
+        q, other = item["request"], item["independent"]
+        cites = parse_query_citations(q)
+        if [c["malformed"] for c in cites] != item["malformed"] or other not in [c["canonical"] for c in cites]:
+            failures.append("independent citation was not preserved next to the range")
+        for mode in ("exact", "hybrid"):
+            for scope in ("current", "both"):
+                out = index.answer(q, mode=mode, scope=scope, k=10)
+                if out["status"] == "evidence_found" or len(gaps(out)) != 1:
+                    failures.append(f"{mode}/{scope}: expected exactly one citation gap and no evidence_found")
+        ex = index.answer(q, mode="exact", scope="current", k=10)
+        alone = index.answer(other, mode="exact", scope="current", k=10)
+        if [r["provision_id"] for r in ex["results"]] != [r["provision_id"] for r in alone["results"]]:
+            failures.append("exact results are not exactly the independent citation's records")
+        if index.delta(q)["evidence_status"] != "unsupported_multi_citation":
+            failures.append("delta selected one member of a multi-citation request")
+    elif kind == "prose":
+        for q, plain in item["requests"]:
+            cites = parse_query_citations(q)
+            if len(cites) != 1 or cites[0]["malformed"]:
+                failures.append(f"'{q}' was read as a range or list")
+                continue
+            a, b = (index.answer(x, mode="exact", scope="current", k=10) for x in (q, plain))
+            if [r["provision_id"] for r in a["results"]] != [r["provision_id"] for r in b["results"]] or gaps(a) != gaps(b):
+                failures.append(f"'{q}' differs from '{plain}'")
+    return {"id": item["id"], "kind": kind, "passed": not failures, "failures": failures[:10]}
+
+
 def run_regressions(index, path):
     spec = json.loads(Path(path).read_text())
     out = {"version": spec["version"], "task": spec["task"],
@@ -1029,7 +1093,8 @@ def run_regressions(index, path):
            "suffix_integrity": [check_suffix_integrity(index, x) for x in spec.get("suffix_integrity", [])],
            "appendix_evidence": [check_appendix_evidence(index, x) for x in spec.get("appendix_evidence", [])],
            "titleless_delta": [check_titleless_delta(index, x) for x in spec.get("titleless_delta", [])],
-           "query_lists": [check_query_lists(index, x) for x in spec.get("query_lists", [])]}
+           "query_lists": [check_query_lists(index, x) for x in spec.get("query_lists", [])],
+           "query_ranges": [check_query_ranges(index, x) for x in spec.get("query_ranges", [])]}
     out["passed"] = (all(d["passed"] for d in out["delta"]) and out["relationship_integrity"]["passed"]
                      and all(c["passed"] for c in out["citation_scope"]) and all(x["passed"] for x in out["status"])
                      and all(x["passed"] for x in out["citation_completeness"])
@@ -1043,12 +1108,13 @@ def run_regressions(index, path):
                      and all(x["passed"] for x in out["suffix_integrity"])
                      and all(x["passed"] for x in out["appendix_evidence"])
                      and all(x["passed"] for x in out["titleless_delta"])
-                     and all(x["passed"] for x in out["query_lists"]))
+                     and all(x["passed"] for x in out["query_lists"])
+                     and all(x["passed"] for x in out["query_ranges"]))
     return out
 
 
 REGRESSION_GROUPS = ("delta", "relationship_integrity", "citation_scope", "status", "citation_completeness",
-                     "mixed_source", "delta_precision", "instruction_boundary", "current_agreement", "amendatory_lists", "designator_integrity", "query_citations", "suffix_integrity", "appendix_evidence", "titleless_delta", "query_lists")
+                     "mixed_source", "delta_precision", "instruction_boundary", "current_agreement", "amendatory_lists", "designator_integrity", "query_citations", "suffix_integrity", "appendix_evidence", "titleless_delta", "query_lists", "query_ranges")
 
 
 def overall(report):
@@ -1131,6 +1197,8 @@ def render(report):
         lines.append(f"  {ri['id']} {'PASS' if ri['passed'] else 'FAIL'} relationship integrity violations={ri['violations']} {'; '.join(ri['failures'])}")
         for c in reg["citation_scope"]:
             lines.append(f"  {c['id']} {'PASS' if c['passed'] else 'FAIL'} citation scope '{c['query']}' {'; '.join(c['failures'])}")
+        for x in reg.get("query_ranges", []):
+            lines.append(f"  {x['id']} {'PASS' if x['passed'] else 'FAIL'} query ranges [{x['kind']}] {'; '.join(x['failures'])}")
         for x in reg.get("query_lists", []):
             lines.append(f"  {x['id']} {'PASS' if x['passed'] else 'FAIL'} query lists [{x['kind']}] {'; '.join(x['failures'])}")
         for x in reg.get("titleless_delta", []):

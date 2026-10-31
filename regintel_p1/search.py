@@ -53,10 +53,11 @@ def _citation_record(title, part, minor, designators, pos, suffix, query, start,
                        "valid_prefix": f"{section}{paras}", "unread_suffix": query[pos:end].strip()}
     return {"title": title, "part": part, "minor": minor, "section": section, "paras": paras, "canonical": canonical,
             "requested": requested, "label": " ".join(requested.split()) if malformed else canonical,
-            "malformed": malformed, "diagnostics": diagnostics, "inherited": inherited, "designators": list(designators), "_end": end}
+            "malformed": malformed, "diagnostics": diagnostics, "inherited": inherited, "designators": list(designators), "_end": end,
+            "_start": start}
 
 
-def _unresolved_expression(reason, expression, start, end, prev, candidates):
+def _unresolved_expression(reason, expression, start, end, prev, candidates):  # `start` is where the expression begins
     """A list member that cannot be settled: kept as a structured unresolved expression, never dropped or guessed."""
     label = f"{' '.join(expression.split())} after {prev['label']}"
     return {"title": prev["title"], "part": prev["part"], "minor": prev["minor"], "section": prev["section"], "paras": "",
@@ -64,7 +65,82 @@ def _unresolved_expression(reason, expression, start, end, prev, candidates):
             "diagnostics": {"requested": " ".join(expression.split()), "accepted_valid_prefix": False,
                             "valid_prefix": prev["canonical"], "unread_suffix": expression.strip(), "expression": expression.strip(),
                             "inherits_from": prev["label"], "candidate_paths": candidates},
-            "inherited": {"kind": "paragraph", "from": prev["label"]}, "designators": [], "_end": end, "_unsettled": True}
+            "inherited": {"kind": "paragraph", "from": prev["label"]}, "designators": [], "_end": end, "_unsettled": True, "_start": start}
+
+
+RANGE_OP = re.compile(r"\s*(through|thru|to|[\-\u2010-\u2015\u2212])\s*", re.I)
+RANGE_WORDS = ("through", "thru")
+
+
+def _read_range(query, cursor, prev):
+    """A range written after a section or paragraph citation (`3.1-6.1`, `3.22(a) through (z)`, `to`, en dash), or None.
+
+    Ranges are not supported: the interior is never inferred and an endpoint is never accepted as the whole request.
+    The result is one structured unresolved expression whose `requested` is the complete expression (both endpoints), with
+    the endpoints and any reversal or cross-part reading recorded in `diagnostics.range`. A `through` with nothing readable
+    after it is a range with a missing endpoint; `to` and the dashes need a readable endpoint, so ordinary prose
+    (`3.1 to the extent...`, `3.22 - a rule`) is not a range.
+    """
+    op = RANGE_OP.match(query, cursor)
+    if not op or not prev.get("section"):
+        return None
+    word = op.group(1).lower()
+    pos = op.end()
+    end_info = None
+    h = CITE_HEAD.match(query, pos)
+    if h and (h.group(1) or query[pos] == "\u00a7"):
+        title, part, minor = h.groups()
+        designators, p, suffix = _read_designators(query, h.end()) if minor else ([], h.end(), None)
+        end_pos = suffix[2] if suffix else p
+        end_info = {"title": title, "part": part, "minor": minor, "designators": designators, "form": "fully_qualified"}
+    else:
+        m = SECTION_MEMBER.match(query, pos)
+        if m:
+            designators, p, suffix = _read_designators(query, m.end())
+            end_pos = suffix[2] if suffix else p
+            end_info = {"title": prev["title"], "part": m.group(1), "minor": m.group(2), "designators": designators, "form": "bare_section"}
+        elif query.startswith("(", pos) and BARE_DESIGNATOR.match(query, pos):
+            c = BARE_DESIGNATOR.match(query, pos)
+            designators, p, suffix = _read_designators(query, c.end())
+            end_pos = suffix[2] if suffix else p
+            end_info = {"title": prev["title"], "part": prev["part"], "minor": prev["minor"], "designators": [c.group(1)] + designators,
+                        "form": "bare_paragraph"}
+    if end_info is None:
+        if word in RANGE_WORDS and not re.match(r"[A-Za-z0-9\u00a7(]", query[pos:pos + 1] or " "):
+            end_pos = op.start() + len(op.group(0).rstrip())  # `through` at the end of the request or before punctuation
+            end_info = {"form": "missing_endpoint"}
+        else:
+            return None
+    start = prev["_start"]
+    requested = query[start:end_pos]
+    first = prev["canonical"]
+    last = None
+    if end_info.get("part"):
+        paras = "".join(f"({d})" for d in end_info["designators"])
+        if end_info["form"] == "bare_paragraph":
+            base = expand_shorthand(prev["designators"], end_info["designators"][0]) if prev.get("designators") else None
+            last = (f"{prev['title']} CFR " if prev["title"] else "\u00a7 ") + f"{prev['section']}" + "".join(f"({d})" for d in base + end_info["designators"][1:]) if base else None
+        else:
+            sec = f"{end_info['part']}.{end_info['minor']}" if end_info["minor"] else None
+            last = (f"{end_info['title']} CFR " if end_info["title"] else "\u00a7 ") + (f"{sec}{paras}" if sec else f"Part {end_info['part']}")
+    reversed_ = cross_part = None
+    if end_info.get("form") in ("fully_qualified", "bare_section") and end_info.get("minor") and prev["minor"]:
+        cross_part = end_info["part"] != prev["part"]
+        a, b = re.match(r"\d+", prev["minor"]), re.match(r"\d+", end_info["minor"])
+        if not cross_part and a and b:
+            reversed_ = int(b.group(0)) < int(a.group(0))
+        elif cross_part:
+            reversed_ = int(end_info["part"]) < int(prev["part"])
+        if end_info["title"] and prev["title"] and end_info["title"] != prev["title"]:
+            cross_part = True
+    return {"title": prev["title"], "part": prev["part"], "minor": prev["minor"], "section": prev["section"], "paras": "",
+            "canonical": None, "requested": requested, "label": " ".join(requested.split()), "malformed": "unsupported_range",
+            "diagnostics": {"requested": " ".join(requested.split()), "accepted_valid_prefix": False, "valid_prefix": first,
+                            "unread_suffix": query[prev["_end"]:end_pos].strip(), "interior_inferred": False,
+                            "range": {"operator": word if word.isalpha() else "dash", "start": first, "end": last,
+                                      "end_requested": query[pos:end_pos].strip() or None, "end_form": end_info["form"],
+                                      "reversed": reversed_, "cross_part_or_title": cross_part}},
+            "inherited": prev.get("inherited"), "designators": [], "_end": end_pos, "_start": start, "_unsettled": True}
 
 
 def _read_member(query, pos, prev):
@@ -132,16 +208,23 @@ def parse_query_citations(query):
     expression (`ambiguous_shorthand`, `shorthand_without_paragraph_context`), never dropped and never merged into
     the citation before it. Members carry `inherited`; their `requested` is the member text alone.
     """
-    out = []
+    out, consumed = [], 0
     for m in CITE_HEAD.finditer(query):
+        if m.start() < consumed:
+            continue  # inside a range already read as one expression
         title, part, minor = m.groups()
         if not minor and not title:
             continue  # a bare '\u00a7 12' is not a citation
         designators, pos, suffix = _read_designators(query, m.end()) if minor else ([], m.end(), None)
         rec = _citation_record(title, part, minor, designators, pos, suffix, query, m.start())
         out.append(rec)
+        consumed = rec["_end"]
         if rec["malformed"]:
             continue
+        rng = _read_range(query, rec["_end"], rec) if minor else None
+        if rng:
+            out[-1] = rec = rng
+            consumed = rng["_end"]
         prev, cursor = rec, rec["_end"]
         while True:
             sep = LIST_SEP.match(query, cursor)
@@ -154,6 +237,12 @@ def parse_query_citations(query):
             cursor = mem["_end"]
             if mem["malformed"] and not mem.get("_unsettled"):
                 break  # an unclosed/malformed tail: nothing after it is read as a member
+            if not mem["malformed"]:
+                rng = _read_range(query, cursor, mem)
+                if rng:
+                    out[-1] = mem = rng
+                    cursor = rng["_end"]
+            consumed = cursor
             prev = mem
     return out
 
@@ -214,6 +303,9 @@ CITATION_REASONS = {
                                       "(section-level records are returned, flagged).",
     "ambiguous_title": "The citation names no CFR title and acquired evidence for this section exists under more than one title; "
                        "the titles' evidence is not merged. Name the title (for example `12 CFR 3.22`) to select one.",
+    "unsupported_range": "The request names a range of sections or paragraphs. Ranges are not supported: the interior is not inferred "
+                         "and neither endpoint is accepted as the whole request, so nothing is returned for the expression. "
+                         "Request each citation separately.",
     "ambiguous_shorthand": "A bare paragraph designator follows a citation but the CFR hierarchy does not settle which paragraph it "
                            "names; it is reported as an unresolved expression and is not guessed or merged into the citation before it.",
     "shorthand_without_paragraph_context": "A bare paragraph designator follows a citation that names no paragraph to inherit from; "
