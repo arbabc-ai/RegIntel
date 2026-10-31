@@ -70,6 +70,7 @@ def _unresolved_expression(reason, expression, start, end, prev, candidates):  #
 
 RANGE_OP = re.compile(r"\s*(through|thru|to|[\-\u2010-\u2015\u2212])\s*", re.I)
 RANGE_WORDS = ("through", "thru")
+PART_ENDPOINT = re.compile(r"(?:(Parts?)\s+)?(\d{1,4})(?![A-Za-z0-9]|\.\d)(?!\s*(?:%|percent\b))", re.I)
 
 
 def _read_range(query, cursor, prev):
@@ -82,7 +83,8 @@ def _read_range(query, cursor, prev):
     (`3.1 to the extent...`, `3.22 - a rule`) is not a range.
     """
     op = RANGE_OP.match(query, cursor)
-    if not op or not prev.get("section"):
+    part_level = bool(prev.get("part") and prev.get("title") and not prev.get("minor"))  # `12 CFR Part 3`
+    if not op or not (prev.get("section") or part_level):
         return None
     word = op.group(1).lower()
     pos = op.end()
@@ -99,14 +101,22 @@ def _read_range(query, cursor, prev):
             designators, p, suffix = _read_designators(query, m.end())
             end_pos = suffix[2] if suffix else p
             end_info = {"title": prev["title"], "part": m.group(1), "minor": m.group(2), "designators": designators, "form": "bare_section"}
-        elif query.startswith("(", pos) and BARE_DESIGNATOR.match(query, pos):
+        elif query.startswith("(", pos) and BARE_DESIGNATOR.match(query, pos) and prev.get("section"):
             c = BARE_DESIGNATOR.match(query, pos)
             designators, p, suffix = _read_designators(query, c.end())
             end_pos = suffix[2] if suffix else p
             end_info = {"title": prev["title"], "part": prev["part"], "minor": prev["minor"], "designators": [c.group(1)] + designators,
                         "form": "bare_paragraph"}
+        elif PART_ENDPOINT.match(query, pos) and (PART_ENDPOINT.match(query, pos).group(1) or part_level and (word != "to")):
+            pe = PART_ENDPOINT.match(query, pos)  # `Part 6`, or (after a part and not for `to`) a bare `6`
+            end_pos = pe.end()
+            end_info = {"title": prev["title"], "part": pe.group(2), "minor": None, "designators": [], "form": "bare_part"}
         elif query.startswith("(", pos) and _malformed_operand(query, pos) is not None:
             end_pos = _malformed_operand(query, pos)  # the endpoint is malformed: the whole expression stays one unresolved range
+            end_info = {"form": "malformed_endpoint"}
+        elif part_level and BARE_DESIGNATOR.match(query, pos):  # a paragraph designator cannot end a range that starts at a part
+            _, end_pos, suffix = _read_designators(query, pos)
+            end_pos = suffix[2] if suffix else end_pos
             end_info = {"form": "malformed_endpoint"}
     if end_info is None:
         if word in RANGE_WORDS and not re.match(r"[A-Za-z0-9\u00a7(]", query[pos:pos + 1] or " "):
@@ -127,7 +137,11 @@ def _read_range(query, cursor, prev):
             sec = f"{end_info['part']}.{end_info['minor']}" if end_info["minor"] else None
             last = (f"{end_info['title']} CFR " if end_info["title"] else "\u00a7 ") + (f"{sec}{paras}" if sec else f"Part {end_info['part']}")
     reversed_ = cross_part = None
-    if end_info.get("form") in ("fully_qualified", "bare_section") and end_info.get("minor") and prev["minor"]:
+    if end_info.get("part") and end_info["form"] in ("fully_qualified", "bare_part", "bare_section") and (part_level or not end_info["minor"]) and prev.get("part"):
+        sp, ep = int(prev["part"]), int(end_info["part"])  # a part-level range: compare parts (titles only when both are written)
+        cross_part = sp != ep or bool(end_info["title"] and prev["title"] and end_info["title"] != prev["title"])
+        reversed_ = ep < sp if not (end_info["title"] and prev["title"] and end_info["title"] != prev["title"]) else None
+    elif end_info.get("form") in ("fully_qualified", "bare_section") and end_info.get("minor") and prev["minor"]:
         cross_part = end_info["part"] != prev["part"]
         a, b = re.match(r"\d+", prev["minor"]), re.match(r"\d+", end_info["minor"])
         if not cross_part and a and b:
@@ -153,6 +167,8 @@ def _malformed_operand(query, pos):
     `(*`) and a bare `(` that ends the request. Ordinary explanatory parentheticals (`(introductory text)`, `(see below)`)
     are not operands.
     """
+    if BARE_DESIGNATOR.match(query, pos):
+        return None  # a complete designator is not a malformed operand
     o = BARE_OPENER.match(query, pos)
     if o:
         if not designator_classes(o.group(1)):
@@ -247,7 +263,7 @@ def parse_query_citations(query):
         consumed = rec["_end"]
         if rec["malformed"]:
             continue
-        rng = _read_range(query, rec["_end"], rec) if minor else None
+        rng = _read_range(query, rec["_end"], rec)
         if rng:
             out[-1] = rec = rng
             consumed = rng["_end"]

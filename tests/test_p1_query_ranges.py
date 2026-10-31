@@ -90,7 +90,11 @@ class ParserTests(unittest.TestCase):
         self.assertEqual([c["label"] for c in parse("12 CFR 3.22(a) and (z)")], ["12 CFR 3.22(a)", "12 CFR 3.22(z)"])
         for q in ("12 CFR 3.1", "12 CFR 3.1(c)(4)(i)", "12 CFR Part 3", "§ 3.22(a)", "12 CFR 3.22(a)(9999999"):
             self.assertEqual(len(parse(q)), 1, q)
-        self.assertEqual(self.only("12 CFR Part 3-6")["malformed"], None)  # part-level ranges are out of scope here
+        # PART-RANGE-INTEGRITY-21: this line used to assert that `12 CFR Part 3-6` parses as Part 3 alone ("out of scope").
+        # That silently accepted the first endpoint as the whole request; part-level ranges are now unsupported_range
+        # expressions too (tests/test_p1_part_ranges.py). A plain part citation is still a plain part citation.
+        self.assertEqual(self.only("12 CFR Part 3-6")["malformed"], UNSUPPORTED)
+        self.assertIsNone(self.only("12 CFR Part 3")["malformed"])
 
     def test_citation_only_covers_the_whole_expression(self):
         for q in SECTION_RANGES + ("12 CFR 3.22(a) through (z)",):
