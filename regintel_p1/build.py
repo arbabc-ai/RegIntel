@@ -345,7 +345,8 @@ def record_source_status(conn, source_status, counts):
 
     A dependency is available only if its document was verified against the manifest, parsed and indexed with usable
     provisions. Missing, skipped and empty dependencies are persisted per topic with the reason, so a degraded build
-    cannot keep an unsupported coverage claim. This is source availability, not provision coverage or applicability.
+    cannot keep an unsupported coverage claim. Sections the coverage note names (`required_sections`) must also be present as indexed
+    sections of an indexed document. This is source availability, not provision coverage or applicability.
     """
     declared = json.loads(DEPENDENCIES_PATH.read_text())["required_baseline_sources"]
     catalog = {t["id"]: t for t in json.loads(TOPICS_PATH.read_text())["topics"]}
@@ -363,6 +364,20 @@ def record_source_status(conn, source_status, counts):
             if status != "indexed":
                 conn.execute("INSERT INTO topic_source_gap VALUES (?,?,?,?)", (topic_id, key, status, reason))
                 gaps += 1
+        # Sections the coverage note names: only checked in documents that are indexed (an unindexed document already has its own gap).
+        for key, sections in sorted((dep.get("required_sections") or {}).items()):
+            if key not in dep["sources"]:
+                raise ValueError(f"topic_dependencies.json: {topic_id} requires sections of {key}, which is not one of its sources")
+            if source_status[key][1] != "indexed":
+                continue
+            for section in sections:
+                found = conn.execute("""SELECT 1 FROM provision p JOIN source_document d ON d.id = p.doc_id
+                                        WHERE d.doc_key = ? AND p.kind = 'section' AND p.section_no = ? LIMIT 1""", (key, section)).fetchone()
+                if not found:
+                    conn.execute("INSERT INTO topic_source_gap VALUES (?,?,?,?)",
+                                 (topic_id, f"{key}#{section}", "missing_required_section",
+                                  f"the indexed document has no section {section}, which the topic's coverage note names"))
+                    gaps += 1
     for key, (publisher, status, reason, provisions, usable) in sorted(source_status.items()):
         conn.execute("INSERT INTO source_status VALUES (?,?,?,?,?,?)", (key, publisher, status, reason, provisions, usable))
     counts["unavailable_topic_sources"] = gaps

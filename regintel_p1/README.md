@@ -80,3 +80,5 @@ No dense/neural retriever (no embedding model was available without installing p
 the "semantic" half of hybrid retrieval is the topic-catalog expansion, not vectors. The `Index.retrieve` interface and
 `evaluate.RETRIEVERS` are where a vector retriever would be compared. No reranker, no relationship review, no
 applicability engine, no parsing of tables into cells beyond `|`-joined rows.
+
+**Required sections (S7-P1-REQUIRED-SECTIONS-32).** `topic_dependencies.json` (v0.2) may declare `required_sections` per topic: the sections its coverage note names inside its source parts (`cbl_ratio`: 12 CFR 3.12, 217.12, 324.12). At build, a source that is indexed but has no indexed section with that number persists a `missing_required_section` gap (`doc_key` `<document>#<section>`) in `topic_source_gap`. The matched topic then reports it as `source_unavailable` in answer coverage gaps and is never `evidence_found`. A section named for a document that is not one of the topic's sources is a build error. This checks presence of the section number only; it does not establish that the section text is complete, applicable or in force.

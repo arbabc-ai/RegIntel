@@ -1061,7 +1061,7 @@ class Index:
             if missing:
                 unavailable.append(t)
                 gaps.append({"topic": t["id"], "coverage": "source_unavailable", "unavailable_sources": missing,
-                             "note": "A required eCFR baseline source for this topic is not available in this index (" +
+                             "note": "A required eCFR baseline source or section for this topic is not available in this index (" +
                                      "; ".join(f"{m['doc_key']}: {m['status']}" for m in missing) + "). The topic's declared "
                                      "acquisition coverage does not hold for this build, and other documents' hits do not stand in "
                                      "for it. This reports source availability only, not provision coverage or applicability."})

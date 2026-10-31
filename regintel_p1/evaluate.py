@@ -1353,7 +1353,7 @@ def check_list_recovery(index, item):
     return {"id": item["id"], "kind": "list_recovery", "passed": not failures, "failures": failures[:10]}
 
 
-def _synthetic_source_index(variant, as_of):
+def _synthetic_source_index(variant, as_of, drop=()):
     """A small self-contained eCFR baseline (12 CFR 3, 217, 324, 252, each with a CET1 minimum) with 12 CFR 3 omitted from the
     manifest (`omitted`), rejected by hash (`rejected`) or parsing to nothing (`empty`), or complete (`complete`)."""
     import hashlib
@@ -1369,7 +1369,13 @@ def _synthetic_source_index(variant, as_of):
         html = "<div></div>" if (part == "3" and variant == "empty") else (
             f'<div class="part" id="part-{part}"><h1>PART {part}</h1><div class="section" id="{part}.10"><h4>\u00a7 {part}.10 Minimum capital.</h4>'
             f'<div id="p-{part}.10(a)"><p class="indent-1" data-title="{part}.10(a)">(a) A bank must maintain a common equity tier 1 capital ratio '
-            f'(CET1) of at least 4.5 percent, and a capital conservation buffer.</p></div></div></div>')
+            f'(CET1) of at least 4.5 percent, and a capital conservation buffer.</p></div></div>'
+            f'<div class="section" id="{part}.12"><h4>\u00a7 {part}.12 Framework.</h4><div id="p-{part}.12(a)"><p class="indent-1" data-title="{part}.12(a)">'
+            f'(a) Filler paragraph of part {part}.</p></div></div></div>')
+        for sec in drop:  # remove a whole section (e.g. "3.12") from its part
+            if sec.split(".")[0] == part:
+                a = html.index(f'<div class="section" id="{sec}">')
+                html = html[:a] + html[html.index("</div></div>", a) + len("</div></div>"):]
         data = html.encode()
         (root / "raw" / f"e{part}.html").write_bytes(data)
         sha = hashlib.sha256(b"other bytes").hexdigest() if (part == "3" and variant == "rejected") else hashlib.sha256(data).hexdigest()
@@ -1438,6 +1444,56 @@ def check_source_coverage(index, item):
     return {"id": item["id"], "kind": kind, "passed": not failures, "failures": failures[:10]}
 
 
+def check_required_sections(index, item):
+    """Guard for section-level source availability (topic_dependencies.json `required_sections`). `corpus`: every declared section
+    is an indexed section of an indexed document, no persisted `missing_required_section` gap, and the topic's answers carry no
+    source gap. `degraded`: on small self-contained builds missing the named sections, the matched topic reports each missing
+    `<document>#<section>` in its coverage gaps and is never evidence_found, across modes, scopes, part filters and k=1, while the
+    complete build stays evidence_found. `isolation`: other topics and exact citations are unchanged by a missing section.
+    Section presence only; not completeness, applicability or validity."""
+    failures, kind = [], item["kind"]
+    gaps = lambda out: [g for g in out["coverage_gaps"] if g.get("coverage") == "source_unavailable"]
+    if kind == "corpus":
+        declared = json.loads((Path(__file__).with_name("topic_dependencies.json")).read_text())["required_baseline_sources"]
+        for topic, dep in declared.items():
+            for key, sections in (dep.get("required_sections") or {}).items():
+                for sec in sections:
+                    if not index.conn.execute("""SELECT 1 FROM provision p JOIN source_document d ON d.id = p.doc_id
+                                                 WHERE d.doc_key = ? AND p.kind = 'section' AND p.section_no = ?""", (key, sec)).fetchone():
+                        failures.append(f"{topic}: required section {sec} of {key} is not indexed")
+        if any(m["status"] == "missing_required_section" for ms in index.source_gaps.values() for m in ms):
+            failures.append("persisted missing_required_section gaps")
+        for q in item["queries"]:
+            for mode in ("hybrid", "bm25"):
+                out = index.answer(q, mode=mode, scope="current", k=10)
+                if gaps(out) or out["status"] != "evidence_found":
+                    failures.append(f"'{q}' {mode}: {out['status']} with source gaps {len(gaps(out))}")
+    elif kind in ("degraded", "isolation"):
+        for variant, drop in item["variants"].items():
+            tmp, idx = _synthetic_source_index("complete", index.as_of, drop)
+            try:
+                expect = {f"ecfr:12:{s.split('.')[0]}#{s}" for s in drop}
+                for q in item["queries"]:
+                    for mode in ("hybrid", "bm25", "topic"):
+                        for scope in ("current", "future", "both"):
+                            for parts in (None, ["12:3"], ["12:217"]):
+                                out = idx.answer(q, mode=mode, scope=scope, parts=parts, k=1)
+                                tag = f"{variant} '{q}' {mode}/{scope}/{parts or 'nofilter'}/k1"
+                                srcs = {m["doc_key"] for g in gaps(out) for m in g["unavailable_sources"]}
+                                if kind == "isolation" or not drop:
+                                    if srcs or (out["results"] and out["status"] != "evidence_found" and scope != "future"):
+                                        failures.append(f"{tag}: unrelated or complete topic gained a gap or lost evidence_found")
+                                elif srcs != expect or out["status"] == "evidence_found":
+                                    failures.append(f"{tag}: {out['status']} with unavailable sources {sorted(srcs)}")
+                cit = idx.answer("12 CFR 217.10(a)", mode="exact", scope="current", k=1)
+                if cit["status"] != "evidence_found" or not cit["citations"][0]["resolved"]:
+                    failures.append(f"{variant}: exact citation precision changed")
+                idx.conn.close()
+            finally:
+                tmp.cleanup()
+    return {"id": item["id"], "kind": kind, "passed": not failures, "failures": failures[:10]}
+
+
 def run_regressions(index, path):
     spec = json.loads(Path(path).read_text())
     out = {"version": spec["version"], "task": spec["task"],
@@ -1469,7 +1525,8 @@ def run_regressions(index, path):
            "citation_tokens": [check_citation_tokens(index, x) for x in spec.get("citation_tokens", [])],
            "hyphen_tails": [check_citation_tokens(index, x) for x in spec.get("hyphen_tails", [])],  # same contract, reason unread_hyphen_tail
            "list_recovery": [check_list_recovery(index, x) for x in spec.get("list_recovery", [])],
-           "source_coverage": [check_source_coverage(index, x) for x in spec.get("source_coverage", [])]}
+           "source_coverage": [check_source_coverage(index, x) for x in spec.get("source_coverage", [])],
+           "required_sections": [check_required_sections(index, x) for x in spec.get("required_sections", [])]}
     out["passed"] = (all(d["passed"] for d in out["delta"]) and out["relationship_integrity"]["passed"]
                      and all(c["passed"] for c in out["citation_scope"]) and all(x["passed"] for x in out["status"])
                      and all(x["passed"] for x in out["citation_completeness"])
@@ -1496,12 +1553,13 @@ def run_regressions(index, path):
                      and all(x["passed"] for x in out["citation_tokens"])
                      and all(x["passed"] for x in out["hyphen_tails"])
                      and all(x["passed"] for x in out["list_recovery"])
-                     and all(x["passed"] for x in out["source_coverage"]))
+                     and all(x["passed"] for x in out["source_coverage"])
+                     and all(x["passed"] for x in out["required_sections"]))
     return out
 
 
 REGRESSION_GROUPS = ("delta", "relationship_integrity", "citation_scope", "status", "citation_completeness",
-                     "mixed_source", "delta_precision", "instruction_boundary", "current_agreement", "amendatory_lists", "designator_integrity", "query_citations", "suffix_integrity", "appendix_evidence", "titleless_delta", "query_lists", "query_ranges", "connector_operands", "part_ranges", "part_to_ranges", "part_lists", "four_digit_parts", "candidate_titles", "explicit_title_sign", "punctuated_cfr_title", "citation_tokens", "hyphen_tails", "list_recovery", "source_coverage")
+                     "mixed_source", "delta_precision", "instruction_boundary", "current_agreement", "amendatory_lists", "designator_integrity", "query_citations", "suffix_integrity", "appendix_evidence", "titleless_delta", "query_lists", "query_ranges", "connector_operands", "part_ranges", "part_to_ranges", "part_lists", "four_digit_parts", "candidate_titles", "explicit_title_sign", "punctuated_cfr_title", "citation_tokens", "hyphen_tails", "list_recovery", "source_coverage", "required_sections")
 
 
 def overall(report):
@@ -1584,6 +1642,8 @@ def render(report):
         lines.append(f"  {ri['id']} {'PASS' if ri['passed'] else 'FAIL'} relationship integrity violations={ri['violations']} {'; '.join(ri['failures'])}")
         for c in reg["citation_scope"]:
             lines.append(f"  {c['id']} {'PASS' if c['passed'] else 'FAIL'} citation scope '{c['query']}' {'; '.join(c['failures'])}")
+        for x in reg.get("required_sections", []):
+            lines.append(f"  {x['id']} {'PASS' if x['passed'] else 'FAIL'} required sections [{x['kind']}] {'; '.join(x['failures'])}")
         for x in reg.get("source_coverage", []):
             lines.append(f"  {x['id']} {'PASS' if x['passed'] else 'FAIL'} source coverage [{x['kind']}] {'; '.join(x['failures'])}")
         for x in reg.get("list_recovery", []):

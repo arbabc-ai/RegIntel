@@ -27,6 +27,7 @@ def part_html(part):
     return (f'<div class="part" id="part-{part}"><h1>PART {part}—CAPITAL</h1><div class="section" id="{part}.10"><h4>§ {part}.10 Minimum capital requirements.</h4>'
             f'<div id="p-{part}.10(a)"><p class="indent-1" data-title="{part}.10(a)">(a) A bank must maintain a common equity tier 1 capital ratio '
             f'(CET1) of at least 4.5 percent under part {part}, and a capital conservation buffer.</p></div></div>'
+            f'<div class="section" id="{part}.12"><h4>§ {part}.12 Community bank leverage ratio framework.</h4><div id="p-{part}.12(a)"><p class="indent-1" data-title="{part}.12(a)">(a) Filler paragraph of part {part}.</p></div></div>'
             f'<div class="section" id="{part}.1"><h4>§ {part}.1 Purpose.</h4><div id="p-{part}.1(a)"><p class="indent-1" data-title="{part}.1(a)">(a) Purpose of part {part}.</p></div></div></div>')
 
 
