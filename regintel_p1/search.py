@@ -18,7 +18,7 @@ there this to under what when where which who whom why will with within would mu
 bank banks institution institutions requirement requirements rule rules regulation regulations""".split())
 # One parser serves citation_only, resolve_citations (and so exact/hybrid retrieval and answer) and delta. The earlier
 # head-plus-paragraphs pattern was removed: it stopped at whitespace inside a designator and so accepted an ancestor prefix.
-CITE_HEAD = re.compile(r"(?:(\d+)\s*CFR\s*(?:Part\s*)?|\u00a7+\s*)(\d+)(?:\.(\d+[A-Za-z]?))?", re.I)
+CITE_HEAD = re.compile(r"(?:(\d+)\s*CFR\s*(?:Parts?\s*)?|\u00a7+\s*)(\d+)(?:\.(\d+[A-Za-z]?))?", re.I)
 
 
 LIST_SEP = re.compile(r"(?:\s*[,;]\s*(?:(?:and|or)\s+)?|\s+(?:and|or)\s+)", re.I)
@@ -57,7 +57,7 @@ def _citation_record(title, part, minor, designators, pos, suffix, query, start,
             "_start": start}
 
 
-def _unresolved_expression(reason, expression, start, end, prev, candidates):  # `start` is where the expression begins
+def _unresolved_expression(reason, expression, start, end, prev, candidates, kind="paragraph"):  # `start` is where the expression begins
     """A list member that cannot be settled: kept as a structured unresolved expression, never dropped or guessed."""
     label = f"{' '.join(expression.split())} after {prev['label']}"
     return {"title": prev["title"], "part": prev["part"], "minor": prev["minor"], "section": prev["section"], "paras": "",
@@ -65,7 +65,7 @@ def _unresolved_expression(reason, expression, start, end, prev, candidates):  #
             "diagnostics": {"requested": " ".join(expression.split()), "accepted_valid_prefix": False,
                             "valid_prefix": prev["canonical"], "unread_suffix": expression.strip(), "expression": expression.strip(),
                             "inherits_from": prev["label"], "candidate_paths": candidates},
-            "inherited": {"kind": "paragraph", "from": prev["label"]}, "designators": [], "_end": end, "_unsettled": True, "_start": start}
+            "inherited": {"kind": kind, "from": prev["label"]}, "designators": [], "_end": end, "_unsettled": True, "_start": start}
 
 
 RANGE_OP = re.compile(r"\s*(through|thru|to|[\-\u2010-\u2015\u2212])\s*", re.I)
@@ -206,6 +206,15 @@ def _read_member(query, pos, prev):
         if rec["malformed"] and prev["title"]:
             rec["label"] = f"{prev['title']} CFR {rec['label']}"
         return rec
+    pm = PART_ENDPOINT.match(query, pos)
+    if pm and not query.startswith("(", pos):
+        part_context = bool(prev.get("part") and not prev.get("minor"))  # the previous member is itself a part
+        if pm.group(1) or (part_context and len(pm.group(2)) <= 3 and TO_TAIL.match(query, pm.end())):
+            # `Part 6` after any citation, or a bare `6` at the end of a clause after a part (`Part 3 and 6`, `Parts 3, 6, and 217`)
+            if not prev.get("title"):
+                return _unresolved_expression("part_without_title_context", query[pos:pm.end()], pos, pm.end(), prev, [], kind="part")
+            return _citation_record(prev["title"], pm.group(2), None, [], pm.end(), None, query, pos,
+                                    {"kind": "part", "from": prev["label"], "title_inherited": prev["title"]})
     if not query.startswith("(", pos):
         return None
     c = BARE_DESIGNATOR.match(query, pos)
@@ -352,6 +361,8 @@ CITATION_REASONS = {
     "unsupported_range": "The request names a range of sections or paragraphs. Ranges are not supported: the interior is not inferred "
                          "and neither endpoint is accepted as the whole request, so nothing is returned for the expression. "
                          "Request each citation separately.",
+    "part_without_title_context": "A part is listed after a citation that names no CFR title, so no title can be inherited for it; "
+                                  "it is reported as an unresolved expression. Name the title (for example `12 CFR Part 6`).",
     "ambiguous_shorthand": "A bare paragraph designator follows a citation but the CFR hierarchy does not settle which paragraph it "
                            "names; it is reported as an unresolved expression and is not guessed or merged into the citation before it.",
     "shorthand_without_paragraph_context": "A bare paragraph designator follows a citation that names no paragraph to inherit from; "
