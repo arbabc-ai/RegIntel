@@ -1211,6 +1211,57 @@ def check_candidate_titles(index, item):
     return {"id": item["id"], "kind": kind, "passed": not failures, "failures": failures[:10]}
 
 
+def check_explicit_title_sign(index, item):
+    """Real-corpus guard for an explicit title in front of a section sign. `signed_equivalents`: `31 CFR \u00a7 1010.100` parses,
+    resolves, answers (exact/hybrid, every scope and part filter, k=10 and 1) and deltas exactly like `31 CFR 1010.100`, with the
+    original signed span preserved. `wrong_title`: a title that does not have the section keeps an unresolved citation gap, is
+    never evidence_found, never returns another title's records, and delta has no baseline or instruments. `unsupported`: signed
+    ranges stay one unsupported range. `titleless`: a genuinely titleless citation still matches its titled form."""
+    kind, failures = item["kind"], []
+    scopes = ("current", "future", "both")
+    gaps = lambda out: sorted(g["topic"] for g in out["coverage_gaps"] if g["topic"].startswith("citation:"))
+    strip = lambda d: {k: v for k, v in d.items() if k not in ("citation", "requested_citation", "canonical_citation")}
+    if kind == "signed_equivalents":
+        for signed, plain in item["pairs"]:
+            a, b = parse_query_citations(signed), parse_query_citations(plain)
+            if [(c["title"], c["canonical"]) for c in a] != [(c["title"], c["canonical"]) for c in b] or not a or a[0]["requested"] != signed.split(",")[0].split(" and ")[0]:
+                failures.append(f"'{signed}': title, canonical citation or requested span differs from '{plain}'")
+                continue
+            for scope in scopes:
+                for parts in (None, ["12:3"], ["31:1010"]):
+                    keys = ("citation", "resolved", "achieved", "reason", "by_scope", "_current_ids", "_future_ids")
+                    ra, rb = index.resolve_citations(signed, scope, parts), index.resolve_citations(plain, scope, parts)
+                    if [[r[k] for k in keys] for r in ra] != [[r[k] for k in keys] for r in rb]:
+                        failures.append(f"'{signed}' {scope}/{parts}: resolver differs from '{plain}'")
+            for mode in ("exact", "hybrid"):
+                for scope in scopes:
+                    for k in (10, 1):
+                        x, y = (index.answer(q, mode=mode, scope=scope, k=k) for q in (signed, plain))
+                        if (x["status"], gaps(x)) != (y["status"], gaps(y)) or (mode == "exact" and [r["provision_id"] for r in x["results"]] != [r["provision_id"] for r in y["results"]]):
+                            failures.append(f"'{signed}' {mode}/{scope}/k{k}: answer differs from '{plain}'")
+            if len(a) == 1 and strip(index.delta(signed)) != strip(index.delta(plain)):
+                failures.append(f"'{signed}': delta differs from '{plain}'")
+    elif kind == "wrong_title":
+        for q in item["requests"]:
+            label = parse_query_citations(q)[-1]["label"]
+            for mode in ("exact", "hybrid"):
+                for scope in scopes:
+                    for k in (10, 1):
+                        out = index.answer(q, mode=mode, scope=scope, k=k)
+                        if out["status"] == "evidence_found" or f"citation:{label}" not in gaps(out):
+                            failures.append(f"'{q}' {mode}/{scope}/k{k}: evidence_found or no gap for {label}")
+                        if mode == "exact" and out["results"]:
+                            failures.append(f"'{q}' {scope}: exact returned records through another title")
+            d = index.delta(q)
+            if d["evidence_status"] != "unavailable" or d["baseline"] or d["instruments"]:
+                failures.append(f"'{q}': delta substituted another title's evidence")
+    elif kind == "unsupported":
+        return {**check_query_ranges(index, item), "id": item["id"]}
+    elif kind == "titleless":
+        return {**check_titleless_delta(index, item), "id": item["id"], "kind": kind}
+    return {"id": item["id"], "kind": kind, "passed": not failures, "failures": failures[:10]}
+
+
 def run_regressions(index, path):
     spec = json.loads(Path(path).read_text())
     out = {"version": spec["version"], "task": spec["task"],
@@ -1236,7 +1287,8 @@ def run_regressions(index, path):
            "part_to_ranges": [check_query_ranges(index, x) for x in spec.get("part_to_ranges", [])],
            "part_lists": [check_query_lists(index, x) for x in spec.get("part_lists", [])],  # same list-completeness contract, for part lists
            "four_digit_parts": [check_four_digit_parts(index, x) for x in spec.get("four_digit_parts", [])],
-           "candidate_titles": [check_candidate_titles(index, x) for x in spec.get("candidate_titles", [])]}
+           "candidate_titles": [check_candidate_titles(index, x) for x in spec.get("candidate_titles", [])],
+           "explicit_title_sign": [check_explicit_title_sign(index, x) for x in spec.get("explicit_title_sign", [])]}
     out["passed"] = (all(d["passed"] for d in out["delta"]) and out["relationship_integrity"]["passed"]
                      and all(c["passed"] for c in out["citation_scope"]) and all(x["passed"] for x in out["status"])
                      and all(x["passed"] for x in out["citation_completeness"])
@@ -1257,12 +1309,13 @@ def run_regressions(index, path):
                      and all(x["passed"] for x in out["part_to_ranges"])
                      and all(x["passed"] for x in out["part_lists"])
                      and all(x["passed"] for x in out["four_digit_parts"])
-                     and all(x["passed"] for x in out["candidate_titles"]))
+                     and all(x["passed"] for x in out["candidate_titles"])
+                     and all(x["passed"] for x in out["explicit_title_sign"]))
     return out
 
 
 REGRESSION_GROUPS = ("delta", "relationship_integrity", "citation_scope", "status", "citation_completeness",
-                     "mixed_source", "delta_precision", "instruction_boundary", "current_agreement", "amendatory_lists", "designator_integrity", "query_citations", "suffix_integrity", "appendix_evidence", "titleless_delta", "query_lists", "query_ranges", "connector_operands", "part_ranges", "part_to_ranges", "part_lists", "four_digit_parts", "candidate_titles")
+                     "mixed_source", "delta_precision", "instruction_boundary", "current_agreement", "amendatory_lists", "designator_integrity", "query_citations", "suffix_integrity", "appendix_evidence", "titleless_delta", "query_lists", "query_ranges", "connector_operands", "part_ranges", "part_to_ranges", "part_lists", "four_digit_parts", "candidate_titles", "explicit_title_sign")
 
 
 def overall(report):
@@ -1345,6 +1398,8 @@ def render(report):
         lines.append(f"  {ri['id']} {'PASS' if ri['passed'] else 'FAIL'} relationship integrity violations={ri['violations']} {'; '.join(ri['failures'])}")
         for c in reg["citation_scope"]:
             lines.append(f"  {c['id']} {'PASS' if c['passed'] else 'FAIL'} citation scope '{c['query']}' {'; '.join(c['failures'])}")
+        for x in reg.get("explicit_title_sign", []):
+            lines.append(f"  {x['id']} {'PASS' if x['passed'] else 'FAIL'} explicit title sign [{x['kind']}] {'; '.join(x['failures'])}")
         for x in reg.get("candidate_titles", []):
             lines.append(f"  {x['id']} {'PASS' if x['passed'] else 'FAIL'} candidate titles [{x['kind']}] {'; '.join(x['failures'])}")
         for x in reg.get("four_digit_parts", []):

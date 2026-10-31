@@ -18,7 +18,9 @@ there this to under what when where which who whom why will with within would mu
 bank banks institution institutions requirement requirements rule rules regulation regulations""".split())
 # One parser serves citation_only, resolve_citations (and so exact/hybrid retrieval and answer) and delta. The earlier
 # head-plus-paragraphs pattern was removed: it stopped at whitespace inside a designator and so accepted an ancestor prefix.
-CITE_HEAD = re.compile(r"(?:(\d+)\s*CFR\s*(?:Parts?\s*)?|\u00a7+\s*)(\d+)(?:\.(\d+[A-Za-z]?))?", re.I)
+# An explicit title may be followed by `Part`, by a section sign (`31 CFR \u00a7 3.22`, `31 CFR \u00a7\u00a7 3.22`), or directly by the number;
+# the title stays attached to the citation in every form. A bare section sign alone is a titleless citation.
+CITE_HEAD = re.compile(r"(?:(\d+)\s*CFR\s*(?:Parts?\s*|\u00a7+\s*)?|\u00a7+\s*)(\d+)(?:\.(\d+[A-Za-z]?))?", re.I)
 
 
 LIST_SEP = re.compile(r"(?:\s*[,;]\s*(?:(?:and|or)\s+)?|\s+(?:and|or)\s+)", re.I)
@@ -109,7 +111,7 @@ def _read_range(query, cursor, prev):
         title, part, minor = h.groups()
         designators, p, suffix = _read_designators(query, h.end()) if minor else ([], h.end(), None)
         end_pos = suffix[2] if suffix else p
-        end_info = {"title": title, "part": part, "minor": minor, "designators": designators, "form": "fully_qualified"}
+        end_info = {"title": title or prev["title"], "part": part, "minor": minor, "designators": designators, "form": "fully_qualified"}
     else:
         m = SECTION_MEMBER.match(query, pos)
         if m:
