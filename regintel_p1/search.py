@@ -105,6 +105,9 @@ def _read_range(query, cursor, prev):
             end_pos = suffix[2] if suffix else p
             end_info = {"title": prev["title"], "part": prev["part"], "minor": prev["minor"], "designators": [c.group(1)] + designators,
                         "form": "bare_paragraph"}
+        elif query.startswith("(", pos) and _malformed_operand(query, pos) is not None:
+            end_pos = _malformed_operand(query, pos)  # the endpoint is malformed: the whole expression stays one unresolved range
+            end_info = {"form": "malformed_endpoint"}
     if end_info is None:
         if word in RANGE_WORDS and not re.match(r"[A-Za-z0-9\u00a7(]", query[pos:pos + 1] or " "):
             end_pos = op.start() + len(op.group(0).rstrip())  # `through` at the end of the request or before punctuation
@@ -143,6 +146,31 @@ def _read_range(query, cursor, prev):
             "inherited": prev.get("inherited"), "designators": [], "_end": end_pos, "_start": start, "_unsettled": True}
 
 
+def _malformed_operand(query, pos):
+    """End of a parenthesized operand at `pos` that is not a complete designator but must not vanish, or None.
+
+    Unread operands are an unclosed designator-shaped token (`(z`), a punctuation-led or symbol-only one (`(-1)`, `(.)`,
+    `(*`) and a bare `(` that ends the request. Ordinary explanatory parentheticals (`(introductory text)`, `(see below)`)
+    are not operands.
+    """
+    o = BARE_OPENER.match(query, pos)
+    if o:
+        if not designator_classes(o.group(1)):
+            return None
+        found = paren_suffix(query, pos)
+        return found[2] if found and found[0] == "incomplete" else o.end()
+    m = re.compile(r"\(\s*([^\s()]*)").match(query, pos)
+    if not m:
+        return None
+    run = m.group(1)
+    if not run:
+        return m.end() if not query[m.end():].strip() else None
+    if re.search(r"[A-Za-z]", run):
+        return None
+    close = re.compile(r"\s*\)").match(query, m.end())
+    return close.end() if close else m.end()
+
+
 def _read_member(query, pos, prev):
     """The list member that follows a separator, or None when what follows is not a citation member.
 
@@ -162,11 +190,9 @@ def _read_member(query, pos, prev):
         return None
     c = BARE_DESIGNATOR.match(query, pos)
     if not c:
-        o = BARE_OPENER.match(query, pos)
-        if not o or not designator_classes(o.group(1)):
-            return None  # not designator-shaped: ordinary parenthetical text, not a list member
-        found = paren_suffix(query, pos)  # an unclosed or malformed bare designator after a list separator
-        end = found[2] if found and found[0] == "incomplete" else o.end()
+        end = _malformed_operand(query, pos)  # `(z`, `(-1)`, `(`: kept as an unresolved member; prose parentheticals are not
+        if end is None:
+            return None
         return _unresolved_expression("unclosed_or_malformed_designator_suffix", query[pos:end], pos, end, prev, [])
     first = c.group(1)
     designators, p, suffix = _read_designators(query, c.end())

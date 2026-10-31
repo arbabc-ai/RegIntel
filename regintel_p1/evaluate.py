@@ -1075,6 +1075,72 @@ def check_query_ranges(index, item):
     return {"id": item["id"], "kind": kind, "passed": not failures, "failures": failures[:10]}
 
 
+def check_connector_operands(index, item):
+    """Real-corpus guard for malformed operands after list separators and range operators. `list`: the valid first member is
+    kept and the malformed operand (`and (-1)`, `; (z`) is its own unresolved member with a citation gap; answers are never
+    evidence_found, exact returns only the valid member's records, and delta reports unsupported_multi_citation. `range`: the
+    whole expression is one unresolved unsupported range (no exact records, delta unavailable without baseline or
+    instruments). `independent`: a citation after the malformed expression still resolves. `explanation`: ordinary
+    parentheticals after a connector are not operands."""
+    failures, kind = [], item["kind"]
+    scopes = ("current", "future", "both")
+    gaps = lambda out: sorted(g["topic"] for g in out["coverage_gaps"] if g["topic"].startswith("citation:"))
+    if kind == "list":
+        alone = index.answer(item["valid"], mode="exact", scope="current", k=10)
+        for q in item["requests"]:
+            cites = parse_query_citations(q)
+            if len(cites) != 2 or cites[0]["canonical"] != item["valid"] or cites[0]["malformed"] or not cites[1]["malformed"] or cites[1]["canonical"]:
+                failures.append(f"'{q}': the valid member or the malformed operand was not kept as its own member")
+                continue
+            label = cites[1]["label"]
+            for mode in ("exact", "hybrid"):
+                for scope in scopes:
+                    for parts in (None, ["12:3"], ["12:999"]):
+                        for k in (10, 1):
+                            out = index.answer(q, mode=mode, scope=scope, parts=parts, k=k)
+                            tag = f"'{q}' {mode}/{scope}/{parts or 'nofilter'}/k{k}"
+                            if out["status"] == "evidence_found" or f"citation:{label}" not in gaps(out):
+                                failures.append(f"{tag}: evidence_found or no gap for the malformed operand")
+            ex = index.answer(q, mode="exact", scope="current", k=10)
+            if [r["provision_id"] for r in ex["results"]] != [r["provision_id"] for r in alone["results"]]:
+                failures.append(f"'{q}': exact results are not just the valid member's records")
+            d = index.delta(q)
+            if d["evidence_status"] != "unsupported_multi_citation" or d["baseline"] or d["instruments"]:
+                failures.append(f"'{q}': delta did not report unsupported_multi_citation")
+    elif kind == "range":
+        for q in item["requests"]:
+            cites = parse_query_citations(q)
+            if len(cites) != 1 or cites[0]["malformed"] != "unsupported_range" or cites[0]["diagnostics"]["range"]["end_form"] != "malformed_endpoint":
+                failures.append(f"'{q}': not one unsupported range with a malformed endpoint")
+                continue
+            label = cites[0]["label"]
+            for mode in ("exact", "hybrid"):
+                for scope in scopes:
+                    for parts in (None, ["12:3"], ["12:999"]):
+                        for k in (10, 1):
+                            out = index.answer(q, mode=mode, scope=scope, parts=parts, k=k)
+                            tag = f"'{q}' {mode}/{scope}/{parts or 'nofilter'}/k{k}"
+                            if out["status"] == "evidence_found" or f"citation:{label}" not in gaps(out) or (mode == "exact" and out["results"]):
+                                failures.append(f"{tag}: evidence_found, no gap, or exact returned records")
+            d = index.delta(q)
+            if d["evidence_status"] != "unavailable" or d["baseline"] or d["instruments"] or d["unavailable"]["reason"] != "unsupported_range":
+                failures.append(f"'{q}': delta did not report the unsupported range")
+    elif kind == "independent":
+        q = item["request"]
+        cites = parse_query_citations(q)
+        if [c["canonical"] for c in cites if not c["malformed"]] != item["valid"]:
+            failures.append("citations after the malformed expression were not preserved")
+        out = index.answer(q, mode="exact", scope="current", k=10)
+        if out["status"] == "evidence_found" or len(gaps(out)) != 1:
+            failures.append("expected exactly one citation gap and no evidence_found")
+    elif kind == "explanation":
+        for q in item["requests"]:
+            cites = parse_query_citations(q)
+            if len(cites) != 1 or cites[0]["malformed"]:
+                failures.append(f"'{q}': an ordinary parenthetical was read as an operand")
+    return {"id": item["id"], "kind": kind, "passed": not failures, "failures": failures[:10]}
+
+
 def run_regressions(index, path):
     spec = json.loads(Path(path).read_text())
     out = {"version": spec["version"], "task": spec["task"],
@@ -1094,7 +1160,8 @@ def run_regressions(index, path):
            "appendix_evidence": [check_appendix_evidence(index, x) for x in spec.get("appendix_evidence", [])],
            "titleless_delta": [check_titleless_delta(index, x) for x in spec.get("titleless_delta", [])],
            "query_lists": [check_query_lists(index, x) for x in spec.get("query_lists", [])],
-           "query_ranges": [check_query_ranges(index, x) for x in spec.get("query_ranges", [])]}
+           "query_ranges": [check_query_ranges(index, x) for x in spec.get("query_ranges", [])],
+           "connector_operands": [check_connector_operands(index, x) for x in spec.get("connector_operands", [])]}
     out["passed"] = (all(d["passed"] for d in out["delta"]) and out["relationship_integrity"]["passed"]
                      and all(c["passed"] for c in out["citation_scope"]) and all(x["passed"] for x in out["status"])
                      and all(x["passed"] for x in out["citation_completeness"])
@@ -1109,12 +1176,13 @@ def run_regressions(index, path):
                      and all(x["passed"] for x in out["appendix_evidence"])
                      and all(x["passed"] for x in out["titleless_delta"])
                      and all(x["passed"] for x in out["query_lists"])
-                     and all(x["passed"] for x in out["query_ranges"]))
+                     and all(x["passed"] for x in out["query_ranges"])
+                     and all(x["passed"] for x in out["connector_operands"]))
     return out
 
 
 REGRESSION_GROUPS = ("delta", "relationship_integrity", "citation_scope", "status", "citation_completeness",
-                     "mixed_source", "delta_precision", "instruction_boundary", "current_agreement", "amendatory_lists", "designator_integrity", "query_citations", "suffix_integrity", "appendix_evidence", "titleless_delta", "query_lists", "query_ranges")
+                     "mixed_source", "delta_precision", "instruction_boundary", "current_agreement", "amendatory_lists", "designator_integrity", "query_citations", "suffix_integrity", "appendix_evidence", "titleless_delta", "query_lists", "query_ranges", "connector_operands")
 
 
 def overall(report):
@@ -1197,6 +1265,8 @@ def render(report):
         lines.append(f"  {ri['id']} {'PASS' if ri['passed'] else 'FAIL'} relationship integrity violations={ri['violations']} {'; '.join(ri['failures'])}")
         for c in reg["citation_scope"]:
             lines.append(f"  {c['id']} {'PASS' if c['passed'] else 'FAIL'} citation scope '{c['query']}' {'; '.join(c['failures'])}")
+        for x in reg.get("connector_operands", []):
+            lines.append(f"  {x['id']} {'PASS' if x['passed'] else 'FAIL'} connector operands [{x['kind']}] {'; '.join(x['failures'])}")
         for x in reg.get("query_ranges", []):
             lines.append(f"  {x['id']} {'PASS' if x['passed'] else 'FAIL'} query ranges [{x['kind']}] {'; '.join(x['failures'])}")
         for x in reg.get("query_lists", []):
