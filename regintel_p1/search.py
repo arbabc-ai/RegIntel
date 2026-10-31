@@ -314,6 +314,14 @@ def _with_hyphen_tail(query, rec):
     return new
 
 
+def _list_context(rec):
+    """What a following list member may inherit from `rec`: its title and section, but, when `rec` is unresolved, no paragraph path."""
+    if not rec["malformed"]:
+        return rec
+    # after an unclosed designator, a following parenthesized `(b)` is inside that unclosed parenthetical, not a list member
+    return {**rec, "_unsettled": True, "_open_paren": rec["malformed"] == "unclosed_or_malformed_designator_suffix" or rec.get("_open_paren", False)}
+
+
 def parse_query_citations(query):
     """Every CFR citation in a query, read once, the same way for every consumer.
 
@@ -342,30 +350,31 @@ def parse_query_citations(query):
         rec = _citation_record(title, part, minor, designators, pos, suffix, query, m.start())
         out.append(rec)
         consumed = rec["_end"]
-        if rec["malformed"]:
-            continue
-        rng = _read_range(query, rec["_end"], rec)
-        if rng:
-            out[-1] = rec = rng
-            consumed = rng["_end"]
-        else:
-            tailed = _with_hyphen_tail(query, rec)
-            if tailed is not rec:  # an unread hyphen tail the range reader could not consume
-                out[-1] = tailed
-                consumed = tailed["_end"]
-                continue
-        prev, cursor = rec, rec["_end"]
+        if not rec["malformed"]:
+            rng = _read_range(query, rec["_end"], rec)
+            if rng:
+                out[-1] = rec = rng
+                consumed = rng["_end"]
+            else:
+                tailed = _with_hyphen_tail(query, rec)
+                if tailed is not rec:  # an unread hyphen tail the range reader could not consume
+                    out[-1] = rec = tailed
+                    consumed = tailed["_end"]
+        prev, cursor = _list_context(rec), rec["_end"]
+        # An unresolved expression keeps its own reason, diagnostics and gap; reading then resumes at the next clear list separator,
+        # so independently readable members after it are still accounted for. Paragraph shorthand after an unresolved expression has
+        # no certain inheritance and stays an unresolved shorthand expression.
         while True:
             sep = LIST_SEP.match(query, cursor)
             if not sep:
+                break
+            if prev.get("_open_paren") and query.startswith("(", sep.end()):
                 break
             mem = _read_member(query, sep.end(), prev)
             if mem is None:
                 break
             out.append(mem)
             cursor = mem["_end"]
-            if mem["malformed"] and not mem.get("_unsettled"):
-                break  # an unclosed/malformed tail: nothing after it is read as a member
             if not mem["malformed"]:
                 rng = _read_range(query, cursor, mem)
                 if rng:
@@ -374,11 +383,10 @@ def parse_query_citations(query):
                 else:
                     tailed = _with_hyphen_tail(query, mem)
                     if tailed is not mem:
-                        out[-1] = tailed
-                        consumed = tailed["_end"]
-                        break  # an unread tail ends the list, as every other unread tail does
+                        out[-1] = mem = tailed
+                        cursor = tailed["_end"]
             consumed = cursor
-            prev = mem
+            prev = _list_context(mem)
     return out
 
 

@@ -1317,6 +1317,42 @@ def check_citation_tokens(index, item):
     return {"id": item["id"], "kind": kind, "passed": not failures, "failures": failures[:10]}
 
 
+def check_list_recovery(index, item):
+    """Real-corpus guard for list recovery after an unresolved identifier, hyphen tail or designator suffix. The request must parse to
+    exactly the expected members [label, reason-or-null] (every requested member present, unresolved ones with their own reason),
+    the resolver and every exact/hybrid answer (scopes, part filters, k=10 and 1) must keep a citation gap per unresolved member and
+    never report evidence_found, the exact results must be only the valid members' records, and delta must report
+    unsupported_multi_citation with every member."""
+    failures = []
+    q, want = item["request"], [tuple(m) for m in item["members"]]
+    got = [(c["label"], c["malformed"]) for c in parse_query_citations(q)]
+    if got != want:
+        return {"id": item["id"], "kind": "list_recovery", "passed": False, "failures": [f"members {got} != {want}"]}
+    gaps = lambda out: sorted(g["topic"] for g in out["coverage_gaps"] if g["topic"].startswith("citation:"))
+    unresolved = sorted(f"citation:{label}" for label, reason in want if reason)
+    for scope in ("current", "future", "both"):
+        recs = index.resolve_citations(q, scope)
+        if [r["citation"] for r in recs] != [w[0] for w in want] or any(r["resolved"] or r["_current_ids"] or r["_future_ids"] for r, w in zip(recs, want) if w[1]):
+            failures.append(f"{scope}: resolver records differ from the members or resolved an unresolved member")
+    for mode in ("exact", "hybrid"):
+        for scope in ("current", "future", "both"):
+            for parts in (None, ["12:3"], ["12:999"]):
+                for k in (10, 1):
+                    out = index.answer(q, mode=mode, scope=scope, parts=parts, k=k)
+                    tag = f"{mode}/{scope}/{parts or 'nofilter'}/k{k}"
+                    if out["status"] == "evidence_found" or not set(unresolved) <= set(gaps(out)):
+                        failures.append(f"{tag}: evidence_found or a missing gap")
+    valid = " and ".join(c["canonical"] for c in parse_query_citations(q) if not c["malformed"])
+    ex = index.answer(q, mode="exact", scope="current", k=10)
+    ctl = index.answer(valid, mode="exact", scope="current", k=10) if valid else {"results": []}
+    if [r["provision_id"] for r in ex["results"]] != [r["provision_id"] for r in ctl["results"]]:
+        failures.append("exact results are not just the valid members' records")
+    d = index.delta(q)
+    if d["evidence_status"] != "unsupported_multi_citation" or [c["label"] for c in d["unavailable"]["citations"]] != [w[0] for w in want] or d["baseline"] or d["instruments"]:
+        failures.append("delta did not report unsupported_multi_citation with every member")
+    return {"id": item["id"], "kind": "list_recovery", "passed": not failures, "failures": failures[:10]}
+
+
 def run_regressions(index, path):
     spec = json.loads(Path(path).read_text())
     out = {"version": spec["version"], "task": spec["task"],
@@ -1346,7 +1382,8 @@ def run_regressions(index, path):
            "explicit_title_sign": [check_explicit_title_sign(index, x) for x in spec.get("explicit_title_sign", [])],
            "punctuated_cfr_title": [check_explicit_title_sign(index, x) for x in spec.get("punctuated_cfr_title", [])],  # same contract, punctuated spelling
            "citation_tokens": [check_citation_tokens(index, x) for x in spec.get("citation_tokens", [])],
-           "hyphen_tails": [check_citation_tokens(index, x) for x in spec.get("hyphen_tails", [])]}  # same contract, reason unread_hyphen_tail
+           "hyphen_tails": [check_citation_tokens(index, x) for x in spec.get("hyphen_tails", [])],  # same contract, reason unread_hyphen_tail
+           "list_recovery": [check_list_recovery(index, x) for x in spec.get("list_recovery", [])]}
     out["passed"] = (all(d["passed"] for d in out["delta"]) and out["relationship_integrity"]["passed"]
                      and all(c["passed"] for c in out["citation_scope"]) and all(x["passed"] for x in out["status"])
                      and all(x["passed"] for x in out["citation_completeness"])
@@ -1371,12 +1408,13 @@ def run_regressions(index, path):
                      and all(x["passed"] for x in out["explicit_title_sign"])
                      and all(x["passed"] for x in out["punctuated_cfr_title"])
                      and all(x["passed"] for x in out["citation_tokens"])
-                     and all(x["passed"] for x in out["hyphen_tails"]))
+                     and all(x["passed"] for x in out["hyphen_tails"])
+                     and all(x["passed"] for x in out["list_recovery"]))
     return out
 
 
 REGRESSION_GROUPS = ("delta", "relationship_integrity", "citation_scope", "status", "citation_completeness",
-                     "mixed_source", "delta_precision", "instruction_boundary", "current_agreement", "amendatory_lists", "designator_integrity", "query_citations", "suffix_integrity", "appendix_evidence", "titleless_delta", "query_lists", "query_ranges", "connector_operands", "part_ranges", "part_to_ranges", "part_lists", "four_digit_parts", "candidate_titles", "explicit_title_sign", "punctuated_cfr_title", "citation_tokens", "hyphen_tails")
+                     "mixed_source", "delta_precision", "instruction_boundary", "current_agreement", "amendatory_lists", "designator_integrity", "query_citations", "suffix_integrity", "appendix_evidence", "titleless_delta", "query_lists", "query_ranges", "connector_operands", "part_ranges", "part_to_ranges", "part_lists", "four_digit_parts", "candidate_titles", "explicit_title_sign", "punctuated_cfr_title", "citation_tokens", "hyphen_tails", "list_recovery")
 
 
 def overall(report):
@@ -1459,6 +1497,8 @@ def render(report):
         lines.append(f"  {ri['id']} {'PASS' if ri['passed'] else 'FAIL'} relationship integrity violations={ri['violations']} {'; '.join(ri['failures'])}")
         for c in reg["citation_scope"]:
             lines.append(f"  {c['id']} {'PASS' if c['passed'] else 'FAIL'} citation scope '{c['query']}' {'; '.join(c['failures'])}")
+        for x in reg.get("list_recovery", []):
+            lines.append(f"  {x['id']} {'PASS' if x['passed'] else 'FAIL'} list recovery '{x.get('request', '')}' {'; '.join(x['failures'])}" if 'request' in x else f"  {x['id']} {'PASS' if x['passed'] else 'FAIL'} list recovery {'; '.join(x['failures'])}")
         for x in reg.get("hyphen_tails", []):
             lines.append(f"  {x['id']} {'PASS' if x['passed'] else 'FAIL'} hyphen tails [{x['kind']}] {'; '.join(x['failures'])}")
         for x in reg.get("citation_tokens", []):
