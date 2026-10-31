@@ -6,7 +6,7 @@ from pathlib import Path
 
 from regintel_p1 import build, search
 from regintel_p1.search import citation_only
-from test_p1 import ECFR_HTML, asset
+from test_p1 import ECFR_HTML, asset, complete_baseline
 from test_p1_completeness import FR_EXPLICIT
 
 TOPICS = Path(__file__).resolve().parent.parent / "regintel_p1" / "topics.json"
@@ -47,6 +47,7 @@ class CoverageGuardTests(unittest.TestCase):
             "fr:2026-70012": {**meta, "document_number": "2026-70012", "title": "Explicit", "document_type": "Rule",
                               "effective_on": "2027-02-01", "action": "Final rule.", "asset": asset(root, "x.xml", FR_EXPLICIT)},
         }
+        complete_baseline(root, docs)  # the declared eCFR baseline dependencies of the acquired topics
         (root / "manifest.json").write_text(json.dumps({"documents": docs, "failures": {}, "updated_at": "x"}))
         db = Path(cls.tmp.name) / "g.sqlite"
         conn, _ = build.build(root, db, "2026-10-29", log=lambda *_: None)
@@ -138,7 +139,9 @@ class CoverageGuardTests(unittest.TestCase):
     # ---- negative controls
     def test_excluding_part_filter_defeats_the_citation_guarantee(self):
         for scope in ("current", "future", "both"):
-            out = self.index.answer("12 CFR 3.1", scope=scope, parts=["12:217"])
+            # The fixture now also holds the filler baseline parts that acquired topics depend on (complete_baseline), and
+            # part 217 is one of them, so the excluding filter names a part the fixture does not contain; assertions unchanged.
+            out = self.index.answer("12 CFR 3.1", scope=scope, parts=["12:999"])
             self.assertNotEqual(out["status"], "evidence_found", scope)
             self.assertEqual(out["results"], [], scope)
             self.assertIn(("none_matched", "unassessed"), self.gaps(out), scope)

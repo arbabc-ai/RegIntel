@@ -1,6 +1,6 @@
 {
- "version": "p1-regress-0.29",
- "task": "S7-P1-EVIDENCE-BOUNDARIES-01 + S7-P1-EVIDENCE-COMPLETENESS-02 + S7-P1-COVERAGE-GUARDS-03 + S7-P1-CITATION-COMPLETENESS-04 + S7-P1-FUTURE-PARAGRAPH-PRECISION-05 + S7-P1-MIXED-SOURCE-COVERAGE-06 + S7-P1-DELTA-PRECISION-07 + S7-P1-INSTRUCTION-BOUNDARY-08 + S7-P1-RESERVED-RANGE-CONSISTENCY-09 + S7-P1-AMENDATORY-LIST-PRECISION-11 + S7-P1-DESIGNATOR-TOKEN-INTEGRITY-12 + S7-P1-QUERY-CITATION-INTEGRITY-13 + S7-P1-SUFFIX-INTEGRITY-14 + S7-P1-SUFFIX-INTEGRITY-14 + S7-P1-SUFFIX-BOUNDARY-15 + S7-P1-APPENDIX-EVIDENCE-16 + S7-P1-TITLELESS-DELTA-17 + S7-P1-QUERY-LIST-COMPLETENESS-18 + S7-P1-QUERY-RANGE-INTEGRITY-19 + S7-P1-CONNECTOR-DESIGNATOR-INTEGRITY-20 + S7-P1-PART-RANGE-INTEGRITY-21 + S7-P1-PART-TO-RANGE-22 + S7-P1-PART-LIST-COMPLETENESS-23 + S7-P1-FOUR-DIGIT-PART-OPERANDS-24 + S7-P1-DELTA-CANDIDATE-TITLE-25 + S7-P1-EXPLICIT-TITLE-SECTION-SIGN-26 + S7-P1-PUNCTUATED-CFR-TITLE-27 + S7-P1-CITATION-TOKEN-INTEGRITY-28 + S7-P1-HYPHEN-TAIL-INTEGRITY-29 + S7-P1-MALFORMED-LIST-RECOVERY-30",
+ "version": "p1-regress-0.30",
+ "task": "S7-P1-EVIDENCE-BOUNDARIES-01 + S7-P1-EVIDENCE-COMPLETENESS-02 + S7-P1-COVERAGE-GUARDS-03 + S7-P1-CITATION-COMPLETENESS-04 + S7-P1-FUTURE-PARAGRAPH-PRECISION-05 + S7-P1-MIXED-SOURCE-COVERAGE-06 + S7-P1-DELTA-PRECISION-07 + S7-P1-INSTRUCTION-BOUNDARY-08 + S7-P1-RESERVED-RANGE-CONSISTENCY-09 + S7-P1-AMENDATORY-LIST-PRECISION-11 + S7-P1-DESIGNATOR-TOKEN-INTEGRITY-12 + S7-P1-QUERY-CITATION-INTEGRITY-13 + S7-P1-SUFFIX-INTEGRITY-14 + S7-P1-SUFFIX-INTEGRITY-14 + S7-P1-SUFFIX-BOUNDARY-15 + S7-P1-APPENDIX-EVIDENCE-16 + S7-P1-TITLELESS-DELTA-17 + S7-P1-QUERY-LIST-COMPLETENESS-18 + S7-P1-QUERY-RANGE-INTEGRITY-19 + S7-P1-CONNECTOR-DESIGNATOR-INTEGRITY-20 + S7-P1-PART-RANGE-INTEGRITY-21 + S7-P1-PART-TO-RANGE-22 + S7-P1-PART-LIST-COMPLETENESS-23 + S7-P1-FOUR-DIGIT-PART-OPERANDS-24 + S7-P1-DELTA-CANDIDATE-TITLE-25 + S7-P1-EXPLICIT-TITLE-SECTION-SIGN-26 + S7-P1-PUNCTUATED-CFR-TITLE-27 + S7-P1-CITATION-TOKEN-INTEGRITY-28 + S7-P1-HYPHEN-TAIL-INTEGRITY-29 + S7-P1-MALFORMED-LIST-RECOVERY-30 + S7-P1-INDEX-SOURCE-COVERAGE-31",
  "note": "Deterministic regression checks over the acquired corpus for amendment-target integrity and retrieval scope filtering. Kept separate from questions.json so the 37-item baseline stays frozen. A pass means the contract holds, not that any rule applies to a bank.",
  "delta": [
   {
@@ -243,7 +243,8 @@
   "v0.26 (PUNCTUATED-CFR-TITLE-27, F1): punctuated_cfr_title PC01-PC04: 'N C.F.R.' is read exactly like 'N CFR' (signed, unsigned, paragraph, part, list and range): '31 C.F.R. § 1010.100' parses, resolves, answers and deltas like '31 CFR 1010.100' with the punctuated span preserved and the citation canonicalized to CFR; a title that lacks the section ('31 C.F.R. § 3.22', 'CET1 12 C.F.R. § 1010.100') keeps its titled citation gap and never resolves through another title; punctuated ranges stay one unsupported_range. Earlier checks unchanged.",
   "v0.27 (CITATION-TOKEN-INTEGRITY-28, F1): citation_tokens CK01-CK05: an identifier that runs on with no space ('12 CFR 3.22.1', '12 CFR 3.22_a', '12 C.F.R. § 3.22.1', '12 CFR Part 3_a', 'CET1 12 CFR 3.22.1') is one unresolved unread_identifier_continuation expression (complete text kept, continuation identified, own citation gap, no exact records, never evidence_found, delta unavailable without baseline or instruments); in '12 CFR 3.1 and 3.22.1' the valid member is kept and delta is unsupported_multi_citation; valid forms ('3.22.', lettered sections, paragraphs) are unchanged. Earlier checks unchanged.",
   "v0.28 (HYPHEN-TAIL-INTEGRITY-29, F1): hyphen_tails HT01-HT05: a hyphen joined tightly to a citation that the range reader cannot consume ('12 CFR 3.22-a', '12 CFR 3.22-1', '12 CFR 3.22(a)-b', 'CET1 12 CFR 3.22-a') is one unresolved unread_hyphen_tail expression (complete text kept, tail identified, own citation gap, no exact records, never evidence_found, delta unavailable without baseline or instruments); recognised ranges ('12 CFR 3.1-6.1', 'Part 3-6'), spaced prose ('12 CFR 3.22 - a rule') and valid citations are unchanged. Earlier checks unchanged.",
-  "v0.29 (MALFORMED-LIST-RECOVERY-30): list_recovery LR01-LR06: after an unresolved identifier ('12 CFR 3.22.1'), hyphen tail ('3.22-a'), part token ('Parts 3_a', 'Parts 3-a') or unclosed designator ('3.22(a)(999') reading resumes at the next clear list separator: every requested member appears in resolution, valid members ('3.12', '217.2', 'Part 217') stay retrievable, each unresolved member keeps its own reason and citation gap, paragraph shorthand after an unresolved expression stays unresolved, and delta is unsupported_multi_citation with every member. Earlier checks unchanged."
+  "v0.29 (MALFORMED-LIST-RECOVERY-30): list_recovery LR01-LR06: after an unresolved identifier ('12 CFR 3.22.1'), hyphen tail ('3.22-a'), part token ('Parts 3_a', 'Parts 3-a') or unclosed designator ('3.22(a)(999') reading resumes at the next clear list separator: every requested member appears in resolution, valid members ('3.12', '217.2', 'Part 217') stay retrievable, each unresolved member keeps its own reason and citation gap, paragraph shorthand after an unresolved expression stays unresolved, and delta is unsupported_multi_citation with every member. Earlier checks unchanged.",
+  "v0.30 (INDEX-SOURCE-COVERAGE-31, F1): source_coverage SC01-SC05: the eCFR baseline sources that topics declared acquired depend on (topic_dependencies.json, separate from keyword rules and declared coverage) are indexed with usable provisions in the acquired-corpus index (SC01, SC02), and on self-contained builds with 12 CFR 3 omitted, hash-rejected or empty every matched acquired topic reports the unavailable source in its coverage gaps and is partial_evidence (missing_evidence when nothing remains) across modes, scopes, part filters and k=1, while a complete build and exact citations are unchanged (SC03-SC05). Availability only: no provision-coverage or applicability claim. Earlier checks unchanged."
  ],
  "status": [
   {
@@ -2193,6 +2194,58 @@
      "12 CFR 3.12",
      null
     ]
+   ]
+  }
+ ],
+ "source_coverage": [
+  {
+   "id": "SC01",
+   "kind": "corpus",
+   "queries": [
+    "minimum CET1 ratio",
+    "common equity tier 1 capital ratio requirement"
+   ]
+  },
+  {
+   "id": "SC02",
+   "kind": "corpus",
+   "queries": [
+    "capital conservation buffer",
+    "leverage ratio requirement"
+   ]
+  },
+  {
+   "id": "SC03",
+   "kind": "degraded",
+   "variants": {
+    "omitted": "missing_from_manifest"
+   },
+   "queries": [
+    "minimum CET1 ratio",
+    "common equity tier 1 capital ratio requirement"
+   ]
+  },
+  {
+   "id": "SC04",
+   "kind": "degraded",
+   "variants": {
+    "rejected": "skipped_hash_or_size_mismatch"
+   },
+   "queries": [
+    "minimum CET1 ratio",
+    "capital conservation buffer"
+   ]
+  },
+  {
+   "id": "SC05",
+   "kind": "degraded",
+   "variants": {
+    "empty": "empty_no_usable_provisions",
+    "complete": null
+   },
+   "queries": [
+    "minimum CET1 ratio",
+    "common equity tier 1 capital ratio requirement"
    ]
   }
  ]

@@ -7,7 +7,7 @@ from pathlib import Path
 
 from regintel_p1 import build, evaluate, search
 from regintel_p1.fedreg import classify_ranges, parse_fr
-from test_p1 import ECFR_HTML, asset
+from test_p1 import ECFR_HTML, asset, complete_baseline
 
 # Instruction-only ranges. Instruction 2 quotes § 3.60 and § 3.51 inside the text being removed.
 FR_RANGES = b"""<RULE><PREAMB><CFR>12 CFR Part 3</CFR></PREAMB><SUPLINF>
@@ -75,6 +75,7 @@ class CompletenessIndexTests(unittest.TestCase):
             "fr:2026-70012": {**meta, "document_number": "2026-70012", "title": "Explicit", "document_type": "Rule",
                               "effective_on": "2027-02-01", "action": "Final rule.", "asset": asset(root, "x.xml", FR_EXPLICIT)},
         }
+        complete_baseline(root, docs)  # the declared eCFR baseline dependencies of the acquired topics
         (root / "manifest.json").write_text(json.dumps({"documents": docs, "failures": {}, "updated_at": "x"}))
         cls.db = str(Path(cls.tmp.name) / "c.sqlite")
         conn, cls.counts = build.build(root, cls.db, "2026-10-29", log=lambda *_: None)

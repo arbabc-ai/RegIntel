@@ -1,7 +1,7 @@
 """Relational schema for the Phase 1 evidence index (SQLite, standard library)."""
 import sqlite3
 
-SCHEMA_VERSION = "p1-0.6"
+SCHEMA_VERSION = "p1-0.7"
 
 DDL = """
 CREATE TABLE index_meta (key TEXT PRIMARY KEY, value TEXT);
@@ -120,6 +120,23 @@ CREATE TABLE amendment_range (
   review_status TEXT NOT NULL               -- parsed_unreviewed | unresolved_candidate
 );
 CREATE INDEX amendment_range_scope ON amendment_range(title_no, part_no, status);
+
+CREATE TABLE source_status (
+  doc_key TEXT PRIMARY KEY,
+  publisher TEXT,
+  status TEXT NOT NULL,                    -- indexed | skipped_hash_or_size_mismatch | skipped_unsupported_format | empty_no_usable_provisions | missing_from_manifest
+  reason TEXT,
+  provisions INTEGER,
+  usable_provisions INTEGER                -- provisions other than part/subpart/authority/source/footnote headings
+);
+
+CREATE TABLE topic_source_gap (
+  topic_id TEXT NOT NULL,
+  doc_key TEXT NOT NULL,
+  status TEXT NOT NULL,
+  reason TEXT NOT NULL,
+  PRIMARY KEY (topic_id, doc_key)
+);
 
 CREATE TABLE rulemaking_link (
   a_doc_key TEXT NOT NULL, b_doc_key TEXT NOT NULL,

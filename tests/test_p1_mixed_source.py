@@ -8,7 +8,7 @@ import unittest
 from pathlib import Path
 
 from regintel_p1 import build, search
-from test_p1 import ECFR_HTML, asset
+from test_p1 import ECFR_HTML, asset, complete_baseline
 from test_p1_completeness import FR_EXPLICIT
 
 ROOT = Path(__file__).resolve().parent.parent / "regintel_p1"
@@ -66,6 +66,7 @@ class MixedSourceTests(unittest.TestCase):
             "fr:2026-70012": {**meta, "document_number": "2026-70012", "title": "Explicit", "document_type": "Rule",
                               "effective_on": "2027-02-01", "action": "Final rule.", "asset": asset(root, "x.xml", FR_EXPLICIT)},
         }
+        complete_baseline(root, docs)  # the declared eCFR baseline dependencies of the acquired topics
         (root / "manifest.json").write_text(json.dumps({"documents": docs, "failures": {}, "updated_at": "x"}))
         cls.db = str(Path(cls.tmp.name) / "m.sqlite")
         conn, _ = build.build(root, cls.db, "2026-10-29", log=lambda *_: None)

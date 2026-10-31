@@ -16,6 +16,10 @@ SECTION_REF = re.compile(r"§§?\s*([0-9]+\.[0-9]+[A-Za-z]?)")
 FTS_SKIP_KINDS = {"part", "subpart", "authority", "source", "footnote"}
 
 
+NON_CONTENT_KINDS = ("part", "subpart", "authority", "source", "footnote")
+DEPENDENCIES_PATH = Path(__file__).with_name("topic_dependencies.json")
+
+
 def fts_rows(prov):
     head = " ".join(x for x in (prov.get("citation"), prov.get("heading"), prov.get("defined_term"),
                                 prov.get("subject")) if x)
@@ -64,6 +68,7 @@ def build(corpus_dir, db_path, as_of, log=print):
     conn = schema.create(db)
     started = time.time()
     counts = {"documents": 0, "provisions": 0, "skipped": []}
+    source_status = {}  # doc_key -> (publisher, status, reason, provisions, usable provisions)
     section_ids = {}   # (title, section_no) -> provision id
     range_ids = {}     # (title, section_no inside a range section) -> (provision id, range section_no)
     part_ids = {}      # (title, part) -> provision id
@@ -77,11 +82,13 @@ def build(corpus_dir, db_path, as_of, log=print):
         digest = hashlib.sha256(raw).hexdigest()
         if digest != asset["sha256"] or len(raw) != asset["bytes"]:
             counts["skipped"].append({"doc_key": key, "reason": "hash_or_size_mismatch"})
+            source_status[key] = (d.get("publisher"), "skipped_hash_or_size_mismatch", "bytes do not match the manifest sha256 or size", 0, 0)
             log(f"SKIP {key}: bytes do not match manifest hash")
             continue
         fmt = path.suffix.lstrip(".")
         if fmt not in ("html", "xml"):
             counts["skipped"].append({"doc_key": key, "reason": f"unsupported_format_{fmt}"})
+            source_status[key] = (d.get("publisher"), "skipped_unsupported_format", f"format {fmt} is not supported", 0, 0)
             continue
         if d["publisher"] == "eCFR":
             title, part = key.split(":")[1:]
@@ -159,6 +166,9 @@ def build(corpus_dir, db_path, as_of, log=print):
                  json.dumps(d.get("agencies") or []),
                  json.dumps(sorted({f"{c['title']}:{c['part']}" for c in d.get("cfr_references") or []})),
                  d.get("official_pdf_url") or d.get("source_url")))
+        usable = sum(1 for p in provs if p["kind"] not in NON_CONTENT_KINDS)
+        source_status[key] = (d["publisher"], "indexed" if usable else "empty_no_usable_provisions",
+                              None if usable else "the parser produced no usable provisions from the verified bytes", len(provs), usable)
         for p in provs:
             pid = insert_provision(conn, doc_id, p)
             if d["publisher"] == "eCFR":
@@ -181,6 +191,7 @@ def build(corpus_dir, db_path, as_of, log=print):
     link_ecfr_text(conn, section_ids, definitions, ecfr_rows, counts)
     link_rulemakings(conn)
     load_topics(conn, counts)
+    record_source_status(conn, source_status, counts)
     conn.execute("INSERT INTO index_meta VALUES ('as_of', ?)", (as_of,))
     conn.execute("INSERT INTO index_meta VALUES ('built_at', ?)", (time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),))
     conn.execute("INSERT INTO index_meta VALUES ('manifest_sha256', ?)", (sha256_file(corpus / "manifest.json"),))
@@ -327,6 +338,34 @@ def link_rulemakings(conn):
             for b in keys[i + 1:]:
                 conn.execute("INSERT OR IGNORE INTO rulemaking_link VALUES (?,?,?,?,?)",
                              (a, b, "shared_rin", f"both name RIN {rin}", "candidate_unreviewed"))
+
+
+def record_source_status(conn, source_status, counts):
+    """Persist every document's indexing outcome and reconcile each acquired topic's declared eCFR baseline dependencies.
+
+    A dependency is available only if its document was verified against the manifest, parsed and indexed with usable
+    provisions. Missing, skipped and empty dependencies are persisted per topic with the reason, so a degraded build
+    cannot keep an unsupported coverage claim. This is source availability, not provision coverage or applicability.
+    """
+    declared = json.loads(DEPENDENCIES_PATH.read_text())["required_baseline_sources"]
+    catalog = {t["id"]: t for t in json.loads(TOPICS_PATH.read_text())["topics"]}
+    unknown = sorted(set(declared) - set(catalog))
+    if unknown:
+        raise ValueError(f"topic_dependencies.json names unknown topics: {unknown}")
+    gaps = 0
+    for topic_id, dep in sorted(declared.items()):
+        if catalog[topic_id]["coverage"] != "acquired":
+            continue  # only topics declared acquired make a source claim to reconcile
+        for key in dep["sources"]:
+            if key not in source_status:
+                source_status[key] = (None, "missing_from_manifest", "the document is not in the manifest", 0, 0)
+            publisher, status, reason, _, _ = source_status[key]
+            if status != "indexed":
+                conn.execute("INSERT INTO topic_source_gap VALUES (?,?,?,?)", (topic_id, key, status, reason))
+                gaps += 1
+    for key, (publisher, status, reason, provisions, usable) in sorted(source_status.items()):
+        conn.execute("INSERT INTO source_status VALUES (?,?,?,?,?,?)", (key, publisher, status, reason, provisions, usable))
+    counts["unavailable_topic_sources"] = gaps
 
 
 def load_topics(conn, counts):

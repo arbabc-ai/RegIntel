@@ -507,6 +507,22 @@ class Index:
             t["synonyms"] = json.loads(t["synonyms"] or "[]")
         self._rulemaking = {r["doc_key"]: dict(r) for r in self.conn.execute("SELECT * FROM rulemaking")}
         self._load_source_requests()
+        self.source_gaps = self._load_source_gaps()
+
+    def _load_source_gaps(self):
+        """topic id -> [{doc_key, status, reason}] for declared eCFR baseline dependencies that are not indexed (persisted at build).
+
+        Indexes built before schema p1-0.7 have no such table: they report no dependency diagnostics, which is not the same
+        as having verified the dependencies.
+        """
+        try:
+            rows = self.conn.execute("SELECT topic_id, doc_key, status, reason FROM topic_source_gap ORDER BY topic_id, doc_key").fetchall()
+        except sqlite3.OperationalError:
+            return {}
+        gaps = defaultdict(list)
+        for r in rows:
+            gaps[r["topic_id"]].append({"doc_key": r["doc_key"], "status": r["status"], "reason": r["reason"]})
+        return dict(gaps)
 
     # ---------- source requests: jurisdictions and accounting intent, independent of topic matches ----------
     def _load_source_requests(self):
@@ -1037,6 +1053,18 @@ class Index:
         only_blocked = bool(blocked) and len(blocked) == len(topic_hits) and not self.exact(query)
         results = [] if only_blocked else [self.evidence(pid) for pid, _ in self.retrieve(query, mode, k, scope, parts)]
         partial = [t for t, _ in topic_hits if t["coverage"] == "partial"]
+        # Source availability: a matched topic whose declared eCFR baseline source is not indexed keeps its own gap, however many
+        # hits other documents (other agencies' parts) contribute. This reports availability only, not provision coverage.
+        unavailable = []
+        for t, _ in topic_hits:
+            missing = self.source_gaps.get(t["id"])
+            if missing:
+                unavailable.append(t)
+                gaps.append({"topic": t["id"], "coverage": "source_unavailable", "unavailable_sources": missing,
+                             "note": "A required eCFR baseline source for this topic is not available in this index (" +
+                                     "; ".join(f"{m['doc_key']}: {m['status']}" for m in missing) + "). The topic's declared "
+                                     "acquisition coverage does not hold for this build, and other documents' hits do not stand in "
+                                     "for it. This reports source availability only, not provision coverage or applicability."})
         # A citation-only query is self-describing: it resolves to named provisions in the requested scope and part
         # filter, so it needs no topic. Any other query that matches no catalog topic has unassessed source
         # coverage, and a lexical hit alone does not establish that the sources it needs are acquired.
@@ -1071,7 +1099,7 @@ class Index:
                                  "does not show that the sources needed to answer it are acquired."})
         if not results:
             status = "missing_evidence"
-        elif blocked or partial or unassessed or unresolved or sources:
+        elif blocked or partial or unassessed or unresolved or sources or unavailable:
             status = "partial_evidence"   # results exist, but coverage, a named source or a requested citation is incomplete
         else:
             status = "evidence_found"
@@ -1084,7 +1112,8 @@ class Index:
             "topics_matched": [t["id"] for t, _ in topic_hits], "coverage_gaps": gaps, "results": results,
             "citations": [{k: v for k, v in c.items() if not k.startswith("_")} for c in citations],
             "source_requests": sources,
-            "index": {"manifest_sha256": self.meta.get("manifest_sha256"), "built_at": self.meta.get("built_at")},
+            "index": {"manifest_sha256": self.meta.get("manifest_sha256"), "built_at": self.meta.get("built_at"),
+                      "unavailable_topic_sources": {t["id"]: self.source_gaps[t["id"]] for t in unavailable}},
         }
 
     # ---------- current-to-future ----------

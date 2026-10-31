@@ -125,6 +125,21 @@ def asset(root, name, data, **meta):
     return {"path": f"raw/{name}", "sha256": digest, "bytes": len(data), "retrieved_at": "2026-10-29T00:00:00+00:00"}
 
 
+def complete_baseline(root, docs, parts=("217", "324", "252"), skip=()):
+    """Add the remaining eCFR baseline documents that topics declared `acquired` depend on (see regintel_p1/topic_dependencies.json),
+    as minimal neutral parts, so a synthetic fixture models a complete baseline. Existing fixtures keep their own assertions."""
+    for part in parts:
+        key = f"ecfr:12:{part}"
+        if key in skip or key in docs:
+            continue
+        html = (f'<div class="part" id="part-{part}"><h1>PART {part}—FILLER</h1><div class="section" id="{part}.1"><h4>§ {part}.1 Purpose.</h4>'
+                f'<div id="p-{part}.1(a)"><p class="indent-1" data-title="{part}.1(a)">(a) Filler paragraph of part {part}.</p></div></div></div>')
+        docs[key] = {"source_class": "regulation", "publisher": "eCFR", "citation": f"12 CFR Part {part}", "title": "Filler",
+                     "publisher_issue_date": "2026-10-23", "publisher_up_to_date_as_of": "2026-10-28",
+                     "asset": asset(root, f"filler{part}.html", html.encode())}
+    return docs
+
+
 class BuildSearchTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
