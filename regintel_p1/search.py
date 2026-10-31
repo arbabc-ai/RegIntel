@@ -1198,9 +1198,9 @@ class Index:
         for r in self.conn.execute(
                 """SELECT d.doc_key, p.locator, a.lo_section, a.hi_section, a.instruction_ordinal, a.basis, p.instruction
                    FROM amendment_range a JOIN provision p ON p.id=a.src_provision_id JOIN source_document d ON d.id=p.doc_id
-                   WHERE a.status='unresolved_ambiguous' AND (a.lo_section LIKE ? OR a.hi_section LIKE ? OR a.lo_section = ?
-                         OR a.hi_section = ?)""",
-                (f"{part}.%", f"{part}.%", section or "", section or "")):
+                   WHERE a.status='unresolved_ambiguous' AND (? IS NULL OR a.title_no = ?)
+                         AND (a.lo_section LIKE ? OR a.hi_section LIKE ? OR a.lo_section = ? OR a.hi_section = ?)""",
+                (title, title, f"{part}.%", f"{part}.%", section or "", section or "")):  # only the resolved title's candidates
             if not section or section in (r["lo_section"], r["hi_section"]):
                 candidates.append({"doc_key": r["doc_key"], "locator": r["locator"], "pairing_status": "ambiguous_range",
                                    "candidate_instructions": [{"instruction": r["instruction"],

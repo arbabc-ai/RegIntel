@@ -1149,6 +1149,68 @@ def check_four_digit_parts(index, item):
     return check_query_ranges(index, item)
 
 
+def _synthetic_title_index(as_of):
+    """A small self-contained corpus: identical reversed ranges 3.9 through 3.4 under Titles 12 and 31, so candidate leakage across
+    titles can be checked although the acquired corpus holds no unresolved range."""
+    import hashlib
+    import tempfile
+    from . import build
+    tmp = tempfile.TemporaryDirectory()
+    root = Path(tmp.name) / "corpus"
+    (root / "raw").mkdir(parents=True)
+
+    def asset(name, data):
+        (root / "raw" / name).write_bytes(data)
+        return {"path": f"raw/{name}", "sha256": hashlib.sha256(data).hexdigest(), "bytes": len(data), "retrieved_at": "2026-10-29T00:00:00+00:00"}
+    html = lambda part: (f'<div class="part" id="part-3"><h1>PART 3</h1><div class="section" id="3.22"><h4>\u00a7 3.22 Adjustments.</h4>'
+                         f'<div id="p-3.22(a)"><p class="indent-1" data-title="3.22(a)">(a) Title {part} text.</p></div></div></div>').encode()
+    docs = {}
+    for t in ("12", "31"):
+        docs[f"ecfr:{t}:3"] = {"source_class": "regulation", "publisher": "eCFR", "citation": f"{t} CFR Part 3", "title": "T",
+                               "publisher_issue_date": "2026-10-23", "publisher_up_to_date_as_of": "2026-10-28", "asset": asset(f"e{t}.html", html(t))}
+        xml = (f'<RULE><PREAMB><CFR>{t} CFR Part 3</CFR></PREAMB><SUPLINF><REGTEXT TITLE="{t}" PART="3"><AMDPAR>1. Remove &#xA7;&#xA7; 3.9 through 3.4.'
+               f"</AMDPAR></REGTEXT></SUPLINF></RULE>").encode()
+        docs[f"fr:2026-9{t}"] = {"source_class": "rulemaking_candidate", "publisher": "Federal Register", "publication_date": "2026-10-01", "document_type": "Rule",
+                                 "effective_on": "2027-02-01", "action": "Final rule.", "document_number": f"2026-9{t}", "title": t, "asset": asset(f"r{t}.xml", xml)}
+    (root / "manifest.json").write_text(json.dumps({"documents": docs, "failures": {}, "updated_at": "x"}))
+    conn, _ = build.build(root, str(Path(tmp.name) / "t.sqlite"), as_of, log=lambda *_: None)
+    conn.close()
+    return tmp, Index(str(Path(tmp.name) / "t.sqlite"), as_of)
+
+
+def check_candidate_titles(index, item):
+    """Guard for the unresolved ambiguous-range candidates in delta(), which belong to the resolved CFR title only. `synthetic`:
+    on a self-contained corpus with identical reversed ranges under Titles 12 and 31, each case [request, expected candidate
+    doc_keys] must hold (so cross-title leakage fails the check even though the acquired corpus has no such range). `corpus`:
+    on the acquired corpus, titleless requests must equal their fully qualified forms and expose the same candidates."""
+    failures, kind = [], item["kind"]
+    if kind == "synthetic":
+        tmp, idx = _synthetic_title_index(index.as_of)
+        try:
+            for request, expected in item["cases"]:
+                d = idx.delta(request)
+                got = sorted(c["doc_key"] for c in d["unresolved_candidates"])
+                if got != sorted(expected):
+                    failures.append(f"'{request}': candidates {got} != {sorted(expected)}")
+                if d["legal_validity"] != "not_determined" or d["applicability_status"] != "not_assessed":
+                    failures.append(f"'{request}': validity or applicability asserted")
+            for request in item.get("ambiguous", []):
+                d = idx.delta(request)
+                if d["evidence_status"] != "ambiguous_title" or d["unresolved_candidates"]:
+                    failures.append(f"'{request}': an ambiguous title exposed candidates")
+            idx.conn.close()
+        finally:
+            tmp.cleanup()
+    else:
+        for plain, explicit, expected in item["pairs"]:
+            a, b = index.delta(plain), index.delta(explicit)
+            if a["unresolved_candidates"] != b["unresolved_candidates"] or sorted(c["doc_key"] for c in a["unresolved_candidates"]) != sorted(expected):
+                failures.append(f"'{plain}': candidates differ from '{explicit}' or from the expected {expected}")
+            if a["legal_validity"] != "not_determined" or a["applicability_status"] != "not_assessed":
+                failures.append(f"'{plain}': validity or applicability asserted")
+    return {"id": item["id"], "kind": kind, "passed": not failures, "failures": failures[:10]}
+
+
 def run_regressions(index, path):
     spec = json.loads(Path(path).read_text())
     out = {"version": spec["version"], "task": spec["task"],
@@ -1173,7 +1235,8 @@ def run_regressions(index, path):
            "part_ranges": [check_query_ranges(index, x) for x in spec.get("part_ranges", [])],  # same contract as section/paragraph ranges
            "part_to_ranges": [check_query_ranges(index, x) for x in spec.get("part_to_ranges", [])],
            "part_lists": [check_query_lists(index, x) for x in spec.get("part_lists", [])],  # same list-completeness contract, for part lists
-           "four_digit_parts": [check_four_digit_parts(index, x) for x in spec.get("four_digit_parts", [])]}
+           "four_digit_parts": [check_four_digit_parts(index, x) for x in spec.get("four_digit_parts", [])],
+           "candidate_titles": [check_candidate_titles(index, x) for x in spec.get("candidate_titles", [])]}
     out["passed"] = (all(d["passed"] for d in out["delta"]) and out["relationship_integrity"]["passed"]
                      and all(c["passed"] for c in out["citation_scope"]) and all(x["passed"] for x in out["status"])
                      and all(x["passed"] for x in out["citation_completeness"])
@@ -1193,12 +1256,13 @@ def run_regressions(index, path):
                      and all(x["passed"] for x in out["part_ranges"])
                      and all(x["passed"] for x in out["part_to_ranges"])
                      and all(x["passed"] for x in out["part_lists"])
-                     and all(x["passed"] for x in out["four_digit_parts"]))
+                     and all(x["passed"] for x in out["four_digit_parts"])
+                     and all(x["passed"] for x in out["candidate_titles"]))
     return out
 
 
 REGRESSION_GROUPS = ("delta", "relationship_integrity", "citation_scope", "status", "citation_completeness",
-                     "mixed_source", "delta_precision", "instruction_boundary", "current_agreement", "amendatory_lists", "designator_integrity", "query_citations", "suffix_integrity", "appendix_evidence", "titleless_delta", "query_lists", "query_ranges", "connector_operands", "part_ranges", "part_to_ranges", "part_lists", "four_digit_parts")
+                     "mixed_source", "delta_precision", "instruction_boundary", "current_agreement", "amendatory_lists", "designator_integrity", "query_citations", "suffix_integrity", "appendix_evidence", "titleless_delta", "query_lists", "query_ranges", "connector_operands", "part_ranges", "part_to_ranges", "part_lists", "four_digit_parts", "candidate_titles")
 
 
 def overall(report):
@@ -1281,6 +1345,8 @@ def render(report):
         lines.append(f"  {ri['id']} {'PASS' if ri['passed'] else 'FAIL'} relationship integrity violations={ri['violations']} {'; '.join(ri['failures'])}")
         for c in reg["citation_scope"]:
             lines.append(f"  {c['id']} {'PASS' if c['passed'] else 'FAIL'} citation scope '{c['query']}' {'; '.join(c['failures'])}")
+        for x in reg.get("candidate_titles", []):
+            lines.append(f"  {x['id']} {'PASS' if x['passed'] else 'FAIL'} candidate titles [{x['kind']}] {'; '.join(x['failures'])}")
         for x in reg.get("four_digit_parts", []):
             lines.append(f"  {x['id']} {'PASS' if x['passed'] else 'FAIL'} four-digit parts [{x['kind']}] {'; '.join(x['failures'])}")
         for x in reg.get("part_lists", []):
