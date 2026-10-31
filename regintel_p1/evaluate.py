@@ -1141,6 +1141,14 @@ def check_connector_operands(index, item):
     return {"id": item["id"], "kind": kind, "passed": not failures, "failures": failures[:10]}
 
 
+def check_four_digit_parts(index, item):
+    """Real-corpus guard for four-digit part operands: lists are checked like part lists (`equivalent`, `delta`), ranges like
+    part ranges (`unsupported`, `independent`, `prose`), against the fully qualified control and the literal expectations."""
+    if item["kind"] in ("equivalent", "unresolved", "delta"):
+        return check_query_lists(index, item)
+    return check_query_ranges(index, item)
+
+
 def run_regressions(index, path):
     spec = json.loads(Path(path).read_text())
     out = {"version": spec["version"], "task": spec["task"],
@@ -1164,7 +1172,8 @@ def run_regressions(index, path):
            "connector_operands": [check_connector_operands(index, x) for x in spec.get("connector_operands", [])],
            "part_ranges": [check_query_ranges(index, x) for x in spec.get("part_ranges", [])],  # same contract as section/paragraph ranges
            "part_to_ranges": [check_query_ranges(index, x) for x in spec.get("part_to_ranges", [])],
-           "part_lists": [check_query_lists(index, x) for x in spec.get("part_lists", [])]}  # same list-completeness contract, for part lists
+           "part_lists": [check_query_lists(index, x) for x in spec.get("part_lists", [])],  # same list-completeness contract, for part lists
+           "four_digit_parts": [check_four_digit_parts(index, x) for x in spec.get("four_digit_parts", [])]}
     out["passed"] = (all(d["passed"] for d in out["delta"]) and out["relationship_integrity"]["passed"]
                      and all(c["passed"] for c in out["citation_scope"]) and all(x["passed"] for x in out["status"])
                      and all(x["passed"] for x in out["citation_completeness"])
@@ -1183,12 +1192,13 @@ def run_regressions(index, path):
                      and all(x["passed"] for x in out["connector_operands"])
                      and all(x["passed"] for x in out["part_ranges"])
                      and all(x["passed"] for x in out["part_to_ranges"])
-                     and all(x["passed"] for x in out["part_lists"]))
+                     and all(x["passed"] for x in out["part_lists"])
+                     and all(x["passed"] for x in out["four_digit_parts"]))
     return out
 
 
 REGRESSION_GROUPS = ("delta", "relationship_integrity", "citation_scope", "status", "citation_completeness",
-                     "mixed_source", "delta_precision", "instruction_boundary", "current_agreement", "amendatory_lists", "designator_integrity", "query_citations", "suffix_integrity", "appendix_evidence", "titleless_delta", "query_lists", "query_ranges", "connector_operands", "part_ranges", "part_to_ranges", "part_lists")
+                     "mixed_source", "delta_precision", "instruction_boundary", "current_agreement", "amendatory_lists", "designator_integrity", "query_citations", "suffix_integrity", "appendix_evidence", "titleless_delta", "query_lists", "query_ranges", "connector_operands", "part_ranges", "part_to_ranges", "part_lists", "four_digit_parts")
 
 
 def overall(report):
@@ -1271,6 +1281,8 @@ def render(report):
         lines.append(f"  {ri['id']} {'PASS' if ri['passed'] else 'FAIL'} relationship integrity violations={ri['violations']} {'; '.join(ri['failures'])}")
         for c in reg["citation_scope"]:
             lines.append(f"  {c['id']} {'PASS' if c['passed'] else 'FAIL'} citation scope '{c['query']}' {'; '.join(c['failures'])}")
+        for x in reg.get("four_digit_parts", []):
+            lines.append(f"  {x['id']} {'PASS' if x['passed'] else 'FAIL'} four-digit parts [{x['kind']}] {'; '.join(x['failures'])}")
         for x in reg.get("part_lists", []):
             lines.append(f"  {x['id']} {'PASS' if x['passed'] else 'FAIL'} part lists [{x['kind']}] {'; '.join(x['failures'])}")
         for x in reg.get("part_to_ranges", []):

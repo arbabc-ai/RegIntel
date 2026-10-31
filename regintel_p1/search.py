@@ -73,6 +73,18 @@ RANGE_WORDS = ("through", "thru")
 # A bare number after `to` ends a part range only when it is the end of the clause (`Part 3 to 6`, `Part 3 to 6 and ...`):
 # `to 2026`, `to 6 percent` and `to 6 banks` are prose, quantities or years.
 TO_TAIL = re.compile(r"\s*(?:$|[.,;:)]|(?:and|or)\b|\u00a7|\d+\s*CFR\b)", re.I)
+def _bare_part_number(number):
+    """Whether a bare number (no `Part` before it) may be a CFR part: up to three digits, or four digits below 1900
+    (`1010`, `1020`). Four-digit numbers from 1900 on read as years (`to 2026`, `, 2026`) and are never operands unless written
+    `Part 2026`. This is a reading of the form of the text; it does not consult which parts are acquired."""
+    return len(number) <= 3 or (len(number) == 4 and 1000 <= int(number) < 1900)
+
+
+def _part_or_year(number):
+    """Four-digit numbers 1900-1999 can be a part (`Part 1950`) or a year (`1999`): a reading the text does not settle."""
+    return len(number) == 4 and 1900 <= int(number) < 2000
+
+
 PART_ENDPOINT = re.compile(r"(?:(Parts?)\s+)?(\d{1,4})(?![A-Za-z0-9]|\.\d)(?!\s*(?:%|percent\b))", re.I)
 
 
@@ -111,10 +123,12 @@ def _read_range(query, cursor, prev):
             end_info = {"title": prev["title"], "part": prev["part"], "minor": prev["minor"], "designators": [c.group(1)] + designators,
                         "form": "bare_paragraph"}
         elif PART_ENDPOINT.match(query, pos) and (PART_ENDPOINT.match(query, pos).group(1) or part_level and (
-                word != "to" or (len(PART_ENDPOINT.match(query, pos).group(2)) <= 3 and TO_TAIL.match(query, PART_ENDPOINT.match(query, pos).end())))):
+                word != "to" or ((_bare_part_number(PART_ENDPOINT.match(query, pos).group(2)) or _part_or_year(PART_ENDPOINT.match(query, pos).group(2)))
+                                 and TO_TAIL.match(query, PART_ENDPOINT.match(query, pos).end())))):
             pe = PART_ENDPOINT.match(query, pos)  # `Part 6`, or (after a part and not for `to`) a bare `6`
             end_pos = pe.end()
-            end_info = {"title": prev["title"], "part": pe.group(2), "minor": None, "designators": [], "form": "bare_part"}
+            end_info = {"title": prev["title"], "part": pe.group(2), "minor": None, "designators": [],
+                        "form": "ambiguous_part_or_year" if (not pe.group(1) and _part_or_year(pe.group(2))) else "bare_part"}
         elif query.startswith("(", pos) and _malformed_operand(query, pos) is not None:
             end_pos = _malformed_operand(query, pos)  # the endpoint is malformed: the whole expression stays one unresolved range
             end_info = {"form": "malformed_endpoint"}
@@ -141,7 +155,7 @@ def _read_range(query, cursor, prev):
             sec = f"{end_info['part']}.{end_info['minor']}" if end_info["minor"] else None
             last = (f"{end_info['title']} CFR " if end_info["title"] else "\u00a7 ") + (f"{sec}{paras}" if sec else f"Part {end_info['part']}")
     reversed_ = cross_part = None
-    if end_info.get("part") and end_info["form"] in ("fully_qualified", "bare_part", "bare_section") and (part_level or not end_info["minor"]) and prev.get("part"):
+    if end_info.get("part") and end_info["form"] in ("fully_qualified", "bare_part", "bare_section", "ambiguous_part_or_year") and (part_level or not end_info["minor"]) and prev.get("part"):
         sp, ep = int(prev["part"]), int(end_info["part"])  # a part-level range: compare parts (titles only when both are written)
         cross_part = sp != ep or bool(end_info["title"] and prev["title"] and end_info["title"] != prev["title"])
         reversed_ = ep < sp if not (end_info["title"] and prev["title"] and end_info["title"] != prev["title"]) else None
@@ -209,7 +223,9 @@ def _read_member(query, pos, prev):
     pm = PART_ENDPOINT.match(query, pos)
     if pm and not query.startswith("(", pos):
         part_context = bool(prev.get("part") and not prev.get("minor"))  # the previous member is itself a part
-        if pm.group(1) or (part_context and len(pm.group(2)) <= 3 and TO_TAIL.match(query, pm.end())):
+        if part_context and not pm.group(1) and _part_or_year(pm.group(2)) and TO_TAIL.match(query, pm.end()):
+            return _unresolved_expression("ambiguous_part_or_year", query[pos:pm.end()], pos, pm.end(), prev, [f"{prev['title']} CFR Part {pm.group(2)}"], kind="part")
+        if pm.group(1) or (part_context and _bare_part_number(pm.group(2)) and TO_TAIL.match(query, pm.end())):
             # `Part 6` after any citation, or a bare `6` at the end of a clause after a part (`Part 3 and 6`, `Parts 3, 6, and 217`)
             if not prev.get("title"):
                 return _unresolved_expression("part_without_title_context", query[pos:pm.end()], pos, pm.end(), prev, [], kind="part")
@@ -361,6 +377,8 @@ CITATION_REASONS = {
     "unsupported_range": "The request names a range of sections or paragraphs. Ranges are not supported: the interior is not inferred "
                          "and neither endpoint is accepted as the whole request, so nothing is returned for the expression. "
                          "Request each citation separately.",
+    "ambiguous_part_or_year": "A four-digit number from 1900 to 1999 follows a part and could be a part number or a year; the text does "
+                              "not settle it, so it is reported as an unresolved expression and neither reading is chosen.",
     "part_without_title_context": "A part is listed after a citation that names no CFR title, so no title can be inherited for it; "
                                   "it is reported as an unresolved expression. Name the title (for example `12 CFR Part 6`).",
     "ambiguous_shorthand": "A bare paragraph designator follows a citation but the CFR hierarchy does not settle which paragraph it "
