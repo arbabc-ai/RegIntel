@@ -1162,7 +1162,8 @@ def run_regressions(index, path):
            "query_lists": [check_query_lists(index, x) for x in spec.get("query_lists", [])],
            "query_ranges": [check_query_ranges(index, x) for x in spec.get("query_ranges", [])],
            "connector_operands": [check_connector_operands(index, x) for x in spec.get("connector_operands", [])],
-           "part_ranges": [check_query_ranges(index, x) for x in spec.get("part_ranges", [])]}  # same contract as section/paragraph ranges
+           "part_ranges": [check_query_ranges(index, x) for x in spec.get("part_ranges", [])],  # same contract as section/paragraph ranges
+           "part_to_ranges": [check_query_ranges(index, x) for x in spec.get("part_to_ranges", [])]}
     out["passed"] = (all(d["passed"] for d in out["delta"]) and out["relationship_integrity"]["passed"]
                      and all(c["passed"] for c in out["citation_scope"]) and all(x["passed"] for x in out["status"])
                      and all(x["passed"] for x in out["citation_completeness"])
@@ -1179,12 +1180,13 @@ def run_regressions(index, path):
                      and all(x["passed"] for x in out["query_lists"])
                      and all(x["passed"] for x in out["query_ranges"])
                      and all(x["passed"] for x in out["connector_operands"])
-                     and all(x["passed"] for x in out["part_ranges"]))
+                     and all(x["passed"] for x in out["part_ranges"])
+                     and all(x["passed"] for x in out["part_to_ranges"]))
     return out
 
 
 REGRESSION_GROUPS = ("delta", "relationship_integrity", "citation_scope", "status", "citation_completeness",
-                     "mixed_source", "delta_precision", "instruction_boundary", "current_agreement", "amendatory_lists", "designator_integrity", "query_citations", "suffix_integrity", "appendix_evidence", "titleless_delta", "query_lists", "query_ranges", "connector_operands", "part_ranges")
+                     "mixed_source", "delta_precision", "instruction_boundary", "current_agreement", "amendatory_lists", "designator_integrity", "query_citations", "suffix_integrity", "appendix_evidence", "titleless_delta", "query_lists", "query_ranges", "connector_operands", "part_ranges", "part_to_ranges")
 
 
 def overall(report):
@@ -1267,6 +1269,8 @@ def render(report):
         lines.append(f"  {ri['id']} {'PASS' if ri['passed'] else 'FAIL'} relationship integrity violations={ri['violations']} {'; '.join(ri['failures'])}")
         for c in reg["citation_scope"]:
             lines.append(f"  {c['id']} {'PASS' if c['passed'] else 'FAIL'} citation scope '{c['query']}' {'; '.join(c['failures'])}")
+        for x in reg.get("part_to_ranges", []):
+            lines.append(f"  {x['id']} {'PASS' if x['passed'] else 'FAIL'} part to-ranges [{x['kind']}] {'; '.join(x['failures'])}")
         for x in reg.get("part_ranges", []):
             lines.append(f"  {x['id']} {'PASS' if x['passed'] else 'FAIL'} part ranges [{x['kind']}] {'; '.join(x['failures'])}")
         for x in reg.get("connector_operands", []):

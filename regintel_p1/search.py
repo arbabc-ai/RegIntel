@@ -70,6 +70,9 @@ def _unresolved_expression(reason, expression, start, end, prev, candidates):  #
 
 RANGE_OP = re.compile(r"\s*(through|thru|to|[\-\u2010-\u2015\u2212])\s*", re.I)
 RANGE_WORDS = ("through", "thru")
+# A bare number after `to` ends a part range only when it is the end of the clause (`Part 3 to 6`, `Part 3 to 6 and ...`):
+# `to 2026`, `to 6 percent` and `to 6 banks` are prose, quantities or years.
+TO_TAIL = re.compile(r"\s*(?:$|[.,;:)]|(?:and|or)\b|\u00a7|\d+\s*CFR\b)", re.I)
 PART_ENDPOINT = re.compile(r"(?:(Parts?)\s+)?(\d{1,4})(?![A-Za-z0-9]|\.\d)(?!\s*(?:%|percent\b))", re.I)
 
 
@@ -107,7 +110,8 @@ def _read_range(query, cursor, prev):
             end_pos = suffix[2] if suffix else p
             end_info = {"title": prev["title"], "part": prev["part"], "minor": prev["minor"], "designators": [c.group(1)] + designators,
                         "form": "bare_paragraph"}
-        elif PART_ENDPOINT.match(query, pos) and (PART_ENDPOINT.match(query, pos).group(1) or part_level and (word != "to")):
+        elif PART_ENDPOINT.match(query, pos) and (PART_ENDPOINT.match(query, pos).group(1) or part_level and (
+                word != "to" or (len(PART_ENDPOINT.match(query, pos).group(2)) <= 3 and TO_TAIL.match(query, PART_ENDPOINT.match(query, pos).end())))):
             pe = PART_ENDPOINT.match(query, pos)  # `Part 6`, or (after a part and not for `to`) a bare `6`
             end_pos = pe.end()
             end_info = {"title": prev["title"], "part": pe.group(2), "minor": None, "designators": [], "form": "bare_part"}

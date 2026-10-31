@@ -1,6 +1,6 @@
 {
- "version": "p1-regress-0.20",
- "task": "S7-P1-EVIDENCE-BOUNDARIES-01 + S7-P1-EVIDENCE-COMPLETENESS-02 + S7-P1-COVERAGE-GUARDS-03 + S7-P1-CITATION-COMPLETENESS-04 + S7-P1-FUTURE-PARAGRAPH-PRECISION-05 + S7-P1-MIXED-SOURCE-COVERAGE-06 + S7-P1-DELTA-PRECISION-07 + S7-P1-INSTRUCTION-BOUNDARY-08 + S7-P1-RESERVED-RANGE-CONSISTENCY-09 + S7-P1-AMENDATORY-LIST-PRECISION-11 + S7-P1-DESIGNATOR-TOKEN-INTEGRITY-12 + S7-P1-QUERY-CITATION-INTEGRITY-13 + S7-P1-SUFFIX-INTEGRITY-14 + S7-P1-SUFFIX-INTEGRITY-14 + S7-P1-SUFFIX-BOUNDARY-15 + S7-P1-APPENDIX-EVIDENCE-16 + S7-P1-TITLELESS-DELTA-17 + S7-P1-QUERY-LIST-COMPLETENESS-18 + S7-P1-QUERY-RANGE-INTEGRITY-19 + S7-P1-CONNECTOR-DESIGNATOR-INTEGRITY-20 + S7-P1-PART-RANGE-INTEGRITY-21",
+ "version": "p1-regress-0.21",
+ "task": "S7-P1-EVIDENCE-BOUNDARIES-01 + S7-P1-EVIDENCE-COMPLETENESS-02 + S7-P1-COVERAGE-GUARDS-03 + S7-P1-CITATION-COMPLETENESS-04 + S7-P1-FUTURE-PARAGRAPH-PRECISION-05 + S7-P1-MIXED-SOURCE-COVERAGE-06 + S7-P1-DELTA-PRECISION-07 + S7-P1-INSTRUCTION-BOUNDARY-08 + S7-P1-RESERVED-RANGE-CONSISTENCY-09 + S7-P1-AMENDATORY-LIST-PRECISION-11 + S7-P1-DESIGNATOR-TOKEN-INTEGRITY-12 + S7-P1-QUERY-CITATION-INTEGRITY-13 + S7-P1-SUFFIX-INTEGRITY-14 + S7-P1-SUFFIX-INTEGRITY-14 + S7-P1-SUFFIX-BOUNDARY-15 + S7-P1-APPENDIX-EVIDENCE-16 + S7-P1-TITLELESS-DELTA-17 + S7-P1-QUERY-LIST-COMPLETENESS-18 + S7-P1-QUERY-RANGE-INTEGRITY-19 + S7-P1-CONNECTOR-DESIGNATOR-INTEGRITY-20 + S7-P1-PART-RANGE-INTEGRITY-21 + S7-P1-PART-TO-RANGE-22",
  "note": "Deterministic regression checks over the acquired corpus for amendment-target integrity and retrieval scope filtering. Kept separate from questions.json so the 37-item baseline stays frozen. A pass means the contract holds, not that any rule applies to a bank.",
  "delta": [
   {
@@ -234,7 +234,8 @@
   "v0.17 (QUERY-LIST-COMPLETENESS-18, F1): query_lists QL01-QL07: '12 CFR 3.1, 6.1' and '12 CFR 3.22(a) and (z)' yield one citation per member and resolve like their fully qualified controls (the missing members 6.1 and 3.22(z) are gaps and the answer is never evidence_found); fully acquired lists and paragraph shorthand are evidence_found; ambiguous hierarchy ((v) after (c)(4)(i)) and malformed tails are structured unresolved expressions with gaps; delta reports multi-citation requests as unsupported instead of selecting the first member. Earlier checks unchanged.",
   "v0.18 (QUERY-RANGE-INTEGRITY-19, F1): query_ranges QR01-QR05: '12 CFR 3.1-6.1', 'CET1 12 CFR 3.22(a) through (z)' and their 'to', 'thru' and en-dash variants are one unsupported_range expression with a citation gap (no endpoint citation, no records from exact retrieval, never evidence_found, delta unavailable with no baseline or instruments); reversed, cross-part and missing-endpoint expressions are the same; an independent citation elsewhere in the request still resolves; ordinary prose ('to the extent', 'to 6.1 percent') is not a range. Earlier checks unchanged.",
   "v0.19 (CONNECTOR-DESIGNATOR-INTEGRITY-20, F1): connector_operands CO01-CO05: a malformed parenthesized operand after a list separator ('CET1 12 CFR 3.22(a) and (-1)') is its own unresolved member beside the valid 3.22(a) with a citation gap, exact returns only the valid member and delta is unsupported_multi_citation; after a range operator ('through (-1)', 'through (z') the whole expression is one unresolved unsupported range (no exact records, delta unavailable, no baseline or instruments); citations after a malformed expression still resolve; ordinary parentheticals are not operands. Earlier checks unchanged.",
-  "v0.20 (PART-RANGE-INTEGRITY-21, F1): part_ranges PR01-PR05: '12 CFR Part 3-6', 'Part 3 through 6', 'Part 3 to 12 CFR Part 6', thru and en/em-dash forms, reversed ranges and a dangling 'through' are one unsupported_range expression with a citation gap (no endpoint citation, no exact records, never evidence_found, delta unavailable with no baseline or instruments); an independent citation after the range still resolves; ordinary prose around a part citation is not a range. Earlier checks unchanged."
+  "v0.20 (PART-RANGE-INTEGRITY-21, F1): part_ranges PR01-PR05: '12 CFR Part 3-6', 'Part 3 through 6', 'Part 3 to 12 CFR Part 6', thru and en/em-dash forms, reversed ranges and a dangling 'through' are one unsupported_range expression with a citation gap (no endpoint citation, no exact records, never evidence_found, delta unavailable with no baseline or instruments); an independent citation after the range still resolves; ordinary prose around a part citation is not a range. Earlier checks unchanged.",
+  "v0.21 (PART-TO-RANGE-22, F1): part_to_ranges PT01-PT04: '12 CFR Part 3 to 6' and the reversed '12 CFR Part 6 to 3' are one unsupported_range expression holding the complete request (gap, no exact records, never evidence_found, delta unavailable with no baseline, section context or instruments); an independent citation after the range still resolves; 'to the extent applicable', 'to 2026', 'to 6 percent' and 'to 6 banks' stay a plain Part 3 citation. Earlier checks unchanged."
  ],
  "status": [
   {
@@ -1470,6 +1471,60 @@
      "12 CFR Part 3 to 2026",
      "12 CFR Part 3"
     ]
+   ]
+  }
+ ],
+ "part_to_ranges": [
+  {
+   "id": "PT01",
+   "kind": "unsupported",
+   "requests": [
+    "12 CFR Part 3 to 6",
+    "12 CFR Part 6 to 3",
+    "CET1 12 CFR Part 3 to 6",
+    "12 CFR Part 217 to 3"
+   ]
+  },
+  {
+   "id": "PT02",
+   "kind": "independent",
+   "request": "12 CFR Part 3 to 6 and 12 CFR 3.22(a)",
+   "independent": "12 CFR 3.22(a)",
+   "malformed": [
+    "unsupported_range",
+    null
+   ]
+  },
+  {
+   "id": "PT03",
+   "kind": "prose",
+   "requests": [
+    [
+     "12 CFR Part 3 to the extent applicable",
+     "12 CFR Part 3"
+    ],
+    [
+     "12 CFR Part 3 to 2026",
+     "12 CFR Part 3"
+    ],
+    [
+     "12 CFR Part 3 to 6 percent",
+     "12 CFR Part 3"
+    ],
+    [
+     "12 CFR Part 3 to 6 banks",
+     "12 CFR Part 3"
+    ]
+   ]
+  },
+  {
+   "id": "PT04",
+   "kind": "unsupported",
+   "requests": [
+    "12 CFR Part 3-6",
+    "12 CFR Part 3 through 6",
+    "12 CFR Part 3 to Part 6",
+    "12 CFR Part 3 to 12 CFR Part 6"
    ]
   }
  ]
