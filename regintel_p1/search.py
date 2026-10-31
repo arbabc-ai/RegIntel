@@ -31,6 +31,20 @@ BARE_DESIGNATOR = re.compile(r"\(\s*([A-Za-z0-9]+)\s*\)")
 BARE_OPENER = re.compile(r"\(\s*([A-Za-z0-9]+)")
 
 
+CONTINUATION = re.compile(r"(?:_|\.(?=[A-Za-z0-9])|(?=[A-Za-z0-9]))[A-Za-z0-9_]*(?:\.[A-Za-z0-9_]+)*")
+
+
+def _continuation(query, pos):
+    """An unread continuation of an identifier written with no space after it (`3.22.1`, `3.22_a`, `Part 3a`, `3.22ab`).
+
+    The identifier was read only up to `pos`; accepting it would assert evidence for a prefix of something longer. Returned
+    like an unread designator suffix so every consumer treats it the same way. A sentence-final period (`3.22.`), whitespace,
+    punctuation and a hyphen (a range operator, read separately) are not continuations.
+    """
+    m = CONTINUATION.match(query, pos)
+    return ("incomplete", "unread_identifier_continuation", m.end()) if m and m.end() > pos else None
+
+
 def _read_designators(query, pos):
     """Complete designators written one after another from `pos`, and the unread suffix (if any) that stops them."""
     designators, suffix = [], None
@@ -40,7 +54,7 @@ def _read_designators(query, pos):
             designators.append(found[1])
             pos = found[2]
             continue
-        suffix = found if found and found[0] == "incomplete" else None
+        suffix = found if found and found[0] == "incomplete" else _continuation(query, pos)
         return designators, pos, suffix
 
 
@@ -54,7 +68,9 @@ def _citation_record(title, part, minor, designators, pos, suffix, query, start,
     if suffix:
         malformed = suffix[1]
         diagnostics = {"requested": " ".join(requested.split()), "accepted_valid_prefix": False,
-                       "valid_prefix": f"{section}{paras}", "unread_suffix": query[pos:end].strip()}
+                       "valid_prefix": f"{section}{paras}" if section else f"Part {part}", "unread_suffix": query[pos:end].strip()}
+        if malformed == "unread_identifier_continuation":
+            diagnostics["unread_continuation"] = query[pos:end]
     return {"title": title, "part": part, "minor": minor, "section": section, "paras": paras, "canonical": canonical,
             "requested": requested, "label": " ".join(requested.split()) if malformed else canonical,
             "malformed": malformed, "diagnostics": diagnostics, "inherited": inherited, "designators": list(designators), "_end": end,
@@ -76,7 +92,7 @@ RANGE_OP = re.compile(r"\s*(through|thru|to|[\-\u2010-\u2015\u2212])\s*", re.I)
 RANGE_WORDS = ("through", "thru")
 # A bare number after `to` ends a part range only when it is the end of the clause (`Part 3 to 6`, `Part 3 to 6 and ...`):
 # `to 2026`, `to 6 percent` and `to 6 banks` are prose, quantities or years.
-TO_TAIL = re.compile(r"\s*(?:$|[.,;:)]|(?:and|or)\b|\u00a7|\d+\s*CFR\b)", re.I)
+TO_TAIL = re.compile(r"\s*(?:$|[.,;:)]|(?:and|or)\b|\u00a7|\d+\s*CFR\b)|(?=[A-Za-z0-9_])", re.I)  # or an identifier running on with no space (`6_a`, `6a`)
 def _bare_part_number(number):
     """Whether a bare number (no `Part` before it) may be a CFR part: up to three digits, or four digits below 1900
     (`1010`, `1020`). Four-digit numbers from 1900 on read as years (`to 2026`, `, 2026`) and are never operands unless written
@@ -89,7 +105,7 @@ def _part_or_year(number):
     return len(number) == 4 and 1900 <= int(number) < 2000
 
 
-PART_ENDPOINT = re.compile(r"(?:(Parts?)\s+)?(\d{1,4})(?![A-Za-z0-9]|\.\d)(?!\s*(?:%|percent\b))", re.I)
+PART_ENDPOINT = re.compile(r"(?:(Parts?)\s+)?(\d{1,4})(?!\d)(?!\.\d)(?!\s*(?:%|percent\b))", re.I)
 
 
 def _read_range(query, cursor, prev):
@@ -111,7 +127,7 @@ def _read_range(query, cursor, prev):
     h = CITE_HEAD.match(query, pos)
     if h and (h.group(1) or query[pos] == "\u00a7"):
         title, part, minor = h.groups()
-        designators, p, suffix = _read_designators(query, h.end()) if minor else ([], h.end(), None)
+        designators, p, suffix = _read_designators(query, h.end()) if minor else ([], h.end(), _continuation(query, h.end()))
         end_pos = suffix[2] if suffix else p
         end_info = {"title": title or prev["title"], "part": part, "minor": minor, "designators": designators, "form": "fully_qualified"}
     else:
@@ -130,7 +146,7 @@ def _read_range(query, cursor, prev):
                 word != "to" or ((_bare_part_number(PART_ENDPOINT.match(query, pos).group(2)) or _part_or_year(PART_ENDPOINT.match(query, pos).group(2)))
                                  and TO_TAIL.match(query, PART_ENDPOINT.match(query, pos).end())))):
             pe = PART_ENDPOINT.match(query, pos)  # `Part 6`, or (after a part and not for `to`) a bare `6`
-            end_pos = pe.end()
+            end_pos = (_continuation(query, pe.end()) or (None, None, pe.end()))[2]
             end_info = {"title": prev["title"], "part": pe.group(2), "minor": None, "designators": [],
                         "form": "ambiguous_part_or_year" if (not pe.group(1) and _part_or_year(pe.group(2))) else "bare_part"}
         elif query.startswith("(", pos) and _malformed_operand(query, pos) is not None:
@@ -233,8 +249,11 @@ def _read_member(query, pos, prev):
             # `Part 6` after any citation, or a bare `6` at the end of a clause after a part (`Part 3 and 6`, `Parts 3, 6, and 217`)
             if not prev.get("title"):
                 return _unresolved_expression("part_without_title_context", query[pos:pm.end()], pos, pm.end(), prev, [], kind="part")
-            return _citation_record(prev["title"], pm.group(2), None, [], pm.end(), None, query, pos,
-                                    {"kind": "part", "from": prev["label"], "title_inherited": prev["title"]})
+            rec = _citation_record(prev["title"], pm.group(2), None, [], pm.end(), _continuation(query, pm.end()), query, pos,
+                                   {"kind": "part", "from": prev["label"], "title_inherited": prev["title"]})
+            if rec["malformed"]:
+                rec["label"] = f"{prev['title']} CFR Part {rec['label']}"
+            return rec
     if not query.startswith("(", pos):
         return None
     c = BARE_DESIGNATOR.match(query, pos)
@@ -290,7 +309,7 @@ def parse_query_citations(query):
         title, part, minor = m.groups()
         if not minor and not title:
             continue  # a bare '\u00a7 12' is not a citation
-        designators, pos, suffix = _read_designators(query, m.end()) if minor else ([], m.end(), None)
+        designators, pos, suffix = _read_designators(query, m.end()) if minor else ([], m.end(), _continuation(query, m.end()))
         rec = _citation_record(title, part, minor, designators, pos, suffix, query, m.start())
         out.append(rec)
         consumed = rec["_end"]
@@ -369,6 +388,9 @@ def terms_of(query):
 
 
 CITATION_REASONS = {
+    "unread_identifier_continuation": "The citation is followed, with no space, by more identifier text (such as `.1`, `_a` or extra letters) "
+                                      "that is not read, so its prefix was not accepted and no record is returned; this is not a determination "
+                                      "that the longer identifier is invalid.",
     "unclosed_or_malformed_designator_suffix": "The request ends in an unclosed or malformed designator, so its parent path "
                                                "was not accepted and no record is returned for the cited paragraph.",
     "detached_designator_suffix": "A designator set apart by whitespace follows the citation, which makes the requested path "

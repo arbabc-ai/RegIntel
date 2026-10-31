@@ -1264,6 +1264,58 @@ def check_explicit_title_sign(index, item):
     return {"id": item["id"], "kind": kind, "passed": not failures, "failures": failures[:10]}
 
 
+def check_citation_tokens(index, item):
+    """Real-corpus guard for identifiers that run on with no space (`3.22.1`, `3.22_a`, `Part 3_a`). `unresolved`: each request is
+    one unresolved `unread_identifier_continuation` expression (complete text kept, continuation identified), the resolver and
+    exact retrieval return nothing, every exact/hybrid answer (scopes, part filters, k=10 and 1) carries its own citation gap and
+    is never evidence_found, and delta is unavailable with no baseline or instruments. `mixed`: valid members are kept next to the
+    unresolved one and delta reports unsupported_multi_citation. `controls`: valid forms (`3.22.`, lettered sections) parse as before."""
+    failures, kind = [], item["kind"]
+    scopes = ("current", "future", "both")
+    gaps = lambda out: sorted(g["topic"] for g in out["coverage_gaps"] if g["topic"].startswith("citation:"))
+    if kind == "unresolved":
+        for q in item["requests"]:
+            cites = parse_query_citations(q)
+            bad = [c for c in cites if c["malformed"] == "unread_identifier_continuation"]
+            if len(cites) != 1 or len(bad) != 1 or not bad[0]["diagnostics"].get("unread_continuation") or bad[0]["diagnostics"]["accepted_valid_prefix"]:
+                failures.append(f"'{q}': not read as one unresolved expression with its unread continuation")
+                continue
+            label = bad[0]["label"]
+            for scope in scopes:
+                for parts in (None, ["12:3"], ["12:999"]):
+                    recs = index.resolve_citations(q, scope, parts)
+                    if len(recs) != 1 or recs[0]["resolved"] or recs[0]["_current_ids"] or recs[0]["_future_ids"]:
+                        failures.append(f"'{q}' {scope}/{parts}: the resolver accepted the prefix")
+            for mode in ("exact", "hybrid"):
+                for scope in scopes:
+                    for parts in (None, ["12:3"], ["12:999"]):
+                        for k in (10, 1):
+                            out = index.answer(q, mode=mode, scope=scope, parts=parts, k=k)
+                            tag = f"'{q}' {mode}/{scope}/{parts or 'nofilter'}/k{k}"
+                            if out["status"] == "evidence_found" or f"citation:{label}" not in gaps(out) or (mode == "exact" and out["results"]):
+                                failures.append(f"{tag}: evidence_found, no gap, or exact records")
+            d = index.delta(q)
+            if d["evidence_status"] != "unavailable" or d["baseline"] or d["instruments"] or d["unavailable"]["reason"] != "unread_identifier_continuation":
+                failures.append(f"'{q}': delta did not report the unresolved request")
+    elif kind == "mixed":
+        q = item["request"]
+        cites = parse_query_citations(q)
+        if [c["canonical"] for c in cites if not c["malformed"]] != item["valid"] or sum(1 for c in cites if c["malformed"] == "unread_identifier_continuation") != 1:
+            failures.append("valid members were not kept next to the unresolved one")
+        for mode in ("exact", "hybrid"):
+            out = index.answer(q, mode=mode, scope="current", k=10)
+            if out["status"] == "evidence_found" or len(gaps(out)) != 1:
+                failures.append(f"{mode}: expected exactly one citation gap and no evidence_found")
+        if index.delta(q)["evidence_status"] != "unsupported_multi_citation":
+            failures.append("delta did not report unsupported_multi_citation")
+    elif kind == "controls":
+        for q, want in item["requests"]:
+            cites = parse_query_citations(q)
+            if [c["canonical"] for c in cites] != want or any(c["malformed"] for c in cites):
+                failures.append(f"'{q}': a valid form changed (got {[c['canonical'] for c in cites]})")
+    return {"id": item["id"], "kind": kind, "passed": not failures, "failures": failures[:10]}
+
+
 def run_regressions(index, path):
     spec = json.loads(Path(path).read_text())
     out = {"version": spec["version"], "task": spec["task"],
@@ -1291,7 +1343,8 @@ def run_regressions(index, path):
            "four_digit_parts": [check_four_digit_parts(index, x) for x in spec.get("four_digit_parts", [])],
            "candidate_titles": [check_candidate_titles(index, x) for x in spec.get("candidate_titles", [])],
            "explicit_title_sign": [check_explicit_title_sign(index, x) for x in spec.get("explicit_title_sign", [])],
-           "punctuated_cfr_title": [check_explicit_title_sign(index, x) for x in spec.get("punctuated_cfr_title", [])]}  # same contract, punctuated spelling
+           "punctuated_cfr_title": [check_explicit_title_sign(index, x) for x in spec.get("punctuated_cfr_title", [])],  # same contract, punctuated spelling
+           "citation_tokens": [check_citation_tokens(index, x) for x in spec.get("citation_tokens", [])]}
     out["passed"] = (all(d["passed"] for d in out["delta"]) and out["relationship_integrity"]["passed"]
                      and all(c["passed"] for c in out["citation_scope"]) and all(x["passed"] for x in out["status"])
                      and all(x["passed"] for x in out["citation_completeness"])
@@ -1314,12 +1367,13 @@ def run_regressions(index, path):
                      and all(x["passed"] for x in out["four_digit_parts"])
                      and all(x["passed"] for x in out["candidate_titles"])
                      and all(x["passed"] for x in out["explicit_title_sign"])
-                     and all(x["passed"] for x in out["punctuated_cfr_title"]))
+                     and all(x["passed"] for x in out["punctuated_cfr_title"])
+                     and all(x["passed"] for x in out["citation_tokens"]))
     return out
 
 
 REGRESSION_GROUPS = ("delta", "relationship_integrity", "citation_scope", "status", "citation_completeness",
-                     "mixed_source", "delta_precision", "instruction_boundary", "current_agreement", "amendatory_lists", "designator_integrity", "query_citations", "suffix_integrity", "appendix_evidence", "titleless_delta", "query_lists", "query_ranges", "connector_operands", "part_ranges", "part_to_ranges", "part_lists", "four_digit_parts", "candidate_titles", "explicit_title_sign", "punctuated_cfr_title")
+                     "mixed_source", "delta_precision", "instruction_boundary", "current_agreement", "amendatory_lists", "designator_integrity", "query_citations", "suffix_integrity", "appendix_evidence", "titleless_delta", "query_lists", "query_ranges", "connector_operands", "part_ranges", "part_to_ranges", "part_lists", "four_digit_parts", "candidate_titles", "explicit_title_sign", "punctuated_cfr_title", "citation_tokens")
 
 
 def overall(report):
@@ -1402,6 +1456,8 @@ def render(report):
         lines.append(f"  {ri['id']} {'PASS' if ri['passed'] else 'FAIL'} relationship integrity violations={ri['violations']} {'; '.join(ri['failures'])}")
         for c in reg["citation_scope"]:
             lines.append(f"  {c['id']} {'PASS' if c['passed'] else 'FAIL'} citation scope '{c['query']}' {'; '.join(c['failures'])}")
+        for x in reg.get("citation_tokens", []):
+            lines.append(f"  {x['id']} {'PASS' if x['passed'] else 'FAIL'} citation tokens [{x['kind']}] {'; '.join(x['failures'])}")
         for x in reg.get("punctuated_cfr_title", []):
             lines.append(f"  {x['id']} {'PASS' if x['passed'] else 'FAIL'} punctuated CFR title [{x['kind']}] {'; '.join(x['failures'])}")
         for x in reg.get("explicit_title_sign", []):
