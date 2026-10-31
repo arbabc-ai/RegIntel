@@ -1,6 +1,6 @@
 {
- "version": "p1-regress-0.27",
- "task": "S7-P1-EVIDENCE-BOUNDARIES-01 + S7-P1-EVIDENCE-COMPLETENESS-02 + S7-P1-COVERAGE-GUARDS-03 + S7-P1-CITATION-COMPLETENESS-04 + S7-P1-FUTURE-PARAGRAPH-PRECISION-05 + S7-P1-MIXED-SOURCE-COVERAGE-06 + S7-P1-DELTA-PRECISION-07 + S7-P1-INSTRUCTION-BOUNDARY-08 + S7-P1-RESERVED-RANGE-CONSISTENCY-09 + S7-P1-AMENDATORY-LIST-PRECISION-11 + S7-P1-DESIGNATOR-TOKEN-INTEGRITY-12 + S7-P1-QUERY-CITATION-INTEGRITY-13 + S7-P1-SUFFIX-INTEGRITY-14 + S7-P1-SUFFIX-INTEGRITY-14 + S7-P1-SUFFIX-BOUNDARY-15 + S7-P1-APPENDIX-EVIDENCE-16 + S7-P1-TITLELESS-DELTA-17 + S7-P1-QUERY-LIST-COMPLETENESS-18 + S7-P1-QUERY-RANGE-INTEGRITY-19 + S7-P1-CONNECTOR-DESIGNATOR-INTEGRITY-20 + S7-P1-PART-RANGE-INTEGRITY-21 + S7-P1-PART-TO-RANGE-22 + S7-P1-PART-LIST-COMPLETENESS-23 + S7-P1-FOUR-DIGIT-PART-OPERANDS-24 + S7-P1-DELTA-CANDIDATE-TITLE-25 + S7-P1-EXPLICIT-TITLE-SECTION-SIGN-26 + S7-P1-PUNCTUATED-CFR-TITLE-27 + S7-P1-CITATION-TOKEN-INTEGRITY-28",
+ "version": "p1-regress-0.28",
+ "task": "S7-P1-EVIDENCE-BOUNDARIES-01 + S7-P1-EVIDENCE-COMPLETENESS-02 + S7-P1-COVERAGE-GUARDS-03 + S7-P1-CITATION-COMPLETENESS-04 + S7-P1-FUTURE-PARAGRAPH-PRECISION-05 + S7-P1-MIXED-SOURCE-COVERAGE-06 + S7-P1-DELTA-PRECISION-07 + S7-P1-INSTRUCTION-BOUNDARY-08 + S7-P1-RESERVED-RANGE-CONSISTENCY-09 + S7-P1-AMENDATORY-LIST-PRECISION-11 + S7-P1-DESIGNATOR-TOKEN-INTEGRITY-12 + S7-P1-QUERY-CITATION-INTEGRITY-13 + S7-P1-SUFFIX-INTEGRITY-14 + S7-P1-SUFFIX-INTEGRITY-14 + S7-P1-SUFFIX-BOUNDARY-15 + S7-P1-APPENDIX-EVIDENCE-16 + S7-P1-TITLELESS-DELTA-17 + S7-P1-QUERY-LIST-COMPLETENESS-18 + S7-P1-QUERY-RANGE-INTEGRITY-19 + S7-P1-CONNECTOR-DESIGNATOR-INTEGRITY-20 + S7-P1-PART-RANGE-INTEGRITY-21 + S7-P1-PART-TO-RANGE-22 + S7-P1-PART-LIST-COMPLETENESS-23 + S7-P1-FOUR-DIGIT-PART-OPERANDS-24 + S7-P1-DELTA-CANDIDATE-TITLE-25 + S7-P1-EXPLICIT-TITLE-SECTION-SIGN-26 + S7-P1-PUNCTUATED-CFR-TITLE-27 + S7-P1-CITATION-TOKEN-INTEGRITY-28 + S7-P1-HYPHEN-TAIL-INTEGRITY-29",
  "note": "Deterministic regression checks over the acquired corpus for amendment-target integrity and retrieval scope filtering. Kept separate from questions.json so the 37-item baseline stays frozen. A pass means the contract holds, not that any rule applies to a bank.",
  "delta": [
   {
@@ -241,7 +241,8 @@
   "v0.24 (DELTA-CANDIDATE-TITLE-25, F1): candidate_titles CT01-CT03: the unresolved ambiguous-range candidates in delta() are scoped to the resolved CFR title. CT01/CT02 run on a self-contained synthetic corpus with identical reversed 3.9-through-3.4 ranges under Titles 12 and 31 (the acquired corpus has no unresolved range): section endpoint, paragraph and whole-part requests each get only their own title's candidate, interior and unrelated sections get none, an ambiguous titleless request exposes none. CT03 pins on the acquired corpus that titleless and fully qualified requests expose identical (empty) candidates. Earlier checks unchanged.",
   "v0.25 (EXPLICIT-TITLE-SECTION-SIGN-26, F1): explicit_title_sign ES01-ES05: an explicit title before a section sign ('31 CFR § 1010.100', '12 CFR §§ 252.44', '31 CFR §§ 1010.100, 1020.220') parses, resolves, answers and deltas exactly like the unsigned form with the signed span preserved; a title that lacks the section ('31 CFR § 3.22', 'CET1 31 CFR § 3.22', '12 CFR § 1010.100') keeps an unresolved citation gap and never resolves through another title; signed ranges stay one unsupported_range; genuinely titleless '§ 3.22' is unchanged. Earlier checks unchanged.",
   "v0.26 (PUNCTUATED-CFR-TITLE-27, F1): punctuated_cfr_title PC01-PC04: 'N C.F.R.' is read exactly like 'N CFR' (signed, unsigned, paragraph, part, list and range): '31 C.F.R. § 1010.100' parses, resolves, answers and deltas like '31 CFR 1010.100' with the punctuated span preserved and the citation canonicalized to CFR; a title that lacks the section ('31 C.F.R. § 3.22', 'CET1 12 C.F.R. § 1010.100') keeps its titled citation gap and never resolves through another title; punctuated ranges stay one unsupported_range. Earlier checks unchanged.",
-  "v0.27 (CITATION-TOKEN-INTEGRITY-28, F1): citation_tokens CK01-CK05: an identifier that runs on with no space ('12 CFR 3.22.1', '12 CFR 3.22_a', '12 C.F.R. § 3.22.1', '12 CFR Part 3_a', 'CET1 12 CFR 3.22.1') is one unresolved unread_identifier_continuation expression (complete text kept, continuation identified, own citation gap, no exact records, never evidence_found, delta unavailable without baseline or instruments); in '12 CFR 3.1 and 3.22.1' the valid member is kept and delta is unsupported_multi_citation; valid forms ('3.22.', lettered sections, paragraphs) are unchanged. Earlier checks unchanged."
+  "v0.27 (CITATION-TOKEN-INTEGRITY-28, F1): citation_tokens CK01-CK05: an identifier that runs on with no space ('12 CFR 3.22.1', '12 CFR 3.22_a', '12 C.F.R. § 3.22.1', '12 CFR Part 3_a', 'CET1 12 CFR 3.22.1') is one unresolved unread_identifier_continuation expression (complete text kept, continuation identified, own citation gap, no exact records, never evidence_found, delta unavailable without baseline or instruments); in '12 CFR 3.1 and 3.22.1' the valid member is kept and delta is unsupported_multi_citation; valid forms ('3.22.', lettered sections, paragraphs) are unchanged. Earlier checks unchanged.",
+  "v0.28 (HYPHEN-TAIL-INTEGRITY-29, F1): hyphen_tails HT01-HT05: a hyphen joined tightly to a citation that the range reader cannot consume ('12 CFR 3.22-a', '12 CFR 3.22-1', '12 CFR 3.22(a)-b', 'CET1 12 CFR 3.22-a') is one unresolved unread_hyphen_tail expression (complete text kept, tail identified, own citation gap, no exact records, never evidence_found, delta unavailable without baseline or instruments); recognised ranges ('12 CFR 3.1-6.1', 'Part 3-6'), spaced prose ('12 CFR 3.22 - a rule') and valid citations are unchanged. Earlier checks unchanged."
  ],
  "status": [
   {
@@ -2015,6 +2016,90 @@
      [
       "12 CFR 3.22",
       "12 CFR 3.12"
+     ]
+    ]
+   ]
+  }
+ ],
+ "hyphen_tails": [
+  {
+   "id": "HT01",
+   "kind": "unresolved",
+   "reason": "unread_hyphen_tail",
+   "requests": [
+    "12 CFR 3.22-a",
+    "12 CFR 3.22-1",
+    "12 C.F.R. § 3.22-a",
+    "12 CFR Part 3-a"
+   ]
+  },
+  {
+   "id": "HT02",
+   "kind": "unresolved",
+   "reason": "unread_hyphen_tail",
+   "requests": [
+    "CET1 12 CFR 3.22-a",
+    "CET1 12 CFR 3.22-1",
+    "12 CFR 3.22(a)-b",
+    "31 CFR § 1010.100-a"
+   ]
+  },
+  {
+   "id": "HT03",
+   "kind": "mixed",
+   "reason": "unread_hyphen_tail",
+   "request": "12 CFR 3.1 and 3.22-a",
+   "valid": [
+    "12 CFR 3.1"
+   ]
+  },
+  {
+   "id": "HT04",
+   "kind": "mixed",
+   "reason": "unread_hyphen_tail",
+   "request": "12 CFR Parts 3 and 6-a",
+   "valid": [
+    "12 CFR Part 3"
+   ]
+  },
+  {
+   "id": "HT05",
+   "kind": "controls",
+   "requests": [
+    [
+     "12 CFR 3.22 - a rule",
+     [
+      "12 CFR 3.22"
+     ]
+    ],
+    [
+     "12 CFR 3.22 -a",
+     [
+      "12 CFR 3.22"
+     ]
+    ],
+    [
+     "12 CFR 3.22-",
+     [
+      "12 CFR 3.22"
+     ]
+    ],
+    [
+     "12 CFR 3.1-3.5 percent",
+     [
+      "12 CFR 3.1"
+     ]
+    ],
+    [
+     "12 CFR 3.22.",
+     [
+      "12 CFR 3.22"
+     ]
+    ],
+    [
+     "12 CFR 3.22a",
+     [
+      "12 CFR 3.22a"
      ]
     ]
    ]

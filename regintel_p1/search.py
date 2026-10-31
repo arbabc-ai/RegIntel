@@ -69,7 +69,7 @@ def _citation_record(title, part, minor, designators, pos, suffix, query, start,
         malformed = suffix[1]
         diagnostics = {"requested": " ".join(requested.split()), "accepted_valid_prefix": False,
                        "valid_prefix": f"{section}{paras}" if section else f"Part {part}", "unread_suffix": query[pos:end].strip()}
-        if malformed == "unread_identifier_continuation":
+        if malformed in ("unread_identifier_continuation", "unread_hyphen_tail"):
             diagnostics["unread_continuation"] = query[pos:end]
     return {"title": title, "part": part, "minor": minor, "section": section, "paras": paras, "canonical": canonical,
             "requested": requested, "label": " ".join(requested.split()) if malformed else canonical,
@@ -92,7 +92,7 @@ RANGE_OP = re.compile(r"\s*(through|thru|to|[\-\u2010-\u2015\u2212])\s*", re.I)
 RANGE_WORDS = ("through", "thru")
 # A bare number after `to` ends a part range only when it is the end of the clause (`Part 3 to 6`, `Part 3 to 6 and ...`):
 # `to 2026`, `to 6 percent` and `to 6 banks` are prose, quantities or years.
-TO_TAIL = re.compile(r"\s*(?:$|[.,;:)]|(?:and|or)\b|\u00a7|\d+\s*CFR\b)|(?=[A-Za-z0-9_])", re.I)  # or an identifier running on with no space (`6_a`, `6a`)
+TO_TAIL = re.compile(r"\s*(?:$|[.,;:)]|(?:and|or)\b|\u00a7|\d+\s*CFR\b)|(?=[A-Za-z0-9_])|(?=[-\u2010-\u2015\u2212][A-Za-z0-9_])", re.I)  # or an identifier running on with no space (`6_a`, `6a`)
 def _bare_part_number(number):
     """Whether a bare number (no `Part` before it) may be a CFR part: up to three digits, or four digits below 1900
     (`1010`, `1020`). Four-digit numbers from 1900 on read as years (`to 2026`, `, 2026`) and are never operands unless written
@@ -285,6 +285,35 @@ def _read_member(query, pos, prev):
     return rec
 
 
+HYPHEN_TAIL = re.compile(r"[-\u2010-\u2015\u2212](?=[A-Za-z0-9_])[A-Za-z0-9_]*(?:[.\-\u2010-\u2015\u2212][A-Za-z0-9_]+)*")
+
+
+def _with_hyphen_tail(query, rec):
+    """`rec` re-made as an unresolved request when a hyphen joined tightly to it (`3.22-a`, `3.22-1`) was not consumed as a range.
+
+    A range operator is read first; whatever hyphen tail the range reader cannot consume is an unread continuation of the
+    identifier, so the prefix is not accepted as the whole request. A spaced hyphen (`3.22 - a rule`) is prose and is not a tail.
+    """
+    m = HYPHEN_TAIL.match(query, rec["_end"])
+    if not m or rec["malformed"]:
+        return rec
+    if re.match(r"[-\u2010-\u2015\u2212]\d+(?:\.\d+)?\s*(?:%|percent\b)", query[rec["_end"]:], re.I):
+        return rec  # a quantity range (`3.1-3.5 percent`) is not an identifier tail
+    new = _citation_record(rec["title"], rec["part"], rec["minor"], rec["designators"], rec["_end"], ("incomplete", "unread_hyphen_tail", m.end()),
+                           query, rec["_start"], rec["inherited"])
+    new["diagnostics"]["unread_continuation"] = m.group(0)
+    new["diagnostics"]["unread_tail_kind"] = "hyphen"
+    kind = (rec["inherited"] or {}).get("kind")
+    if kind == "paragraph":
+        new["label"] = f"{new['requested']} after {rec['inherited']['from']}"
+    elif kind == "part" and rec["title"]:
+        req = new["requested"]
+        new["label"] = f"{rec['title']} CFR " + (" ".join(req.split()) if req.lower().startswith("part") else f"Part {req}")
+    elif kind == "section" and rec["title"]:
+        new["label"] = f"{rec['title']} CFR {new['label']}"
+    return new
+
+
 def parse_query_citations(query):
     """Every CFR citation in a query, read once, the same way for every consumer.
 
@@ -319,6 +348,12 @@ def parse_query_citations(query):
         if rng:
             out[-1] = rec = rng
             consumed = rng["_end"]
+        else:
+            tailed = _with_hyphen_tail(query, rec)
+            if tailed is not rec:  # an unread hyphen tail the range reader could not consume
+                out[-1] = tailed
+                consumed = tailed["_end"]
+                continue
         prev, cursor = rec, rec["_end"]
         while True:
             sep = LIST_SEP.match(query, cursor)
@@ -336,6 +371,12 @@ def parse_query_citations(query):
                 if rng:
                     out[-1] = mem = rng
                     cursor = rng["_end"]
+                else:
+                    tailed = _with_hyphen_tail(query, mem)
+                    if tailed is not mem:
+                        out[-1] = tailed
+                        consumed = tailed["_end"]
+                        break  # an unread tail ends the list, as every other unread tail does
             consumed = cursor
             prev = mem
     return out
@@ -391,6 +432,9 @@ CITATION_REASONS = {
     "unread_identifier_continuation": "The citation is followed, with no space, by more identifier text (such as `.1`, `_a` or extra letters) "
                                       "that is not read, so its prefix was not accepted and no record is returned; this is not a determination "
                                       "that the longer identifier is invalid.",
+    "unread_hyphen_tail": "The citation is followed, with no space, by a hyphen and more identifier text (such as `-a` or `-1`) that is not "
+                          "a range this parser can read, so its prefix was not accepted and no record is returned; this is not a "
+                          "determination that the longer identifier is invalid.",
     "unclosed_or_malformed_designator_suffix": "The request ends in an unclosed or malformed designator, so its parent path "
                                                "was not accepted and no record is returned for the cited paragraph.",
     "detached_designator_suffix": "A designator set apart by whitespace follows the citation, which makes the requested path "
