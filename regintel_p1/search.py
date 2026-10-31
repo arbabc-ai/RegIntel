@@ -20,7 +20,9 @@ bank banks institution institutions requirement requirements rule rules regulati
 # head-plus-paragraphs pattern was removed: it stopped at whitespace inside a designator and so accepted an ancestor prefix.
 # An explicit title may be followed by `Part`, by a section sign (`31 CFR \u00a7 3.22`, `31 CFR \u00a7\u00a7 3.22`), or directly by the number;
 # the title stays attached to the citation in every form. A bare section sign alone is a titleless citation.
-CITE_HEAD = re.compile(r"(?:(\d+)\s*CFR\s*(?:Parts?\s*|\u00a7+\s*)?|\u00a7+\s*)(\d+)(?:\.(\d+[A-Za-z]?))?", re.I)
+# `CFR` may be punctuated (`31 C.F.R. \u00a7 3.22`, `31 C. F. R. 3.22`); the title is canonicalized to CFR and the requested span is kept.
+CFR_WORD = r"C\s*\.?\s*F\s*\.?\s*R\s*\.?"
+CITE_HEAD = re.compile(rf"(?:(\d+)\s*{CFR_WORD}\s*(?:Parts?\s*|\u00a7+\s*)?|\u00a7+\s*)(\d+)(?:\.(\d+[A-Za-z]?))?", re.I)
 
 
 LIST_SEP = re.compile(r"(?:\s*[,;]\s*(?:(?:and|or)\s+)?|\s+(?:and|or)\s+)", re.I)

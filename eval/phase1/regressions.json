@@ -1,6 +1,6 @@
 {
- "version": "p1-regress-0.25",
- "task": "S7-P1-EVIDENCE-BOUNDARIES-01 + S7-P1-EVIDENCE-COMPLETENESS-02 + S7-P1-COVERAGE-GUARDS-03 + S7-P1-CITATION-COMPLETENESS-04 + S7-P1-FUTURE-PARAGRAPH-PRECISION-05 + S7-P1-MIXED-SOURCE-COVERAGE-06 + S7-P1-DELTA-PRECISION-07 + S7-P1-INSTRUCTION-BOUNDARY-08 + S7-P1-RESERVED-RANGE-CONSISTENCY-09 + S7-P1-AMENDATORY-LIST-PRECISION-11 + S7-P1-DESIGNATOR-TOKEN-INTEGRITY-12 + S7-P1-QUERY-CITATION-INTEGRITY-13 + S7-P1-SUFFIX-INTEGRITY-14 + S7-P1-SUFFIX-INTEGRITY-14 + S7-P1-SUFFIX-BOUNDARY-15 + S7-P1-APPENDIX-EVIDENCE-16 + S7-P1-TITLELESS-DELTA-17 + S7-P1-QUERY-LIST-COMPLETENESS-18 + S7-P1-QUERY-RANGE-INTEGRITY-19 + S7-P1-CONNECTOR-DESIGNATOR-INTEGRITY-20 + S7-P1-PART-RANGE-INTEGRITY-21 + S7-P1-PART-TO-RANGE-22 + S7-P1-PART-LIST-COMPLETENESS-23 + S7-P1-FOUR-DIGIT-PART-OPERANDS-24 + S7-P1-DELTA-CANDIDATE-TITLE-25 + S7-P1-EXPLICIT-TITLE-SECTION-SIGN-26",
+ "version": "p1-regress-0.26",
+ "task": "S7-P1-EVIDENCE-BOUNDARIES-01 + S7-P1-EVIDENCE-COMPLETENESS-02 + S7-P1-COVERAGE-GUARDS-03 + S7-P1-CITATION-COMPLETENESS-04 + S7-P1-FUTURE-PARAGRAPH-PRECISION-05 + S7-P1-MIXED-SOURCE-COVERAGE-06 + S7-P1-DELTA-PRECISION-07 + S7-P1-INSTRUCTION-BOUNDARY-08 + S7-P1-RESERVED-RANGE-CONSISTENCY-09 + S7-P1-AMENDATORY-LIST-PRECISION-11 + S7-P1-DESIGNATOR-TOKEN-INTEGRITY-12 + S7-P1-QUERY-CITATION-INTEGRITY-13 + S7-P1-SUFFIX-INTEGRITY-14 + S7-P1-SUFFIX-INTEGRITY-14 + S7-P1-SUFFIX-BOUNDARY-15 + S7-P1-APPENDIX-EVIDENCE-16 + S7-P1-TITLELESS-DELTA-17 + S7-P1-QUERY-LIST-COMPLETENESS-18 + S7-P1-QUERY-RANGE-INTEGRITY-19 + S7-P1-CONNECTOR-DESIGNATOR-INTEGRITY-20 + S7-P1-PART-RANGE-INTEGRITY-21 + S7-P1-PART-TO-RANGE-22 + S7-P1-PART-LIST-COMPLETENESS-23 + S7-P1-FOUR-DIGIT-PART-OPERANDS-24 + S7-P1-DELTA-CANDIDATE-TITLE-25 + S7-P1-EXPLICIT-TITLE-SECTION-SIGN-26 + S7-P1-PUNCTUATED-CFR-TITLE-27",
  "note": "Deterministic regression checks over the acquired corpus for amendment-target integrity and retrieval scope filtering. Kept separate from questions.json so the 37-item baseline stays frozen. A pass means the contract holds, not that any rule applies to a bank.",
  "delta": [
   {
@@ -239,7 +239,8 @@
   "v0.22 (PART-LIST-COMPLETENESS-23, F1): part_lists PL01-PL05: '12 CFR Part 3 and 6', 'Part 3, Part 6', 'Parts 3 and 217' and the other singular/plural/semicolon/Oxford/or variants yield one citation per part and resolve, in every scope, part filter, mode and k, exactly like the fully qualified control (the unacquired Part 6 is its own gap and the answer is never evidence_found, also next to CET1); delta reports unsupported_multi_citation with every member and no longer raises on plural lists. Earlier checks unchanged.",
   "v0.23 (FOUR-DIGIT-PART-OPERANDS-24, F1): four_digit_parts FD01-FD07: '31 CFR Parts 1010 and 1020' and '31 CFR Parts 1010, 1020, and 1030' keep every member and resolve like their fully qualified controls (the unacquired Part 1030 is its own gap, also beside CET1), delta reports unsupported_multi_citation with every member; '31 CFR Part 1010 to 1020' and its reversed/through/dash forms are one unsupported_range holding the complete request; years, quantities and prose ('Part 3 to 2026', 'Part 3, 2026', 'Part 3 and 6 banks') stay a plain Part 3. Earlier checks unchanged.",
   "v0.24 (DELTA-CANDIDATE-TITLE-25, F1): candidate_titles CT01-CT03: the unresolved ambiguous-range candidates in delta() are scoped to the resolved CFR title. CT01/CT02 run on a self-contained synthetic corpus with identical reversed 3.9-through-3.4 ranges under Titles 12 and 31 (the acquired corpus has no unresolved range): section endpoint, paragraph and whole-part requests each get only their own title's candidate, interior and unrelated sections get none, an ambiguous titleless request exposes none. CT03 pins on the acquired corpus that titleless and fully qualified requests expose identical (empty) candidates. Earlier checks unchanged.",
-  "v0.25 (EXPLICIT-TITLE-SECTION-SIGN-26, F1): explicit_title_sign ES01-ES05: an explicit title before a section sign ('31 CFR § 1010.100', '12 CFR §§ 252.44', '31 CFR §§ 1010.100, 1020.220') parses, resolves, answers and deltas exactly like the unsigned form with the signed span preserved; a title that lacks the section ('31 CFR § 3.22', 'CET1 31 CFR § 3.22', '12 CFR § 1010.100') keeps an unresolved citation gap and never resolves through another title; signed ranges stay one unsupported_range; genuinely titleless '§ 3.22' is unchanged. Earlier checks unchanged."
+  "v0.25 (EXPLICIT-TITLE-SECTION-SIGN-26, F1): explicit_title_sign ES01-ES05: an explicit title before a section sign ('31 CFR § 1010.100', '12 CFR §§ 252.44', '31 CFR §§ 1010.100, 1020.220') parses, resolves, answers and deltas exactly like the unsigned form with the signed span preserved; a title that lacks the section ('31 CFR § 3.22', 'CET1 31 CFR § 3.22', '12 CFR § 1010.100') keeps an unresolved citation gap and never resolves through another title; signed ranges stay one unsupported_range; genuinely titleless '§ 3.22' is unchanged. Earlier checks unchanged.",
+  "v0.26 (PUNCTUATED-CFR-TITLE-27, F1): punctuated_cfr_title PC01-PC04: 'N C.F.R.' is read exactly like 'N CFR' (signed, unsigned, paragraph, part, list and range): '31 C.F.R. § 1010.100' parses, resolves, answers and deltas like '31 CFR 1010.100' with the punctuated span preserved and the citation canonicalized to CFR; a title that lacks the section ('31 C.F.R. § 3.22', 'CET1 12 C.F.R. § 1010.100') keeps its titled citation gap and never resolves through another title; punctuated ranges stay one unsupported_range. Earlier checks unchanged."
  ],
  "status": [
   {
@@ -1872,6 +1873,68 @@
     "fr:2026-21706"
    ],
    "baseline": true
+  }
+ ],
+ "punctuated_cfr_title": [
+  {
+   "id": "PC01",
+   "kind": "signed_equivalents",
+   "pairs": [
+    [
+     "12 C.F.R. § 3.22",
+     "12 CFR 3.22"
+    ],
+    [
+     "12 C.F.R. 3.22(i)",
+     "12 CFR 3.22(i)"
+    ],
+    [
+     "31 C.F.R. § 1010.100",
+     "31 CFR 1010.100"
+    ],
+    [
+     "12 C. F. R. §§ 252.44",
+     "12 CFR 252.44"
+    ],
+    [
+     "12 c.f.r. Part 3",
+     "12 CFR Part 3"
+    ]
+   ]
+  },
+  {
+   "id": "PC02",
+   "kind": "wrong_title",
+   "requests": [
+    "31 C.F.R. § 3.22",
+    "CET1 31 C.F.R. § 3.22",
+    "12 C.F.R. § 1010.100",
+    "CET1 12 C.F.R. § 1010.100",
+    "31 C.F.R. 3.22(a)"
+   ]
+  },
+  {
+   "id": "PC03",
+   "kind": "signed_equivalents",
+   "pairs": [
+    [
+     "31 C.F.R. §§ 1010.100, 1020.220",
+     "31 CFR 1010.100 and 31 CFR 1020.220"
+    ],
+    [
+     "31 C.F.R. Parts 1010 and 1020",
+     "31 CFR Part 1010 and 31 CFR Part 1020"
+    ]
+   ]
+  },
+  {
+   "id": "PC04",
+   "kind": "unsupported",
+   "requests": [
+    "31 C.F.R. § 1010.100 through § 1020.220",
+    "12 C.F.R. Part 3-6",
+    "CET1 12 C.F.R. §§ 3.1-3.5"
+   ]
   }
  ]
 }

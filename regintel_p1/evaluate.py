@@ -1237,7 +1237,9 @@ def check_explicit_title_sign(index, item):
                 for scope in scopes:
                     for k in (10, 1):
                         x, y = (index.answer(q, mode=mode, scope=scope, k=k) for q in (signed, plain))
-                        if (x["status"], gaps(x)) != (y["status"], gaps(y)) or (mode == "exact" and [r["provision_id"] for r in x["results"]] != [r["provision_id"] for r in y["results"]]):
+                        # hybrid also fuses lexical hits on the word CFR, which `C.F.R.` does not tokenize to: compare gaps and the evidence_found line
+                        if gaps(x) != gaps(y) or (x["status"] == "evidence_found") != (y["status"] == "evidence_found") or (
+                                mode == "exact" and (x["status"], [r["provision_id"] for r in x["results"]]) != (y["status"], [r["provision_id"] for r in y["results"]])):
                             failures.append(f"'{signed}' {mode}/{scope}/k{k}: answer differs from '{plain}'")
             if len(a) == 1 and strip(index.delta(signed)) != strip(index.delta(plain)):
                 failures.append(f"'{signed}': delta differs from '{plain}'")
@@ -1288,7 +1290,8 @@ def run_regressions(index, path):
            "part_lists": [check_query_lists(index, x) for x in spec.get("part_lists", [])],  # same list-completeness contract, for part lists
            "four_digit_parts": [check_four_digit_parts(index, x) for x in spec.get("four_digit_parts", [])],
            "candidate_titles": [check_candidate_titles(index, x) for x in spec.get("candidate_titles", [])],
-           "explicit_title_sign": [check_explicit_title_sign(index, x) for x in spec.get("explicit_title_sign", [])]}
+           "explicit_title_sign": [check_explicit_title_sign(index, x) for x in spec.get("explicit_title_sign", [])],
+           "punctuated_cfr_title": [check_explicit_title_sign(index, x) for x in spec.get("punctuated_cfr_title", [])]}  # same contract, punctuated spelling
     out["passed"] = (all(d["passed"] for d in out["delta"]) and out["relationship_integrity"]["passed"]
                      and all(c["passed"] for c in out["citation_scope"]) and all(x["passed"] for x in out["status"])
                      and all(x["passed"] for x in out["citation_completeness"])
@@ -1310,12 +1313,13 @@ def run_regressions(index, path):
                      and all(x["passed"] for x in out["part_lists"])
                      and all(x["passed"] for x in out["four_digit_parts"])
                      and all(x["passed"] for x in out["candidate_titles"])
-                     and all(x["passed"] for x in out["explicit_title_sign"]))
+                     and all(x["passed"] for x in out["explicit_title_sign"])
+                     and all(x["passed"] for x in out["punctuated_cfr_title"]))
     return out
 
 
 REGRESSION_GROUPS = ("delta", "relationship_integrity", "citation_scope", "status", "citation_completeness",
-                     "mixed_source", "delta_precision", "instruction_boundary", "current_agreement", "amendatory_lists", "designator_integrity", "query_citations", "suffix_integrity", "appendix_evidence", "titleless_delta", "query_lists", "query_ranges", "connector_operands", "part_ranges", "part_to_ranges", "part_lists", "four_digit_parts", "candidate_titles", "explicit_title_sign")
+                     "mixed_source", "delta_precision", "instruction_boundary", "current_agreement", "amendatory_lists", "designator_integrity", "query_citations", "suffix_integrity", "appendix_evidence", "titleless_delta", "query_lists", "query_ranges", "connector_operands", "part_ranges", "part_to_ranges", "part_lists", "four_digit_parts", "candidate_titles", "explicit_title_sign", "punctuated_cfr_title")
 
 
 def overall(report):
@@ -1398,6 +1402,8 @@ def render(report):
         lines.append(f"  {ri['id']} {'PASS' if ri['passed'] else 'FAIL'} relationship integrity violations={ri['violations']} {'; '.join(ri['failures'])}")
         for c in reg["citation_scope"]:
             lines.append(f"  {c['id']} {'PASS' if c['passed'] else 'FAIL'} citation scope '{c['query']}' {'; '.join(c['failures'])}")
+        for x in reg.get("punctuated_cfr_title", []):
+            lines.append(f"  {x['id']} {'PASS' if x['passed'] else 'FAIL'} punctuated CFR title [{x['kind']}] {'; '.join(x['failures'])}")
         for x in reg.get("explicit_title_sign", []):
             lines.append(f"  {x['id']} {'PASS' if x['passed'] else 'FAIL'} explicit title sign [{x['kind']}] {'; '.join(x['failures'])}")
         for x in reg.get("candidate_titles", []):
