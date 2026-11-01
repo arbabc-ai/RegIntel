@@ -172,6 +172,12 @@ PARA_ACTION = re.compile(
 # "In paragraph (c)(2), removing ..." names a path only as a clause-initial capital "In"; "provided in paragraph (e)(3)"
 # is a cross-reference and never evidence.
 PARA_PART = re.compile(r"\([A-Za-z0-9]+\)")
+# "In § 265.5, in paragraph (a)(2)(i), remove ..." is an explicit location clause: one section, then a lowercase clause-internal
+# "in paragraph PATH," that must be followed by an action verb. It names PATH only in this exact form; a bare lowercase "in paragraph"
+# anywhere else ("provided in paragraph (e)(3)", "as described in paragraph (a)") stays a cross-reference, and "In §§ A and B, in
+# paragraph (a)" (several sections) is not read here because one section cannot be attributed.
+PARA_LOCATION = re.compile(
+    rf"(?<![A-Za-z])(?-i:In)\s+\u00a7\s*{SEC_ITEM}\s*,\s+(?-i:in)\s+paragraphs?\s+{PARA_LIST}(?=\s*,\s*{VERB}\b)", re.I)
 
 
 def _list_members(body):
@@ -310,7 +316,8 @@ def named_paragraph_paths(text):
     """
     stripped = parsing_view(QUOTED.sub(" \u2039q\u203a ", text))
     paths = []
-    for m in PARA_ACTION.finditer(stripped):
+    matches = sorted([*PARA_ACTION.finditer(stripped), *PARA_LOCATION.finditer(stripped)], key=lambda m: m.start())
+    for m in matches:
         previous = None  # list of designators of the previous path; "unknown" once shorthand could not be settled
         for token in re.finditer(PARA_TOKEN, m.group(1)):
             if incomplete_after(stripped, m.start(1) + token.end()):
