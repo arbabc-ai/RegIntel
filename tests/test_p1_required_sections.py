@@ -9,7 +9,7 @@ from pathlib import Path
 
 from regintel_p1 import build, evaluate, search
 from test_p1 import asset
-from test_p1_index_source_coverage import CAPITAL, ROOT, part_html
+from test_p1_index_source_coverage import CAPITAL, ROOT, cbl_rule, part_html
 
 CBL = "community bank leverage ratio"
 MODES = ("hybrid", "bm25", "topic")
@@ -32,6 +32,7 @@ def build_sections(tmp, drop=(), name="s"):
         docs[f"ecfr:12:{part}"] = {"source_class": "regulation", "publisher": "eCFR", "citation": f"12 CFR Part {part}", "title": "Capital",
                                    "publisher_issue_date": "2026-10-23", "publisher_up_to_date_as_of": "2026-10-28",
                                    "asset": asset(root, f"e{part}.html", html.encode())}
+    docs["fr:2026-08298"] = cbl_rule(root)
     (root / "manifest.json").write_text(json.dumps({"documents": docs, "failures": {}, "updated_at": "x"}))
     db = str(Path(tmp) / f"{name}.sqlite")
     conn, counts = build.build(root, db, "2026-10-29", log=lambda *_: None)

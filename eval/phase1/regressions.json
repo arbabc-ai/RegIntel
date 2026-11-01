@@ -1,6 +1,6 @@
 {
- "version": "p1-regress-0.31",
- "task": "S7-P1-EVIDENCE-BOUNDARIES-01 + S7-P1-EVIDENCE-COMPLETENESS-02 + S7-P1-COVERAGE-GUARDS-03 + S7-P1-CITATION-COMPLETENESS-04 + S7-P1-FUTURE-PARAGRAPH-PRECISION-05 + S7-P1-MIXED-SOURCE-COVERAGE-06 + S7-P1-DELTA-PRECISION-07 + S7-P1-INSTRUCTION-BOUNDARY-08 + S7-P1-RESERVED-RANGE-CONSISTENCY-09 + S7-P1-AMENDATORY-LIST-PRECISION-11 + S7-P1-DESIGNATOR-TOKEN-INTEGRITY-12 + S7-P1-QUERY-CITATION-INTEGRITY-13 + S7-P1-SUFFIX-INTEGRITY-14 + S7-P1-SUFFIX-INTEGRITY-14 + S7-P1-SUFFIX-BOUNDARY-15 + S7-P1-APPENDIX-EVIDENCE-16 + S7-P1-TITLELESS-DELTA-17 + S7-P1-QUERY-LIST-COMPLETENESS-18 + S7-P1-QUERY-RANGE-INTEGRITY-19 + S7-P1-CONNECTOR-DESIGNATOR-INTEGRITY-20 + S7-P1-PART-RANGE-INTEGRITY-21 + S7-P1-PART-TO-RANGE-22 + S7-P1-PART-LIST-COMPLETENESS-23 + S7-P1-FOUR-DIGIT-PART-OPERANDS-24 + S7-P1-DELTA-CANDIDATE-TITLE-25 + S7-P1-EXPLICIT-TITLE-SECTION-SIGN-26 + S7-P1-PUNCTUATED-CFR-TITLE-27 + S7-P1-CITATION-TOKEN-INTEGRITY-28 + S7-P1-HYPHEN-TAIL-INTEGRITY-29 + S7-P1-MALFORMED-LIST-RECOVERY-30 + S7-P1-INDEX-SOURCE-COVERAGE-31 + S7-P1-REQUIRED-SECTIONS-32",
+ "version": "p1-regress-0.32",
+ "task": "S7-P1-EVIDENCE-BOUNDARIES-01 + S7-P1-EVIDENCE-COMPLETENESS-02 + S7-P1-COVERAGE-GUARDS-03 + S7-P1-CITATION-COMPLETENESS-04 + S7-P1-FUTURE-PARAGRAPH-PRECISION-05 + S7-P1-MIXED-SOURCE-COVERAGE-06 + S7-P1-DELTA-PRECISION-07 + S7-P1-INSTRUCTION-BOUNDARY-08 + S7-P1-RESERVED-RANGE-CONSISTENCY-09 + S7-P1-AMENDATORY-LIST-PRECISION-11 + S7-P1-DESIGNATOR-TOKEN-INTEGRITY-12 + S7-P1-QUERY-CITATION-INTEGRITY-13 + S7-P1-SUFFIX-INTEGRITY-14 + S7-P1-SUFFIX-INTEGRITY-14 + S7-P1-SUFFIX-BOUNDARY-15 + S7-P1-APPENDIX-EVIDENCE-16 + S7-P1-TITLELESS-DELTA-17 + S7-P1-QUERY-LIST-COMPLETENESS-18 + S7-P1-QUERY-RANGE-INTEGRITY-19 + S7-P1-CONNECTOR-DESIGNATOR-INTEGRITY-20 + S7-P1-PART-RANGE-INTEGRITY-21 + S7-P1-PART-TO-RANGE-22 + S7-P1-PART-LIST-COMPLETENESS-23 + S7-P1-FOUR-DIGIT-PART-OPERANDS-24 + S7-P1-DELTA-CANDIDATE-TITLE-25 + S7-P1-EXPLICIT-TITLE-SECTION-SIGN-26 + S7-P1-PUNCTUATED-CFR-TITLE-27 + S7-P1-CITATION-TOKEN-INTEGRITY-28 + S7-P1-HYPHEN-TAIL-INTEGRITY-29 + S7-P1-MALFORMED-LIST-RECOVERY-30 + S7-P1-INDEX-SOURCE-COVERAGE-31 + S7-P1-REQUIRED-SECTIONS-32 + S7-P1-RULEMAKING-SOURCE-AVAILABILITY-33",
  "note": "Deterministic regression checks over the acquired corpus for amendment-target integrity and retrieval scope filtering. Kept separate from questions.json so the 37-item baseline stays frozen. A pass means the contract holds, not that any rule applies to a bank.",
  "delta": [
   {
@@ -2283,6 +2283,51 @@
     "missing_3_12": [
      "3.12"
     ]
+   },
+   "queries": [
+    "minimum CET1 ratio",
+    "capital conservation buffer"
+   ]
+  }
+ ],
+ "rulemaking_sources": [
+  {
+   "id": "RM01",
+   "kind": "corpus",
+   "queries": [
+    "community bank leverage ratio",
+    "CBLR qualifying community banking organization"
+   ]
+  },
+  {
+   "id": "RM02",
+   "kind": "degraded",
+   "variants": {
+    "complete": null,
+    "omitted": "missing_from_manifest",
+    "rejected": "skipped_hash_or_size_mismatch"
+   },
+   "queries": [
+    "community bank leverage ratio"
+   ]
+  },
+  {
+   "id": "RM03",
+   "kind": "degraded",
+   "variants": {
+    "unsupported": "skipped_unsupported_format",
+    "empty": "empty_no_usable_provisions"
+   },
+   "queries": [
+    "community bank leverage ratio",
+    "CBLR grace period"
+   ]
+  },
+  {
+   "id": "RM04",
+   "kind": "isolation",
+   "variants": {
+    "omitted": null
    },
    "queries": [
     "minimum CET1 ratio",

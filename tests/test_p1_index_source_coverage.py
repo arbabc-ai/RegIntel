@@ -34,6 +34,14 @@ def part_html(part):
 FR_217 = fr("RULE", "1. Amend &#xA7; 217.10 by revising paragraph (a) to read as follows:", [("217.10", ["(a) Revised CET1 minimum text."])], part="217")
 
 
+def cbl_rule(root, key="fr:2026-08298"):
+    """The CBLR final rule that the cbl_ratio coverage note names (declared in topic_dependencies.json `required_rulemaking_sources`)."""
+    xml = fr("RULE", "1. Amend &#xA7; 217.12 by revising paragraph (a).", [("217.12", ["(a) Revised community bank leverage ratio text."])], part="217")
+    return {"source_class": "rulemaking_candidate", "publisher": "Federal Register", "publication_date": "2026-05-01", "document_type": "Rule",
+            "effective_on": "2026-07-01", "action": "Final rule.", "document_number": key.split(":")[1], "title": "Community bank leverage ratio",
+            "asset": asset(root, "cbl_rule.xml", xml)}
+
+
 def build_variant(tmp, variant, name="v"):
     """variant: complete | omitted (ecfr:12:3 absent from the manifest) | rejected (ecfr:12:3 bytes do not match) | empty (ecfr:12:3 parses to nothing)."""
     root = Path(tmp) / f"corpus-{name}"
@@ -51,6 +59,7 @@ def build_variant(tmp, variant, name="v"):
                      "publisher_issue_date": "2026-10-23", "publisher_up_to_date_as_of": "2026-10-28", "asset": a}
     meta = {"source_class": "rulemaking_candidate", "publisher": "Federal Register", "publication_date": "2026-10-01", "document_type": "Rule",
             "effective_on": "2027-02-01", "action": "Final rule."}
+    docs["fr:2026-08298"] = cbl_rule(root)
     docs["fr:2026-98001"] = {**meta, "document_number": "2026-98001", "title": "CET1 revision", "asset": asset(root, "f.xml", FR_217)}
     (root / "manifest.json").write_text(json.dumps({"documents": docs, "failures": {}, "updated_at": "x"}))
     db = str(Path(tmp) / f"{name}.sqlite")

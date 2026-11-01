@@ -1,6 +1,6 @@
 {
- "version": "p1-topic-dependencies-0.2",
- "note": "Finite eCFR baseline documents each topic declared `acquired` depends on, read from that topic's coverage_note in topics.json. This file is separate from the keyword assignment rules (`spec`) and from the declared acquisition coverage. The build reconciles it against documents that were verified, parsed and indexed with usable provisions; a missing, skipped or empty dependency is persisted and reported as a coverage gap. This establishes source availability only, not complete provision coverage, applicability or legal validity. `required_sections` (optional, per topic) lists the sections the coverage note names within those documents; an indexed document that lacks a named section keeps a `missing_required_section` gap (doc_key `<document>#<section>`). Section presence is checked by section number only; it does not establish the section's text is complete, applicable or in force.",
+ "version": "p1-topic-dependencies-0.3",
+ "note": "Finite eCFR baseline documents each topic declared `acquired` depends on, read from that topic's coverage_note in topics.json. This file is separate from the keyword assignment rules (`spec`) and from the declared acquisition coverage. The build reconciles it against documents that were verified, parsed and indexed with usable provisions; a missing, skipped or empty dependency is persisted and reported as a coverage gap. This establishes source availability only, not complete provision coverage, applicability or legal validity. `required_sections` (optional, per topic) lists the sections the coverage note names within those documents; an indexed document that lacks a named section keeps a `missing_required_section` gap (doc_key `<document>#<section>`). Section presence is checked by section number only; it does not establish the section's text is complete, applicable or in force. `required_rulemaking_sources` (separate from the eCFR baseline) lists the Federal Register documents a topic's coverage note names as acquired (`fr:<document number>`); they are reconciled the same way against documents that were verified, parsed and indexed with usable provisions, and a missing, skipped or empty one is reported as a rulemaking-source gap. This establishes that the named document is available in the index, not that rulemaking coverage is complete, nor its operative effect.",
  "required_baseline_sources": {
   "cet1_capital": {
    "sources": [
@@ -67,6 +67,14 @@
     "ecfr:12:252"
    ],
    "declared_from_coverage_note": "12 CFR 252 acquired; Category determinations depend on bank facts not held here."
+  }
+ },
+ "required_rulemaking_sources": {
+  "cbl_ratio": {
+   "sources": [
+    "fr:2026-08298"
+   ],
+   "declared_from_coverage_note": "12 CFR 3.12, 217.12, 324.12 acquired; Federal Register final rule 2026-08298 acquired."
   }
  }
 }

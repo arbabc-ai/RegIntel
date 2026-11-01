@@ -521,8 +521,23 @@ class Index:
             return {}
         gaps = defaultdict(list)
         for r in rows:
-            gaps[r["topic_id"]].append({"doc_key": r["doc_key"], "status": r["status"], "reason": r["reason"]})
+            gaps[r["topic_id"]].append({"doc_key": r["doc_key"], "status": r["status"], "reason": r["reason"],
+                                        "source_kind": "rulemaking" if r["doc_key"].startswith("fr:") else "ecfr_baseline"})
         return dict(gaps)
+
+    @staticmethod
+    def _source_gap_note(missing):
+        """Names what is unavailable: an eCFR baseline source or section, a Federal Register rulemaking source, or both."""
+        parts = []
+        for kind, label in (("ecfr_baseline", "A required eCFR baseline source or section"),
+                            ("rulemaking", "A required Federal Register rulemaking source named in the coverage note")):
+            items = [m for m in missing if m["source_kind"] == kind]
+            if items:
+                parts.append(f"{label} for this topic is not available in this index (" +
+                             "; ".join(f"{m['doc_key']}: {m['status']}" for m in items) + ").")
+        return (" ".join(parts) + " The topic's declared acquisition coverage does not hold for this build, and other documents' hits "
+                "do not stand in for it. This reports source availability only, not provision coverage, complete rulemaking coverage, "
+                "operative effect or applicability.")
 
     # ---------- source requests: jurisdictions and accounting intent, independent of topic matches ----------
     def _load_source_requests(self):
@@ -1061,10 +1076,7 @@ class Index:
             if missing:
                 unavailable.append(t)
                 gaps.append({"topic": t["id"], "coverage": "source_unavailable", "unavailable_sources": missing,
-                             "note": "A required eCFR baseline source or section for this topic is not available in this index (" +
-                                     "; ".join(f"{m['doc_key']}: {m['status']}" for m in missing) + "). The topic's declared "
-                                     "acquisition coverage does not hold for this build, and other documents' hits do not stand in "
-                                     "for it. This reports source availability only, not provision coverage or applicability."})
+                             "note": self._source_gap_note(missing)})
         # A citation-only query is self-describing: it resolves to named provisions in the requested scope and part
         # filter, so it needs no topic. Any other query that matches no catalog topic has unassessed source
         # coverage, and a lexical hit alone does not establish that the sources it needs are acquired.

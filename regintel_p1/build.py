@@ -345,12 +345,14 @@ def record_source_status(conn, source_status, counts):
 
     A dependency is available only if its document was verified against the manifest, parsed and indexed with usable
     provisions. Missing, skipped and empty dependencies are persisted per topic with the reason, so a degraded build
-    cannot keep an unsupported coverage claim. Sections the coverage note names (`required_sections`) must also be present as indexed
+    cannot keep an unsupported coverage claim. Federal Register documents the coverage note names (`required_rulemaking_sources`) are reconciled the same way. Sections the coverage note names (`required_sections`) must also be present as indexed
     sections of an indexed document. This is source availability, not provision coverage or applicability.
     """
-    declared = json.loads(DEPENDENCIES_PATH.read_text())["required_baseline_sources"]
+    dependencies = json.loads(DEPENDENCIES_PATH.read_text())
+    declared = dependencies["required_baseline_sources"]
+    rulemaking = dependencies.get("required_rulemaking_sources") or {}
     catalog = {t["id"]: t for t in json.loads(TOPICS_PATH.read_text())["topics"]}
-    unknown = sorted(set(declared) - set(catalog))
+    unknown = sorted((set(declared) | set(rulemaking)) - set(catalog))
     if unknown:
         raise ValueError(f"topic_dependencies.json names unknown topics: {unknown}")
     gaps = 0
@@ -378,6 +380,19 @@ def record_source_status(conn, source_status, counts):
                                  (topic_id, f"{key}#{section}", "missing_required_section",
                                   f"the indexed document has no section {section}, which the topic's coverage note names"))
                     gaps += 1
+    # Federal Register documents the coverage note names as acquired: a separate declaration, reconciled identically.
+    for topic_id, dep in sorted(rulemaking.items()):
+        if catalog[topic_id]["coverage"] != "acquired":
+            continue
+        for key in dep["sources"]:
+            if not key.startswith("fr:"):
+                raise ValueError(f"topic_dependencies.json: {topic_id} declares rulemaking source {key}, which is not a Federal Register document key")
+            if key not in source_status:
+                source_status[key] = (None, "missing_from_manifest", "the document is not in the manifest", 0, 0)
+            status, reason = source_status[key][1:3]
+            if status != "indexed":
+                conn.execute("INSERT INTO topic_source_gap VALUES (?,?,?,?)", (topic_id, key, status, reason))
+                gaps += 1
     for key, (publisher, status, reason, provisions, usable) in sorted(source_status.items()):
         conn.execute("INSERT INTO source_status VALUES (?,?,?,?,?,?)", (key, publisher, status, reason, provisions, usable))
     counts["unavailable_topic_sources"] = gaps

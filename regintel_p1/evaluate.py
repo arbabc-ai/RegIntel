@@ -1353,7 +1353,7 @@ def check_list_recovery(index, item):
     return {"id": item["id"], "kind": "list_recovery", "passed": not failures, "failures": failures[:10]}
 
 
-def _synthetic_source_index(variant, as_of, drop=()):
+def _synthetic_source_index(variant, as_of, drop=(), rule="complete"):
     """A small self-contained eCFR baseline (12 CFR 3, 217, 324, 252, each with a CET1 minimum) with 12 CFR 3 omitted from the
     manifest (`omitted`), rejected by hash (`rejected`) or parsing to nothing (`empty`), or complete (`complete`)."""
     import hashlib
@@ -1382,6 +1382,19 @@ def _synthetic_source_index(variant, as_of, drop=()):
         docs[f"ecfr:12:{part}"] = {"source_class": "regulation", "publisher": "eCFR", "citation": f"12 CFR Part {part}", "title": "Capital",
                                    "publisher_issue_date": "2026-10-23", "publisher_up_to_date_as_of": "2026-10-28",
                                    "asset": {"path": f"raw/e{part}.html", "sha256": sha, "bytes": len(data), "retrieved_at": "2026-10-29T00:00:00+00:00"}}
+    # The CBLR final rule the cbl_ratio coverage note names (`rule`: complete | omitted | rejected | empty | unsupported).
+    if rule != "omitted":
+        xml = ("<RULE></RULE>" if rule == "empty" else
+               '<RULE><PREAMB><CFR>12 CFR Part 217</CFR></PREAMB><SUPLINF><REGTEXT TITLE="12" PART="217"><AMDPAR>1. Amend &#xA7; 217.12 by '
+               'revising paragraph (a).</AMDPAR><SECTION><SECTNO>&#xA7; 217.12</SECTNO><SUBJECT>Community bank leverage ratio framework.</SUBJECT>'
+               '<P>(a) Revised community bank leverage ratio text.</P></SECTION></REGTEXT></SUPLINF></RULE>').encode()
+        name = "r.pdf" if rule == "unsupported" else "r.xml"
+        (root / "raw" / name).write_bytes(xml)
+        sha = hashlib.sha256(b"other bytes" if rule == "rejected" else xml).hexdigest()
+        docs["fr:2026-08298"] = {"source_class": "rulemaking_candidate", "publisher": "Federal Register", "document_number": "2026-08298",
+                                 "title": "Community bank leverage ratio", "document_type": "Rule", "publication_date": "2026-05-01",
+                                 "effective_on": "2026-07-01", "action": "Final rule.",
+                                 "asset": {"path": f"raw/{name}", "sha256": sha, "bytes": len(xml), "retrieved_at": "2026-10-29T00:00:00+00:00"}}
     (root / "manifest.json").write_text(json.dumps({"documents": docs, "failures": {}, "updated_at": "x"}))
     conn, _ = build.build(root, str(Path(tmp.name) / "t.sqlite"), as_of, log=lambda *_: None)
     conn.close()
@@ -1494,6 +1507,62 @@ def check_required_sections(index, item):
     return {"id": item["id"], "kind": kind, "passed": not failures, "failures": failures[:10]}
 
 
+def check_rulemaking_sources(index, item):
+    """Guard for the Federal Register rulemaking sources a topic's coverage note names (topic_dependencies.json
+    `required_rulemaking_sources`, e.g. cbl_ratio: fr:2026-08298), declared separately from the eCFR baseline. `corpus`: each declared
+    document is an indexed source with usable provisions and no persisted rulemaking gap. `degraded`: on small self-contained builds where
+    the rule is omitted, hash-rejected, unsupported-format or parses to nothing, a matched CBLR query reports the unavailable rulemaking
+    source (kind `rulemaking`, with its persisted status) and is never evidence_found (partial_evidence when results remain, otherwise
+    missing_evidence), across modes, scopes, representative part filters and k=1; a complete build stays evidence_found. `isolation`: other
+    topics and exact citations to surviving provisions are unchanged. Availability only: not complete rulemaking coverage or operative effect."""
+    failures, kind = [], item["kind"]
+    gaps = lambda out: [g for g in out["coverage_gaps"] if g.get("coverage") == "source_unavailable"]
+    if kind == "corpus":
+        declared = json.loads((Path(__file__).with_name("topic_dependencies.json")).read_text()).get("required_rulemaking_sources") or {}
+        status = {r[0]: (r[1], r[2]) for r in index.conn.execute("SELECT doc_key, status, usable_provisions FROM source_status")}
+        for topic, dep in declared.items():
+            for key in dep["sources"]:
+                st = status.get(key)
+                if not st or st[0] != "indexed" or not st[1]:
+                    failures.append(f"{topic}: rulemaking source {key} is {st}")
+        if any(m["source_kind"] == "rulemaking" for ms in index.source_gaps.values() for m in ms):
+            failures.append("persisted rulemaking-source gaps")
+        for q in item["queries"]:
+            for mode in ("hybrid", "bm25"):
+                out = index.answer(q, mode=mode, scope="both", k=10)
+                if gaps(out) or out["status"] != "evidence_found":
+                    failures.append(f"'{q}' {mode}: {out['status']} with source gaps {len(gaps(out))}")
+    elif kind in ("degraded", "isolation"):
+        for variant, expect_status in item["variants"].items():
+            tmp, idx = _synthetic_source_index("complete", index.as_of, (), variant)
+            try:
+                for q in item["queries"]:
+                    for mode in ("hybrid", "bm25", "topic"):
+                        for scope in ("current", "future", "both"):
+                            for parts in (None, ["12:3"], ["12:217"]):
+                                out = idx.answer(q, mode=mode, scope=scope, parts=parts, k=1)
+                                tag = f"{variant} '{q}' {mode}/{scope}/{parts or 'nofilter'}/k1"
+                                found = [m for g in gaps(out) for m in g["unavailable_sources"]]
+                                if kind == "isolation" or variant == "complete":
+                                    if found or (out["results"] and out["status"] != "evidence_found" and scope != "future"):
+                                        failures.append(f"{tag}: gained a gap or lost evidence_found")
+                                    continue
+                                srcs = {(m["doc_key"], m["source_kind"], m["status"]) for m in found}
+                                if srcs != {("fr:2026-08298", "rulemaking", expect_status)} or out["status"] != ("partial_evidence" if out["results"] else "missing_evidence"):
+                                    failures.append(f"{tag}: {out['status']} with unavailable sources {sorted(srcs)}")
+                if kind == "degraded" and variant != "complete":
+                    st = idx.conn.execute("SELECT status FROM source_status WHERE doc_key='fr:2026-08298'").fetchone()
+                    if not st or st[0] != expect_status:
+                        failures.append(f"{variant}: persisted status {st and st[0]} != {expect_status}")
+                cit = idx.answer("12 CFR 217.10(a)", mode="exact", scope="current", k=1)
+                if cit["status"] != "evidence_found" or not cit["citations"][0]["resolved"]:
+                    failures.append(f"{variant}: exact citation precision changed")
+                idx.conn.close()
+            finally:
+                tmp.cleanup()
+    return {"id": item["id"], "kind": kind, "passed": not failures, "failures": failures[:10]}
+
+
 def run_regressions(index, path):
     spec = json.loads(Path(path).read_text())
     out = {"version": spec["version"], "task": spec["task"],
@@ -1526,7 +1595,8 @@ def run_regressions(index, path):
            "hyphen_tails": [check_citation_tokens(index, x) for x in spec.get("hyphen_tails", [])],  # same contract, reason unread_hyphen_tail
            "list_recovery": [check_list_recovery(index, x) for x in spec.get("list_recovery", [])],
            "source_coverage": [check_source_coverage(index, x) for x in spec.get("source_coverage", [])],
-           "required_sections": [check_required_sections(index, x) for x in spec.get("required_sections", [])]}
+           "required_sections": [check_required_sections(index, x) for x in spec.get("required_sections", [])],
+           "rulemaking_sources": [check_rulemaking_sources(index, x) for x in spec.get("rulemaking_sources", [])]}
     out["passed"] = (all(d["passed"] for d in out["delta"]) and out["relationship_integrity"]["passed"]
                      and all(c["passed"] for c in out["citation_scope"]) and all(x["passed"] for x in out["status"])
                      and all(x["passed"] for x in out["citation_completeness"])
@@ -1554,12 +1624,13 @@ def run_regressions(index, path):
                      and all(x["passed"] for x in out["hyphen_tails"])
                      and all(x["passed"] for x in out["list_recovery"])
                      and all(x["passed"] for x in out["source_coverage"])
-                     and all(x["passed"] for x in out["required_sections"]))
+                     and all(x["passed"] for x in out["required_sections"])
+                     and all(x["passed"] for x in out["rulemaking_sources"]))
     return out
 
 
 REGRESSION_GROUPS = ("delta", "relationship_integrity", "citation_scope", "status", "citation_completeness",
-                     "mixed_source", "delta_precision", "instruction_boundary", "current_agreement", "amendatory_lists", "designator_integrity", "query_citations", "suffix_integrity", "appendix_evidence", "titleless_delta", "query_lists", "query_ranges", "connector_operands", "part_ranges", "part_to_ranges", "part_lists", "four_digit_parts", "candidate_titles", "explicit_title_sign", "punctuated_cfr_title", "citation_tokens", "hyphen_tails", "list_recovery", "source_coverage", "required_sections")
+                     "mixed_source", "delta_precision", "instruction_boundary", "current_agreement", "amendatory_lists", "designator_integrity", "query_citations", "suffix_integrity", "appendix_evidence", "titleless_delta", "query_lists", "query_ranges", "connector_operands", "part_ranges", "part_to_ranges", "part_lists", "four_digit_parts", "candidate_titles", "explicit_title_sign", "punctuated_cfr_title", "citation_tokens", "hyphen_tails", "list_recovery", "source_coverage", "required_sections", "rulemaking_sources")
 
 
 def overall(report):
@@ -1642,6 +1713,8 @@ def render(report):
         lines.append(f"  {ri['id']} {'PASS' if ri['passed'] else 'FAIL'} relationship integrity violations={ri['violations']} {'; '.join(ri['failures'])}")
         for c in reg["citation_scope"]:
             lines.append(f"  {c['id']} {'PASS' if c['passed'] else 'FAIL'} citation scope '{c['query']}' {'; '.join(c['failures'])}")
+        for x in reg.get("rulemaking_sources", []):
+            lines.append(f"  {x['id']} {'PASS' if x['passed'] else 'FAIL'} rulemaking sources [{x['kind']}] {'; '.join(x['failures'])}")
         for x in reg.get("required_sections", []):
             lines.append(f"  {x['id']} {'PASS' if x['passed'] else 'FAIL'} required sections [{x['kind']}] {'; '.join(x['failures'])}")
         for x in reg.get("source_coverage", []):
