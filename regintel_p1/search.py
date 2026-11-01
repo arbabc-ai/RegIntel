@@ -508,8 +508,17 @@ class Index:
             t["synonyms"] = json.loads(t["synonyms"] or "[]")
         self._rulemaking = {r["doc_key"]: dict(r) for r in self.conn.execute("SELECT * FROM rulemaking")}
         self._load_source_requests()
-        self.source_gaps = self._load_source_gaps()
+        persisted = self._load_source_gaps()
         self.dependency_verification = self._verify_dependencies()
+        verified = self.dependency_verification["status"] == "verified"
+        # Persisted dependency rows are confirmed source gaps only when this index's dependency check is verified. Otherwise they are kept
+        # as explicitly unverified observations (with the verification provenance recorded in the index) and never become source_unavailable.
+        self.source_gaps = persisted if verified else {}
+        self.unverified_source_observations = {} if verified else {
+            topic: [{**row, "confirmed": False, "status_of_observation": "unverified",
+                     "recorded_verification": self.dependency_verification["recorded"],
+                     "unverified_reason": self.dependency_verification["reason"]} for row in rows]
+            for topic, rows in persisted.items()}
 
     def _verify_dependencies(self):
         """Whether the persisted dependency tables were produced by the current dependency-check contract on the current inputs.
@@ -1118,9 +1127,12 @@ class Index:
                 if t["coverage"] == "acquired":
                     unverified.append(t)
                     gaps.append({"topic": t["id"], "coverage": "dependencies_unverified", "verification": self.dependency_verification,
+                                 "unverified_source_observations": self.unverified_source_observations.get(t["id"], []),
                                  "note": "This index has no verified dependency check (" + self.dependency_verification["reason"] + "), so whether the "
                                          "sources this acquired topic depends on are present is unknown, not confirmed missing. Build a fresh, "
-                                         "separately named index to establish verification. This reports verification status only, not "
+                                         "separately named index to establish verification. " +
+                                         ("Gap rows persisted in this index are kept only as unverified observations. " if self.unverified_source_observations.get(t["id"]) else "") +
+                                         "This reports verification status only, not "
                                          "provision coverage, rulemaking coverage, operative effect or applicability."})
         # A citation-only query is self-describing: it resolves to named provisions in the requested scope and part
         # filter, so it needs no topic. Any other query that matches no catalog topic has unassessed source
@@ -1171,7 +1183,9 @@ class Index:
             "source_requests": sources,
             "index": {"manifest_sha256": self.meta.get("manifest_sha256"), "built_at": self.meta.get("built_at"),
                       "unavailable_topic_sources": {t["id"]: self.source_gaps[t["id"]] for t in unavailable},
-                      "dependency_verification": self.dependency_verification},
+                      "dependency_verification": self.dependency_verification,
+                      "unverified_topic_source_observations": {t["id"]: self.unverified_source_observations[t["id"]] for t in unverified
+                                                               if t["id"] in self.unverified_source_observations}},
         }
 
     # ---------- current-to-future ----------

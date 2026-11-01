@@ -230,7 +230,7 @@ class EvaluatorGroupTests(unittest.TestCase):
     def test_group_is_registered_in_the_aggregate_and_fails_when_the_diagnostic_is_hidden(self):
         self.assertIn("dependency_verification", evaluate.REGRESSION_GROUPS)
         reg = json.loads((REPO / "eval/phase1/regressions.json").read_text())
-        self.assertEqual([x["id"] for x in reg["dependency_verification"]], ["DV01", "DV02", "DV03", "DV04"])
+        self.assertEqual([x["id"] for x in reg["dependency_verification"]], ["DV01", "DV02", "DV03", "DV04", "DV05"])
         with tempfile.TemporaryDirectory() as tmp:
             ix = search.Index(build_index(tmp, "e"))
             for x in reg["dependency_verification"]:

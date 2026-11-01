@@ -1576,6 +1576,10 @@ def _tamper_index(tmp, as_of, variant):
     elif variant == "parent_era_p1_0_7":
         conn.execute("DELETE FROM index_meta WHERE key IN (?,?,?)", keys)
         conn.execute("UPDATE index_meta SET value='p1-0.7' WHERE key='schema_version'")
+    elif variant == "absent_source_status":  # the persisted gap rows remain; the status table is gone
+        conn.executescript("DROP TABLE source_status;")
+    elif variant == "missing_metadata":
+        conn.execute("DELETE FROM index_meta WHERE key IN (?,?,?)", keys)
     elif variant == "incomplete_metadata":
         conn.execute("DELETE FROM index_meta WHERE key='topics_sha256'")
     elif variant == "obsolete_contract":
@@ -1665,6 +1669,50 @@ def check_dependency_verification(index, item):
             finally:
                 idx.conn.close()
                 tmp.cleanup()
+    elif kind == "unverified_persisted":
+        import hashlib
+        for src_name, (ecfr_variant, drop, rule) in item["sources"].items():
+            for tamper, reason in item["tampers"].items():
+                tmp, base = _synthetic_source_index(ecfr_variant, index.as_of, tuple(drop), rule)
+                confirmed = bool(base.source_gaps) and base.dependency_verification["status"] == "verified"
+                base.conn.close()
+                if not confirmed:
+                    failures.append(f"{src_name}: the verified degraded build has no persisted gap rows to test")
+                idx = _tamper_index(tmp, index.as_of, tamper)
+                dbfile = Path(tmp.name) / "t.sqlite"
+                before = hashlib.sha256(dbfile.read_bytes()).hexdigest()
+                try:
+                    v = idx.dependency_verification
+                    if v["status"] != "unverified" or v["reason"] != reason:
+                        failures.append(f"{src_name}/{tamper}: verification {v['status']}/{v['reason']}, expected unverified/{reason}")
+                    if not idx.unverified_source_observations:
+                        failures.append(f"{src_name}/{tamper}: persisted gap rows were not kept as unverified observations")
+                    for q in item["queries"]:
+                        for mode in ("hybrid", "bm25", "topic"):
+                            for scope in ("current", "future", "both"):
+                                for parts in (None, ["12:3"], ["12:217"]):
+                                    out = idx.answer(q, mode=mode, scope=scope, parts=parts, k=1)
+                                    tag = f"{src_name}/{tamper} '{q}' {mode}/{scope}/{parts or 'nofilter'}/k1"
+                                    if unavail(out) or out["index"]["unavailable_topic_sources"]:
+                                        failures.append(f"{tag}: a persisted row was promoted to a confirmed source gap")
+                                    got = unver(out)
+                                    if not got:
+                                        failures.append(f"{tag}: no unverified-dependencies diagnostic")
+                                    obs = [o for g in got for o in g["unverified_source_observations"]]
+                                    if not obs or any(o["confirmed"] or o["unverified_reason"] != reason for o in obs):
+                                        failures.append(f"{tag}: unverified observations missing, confirmed, or without verification provenance")
+                                    if out["status"] != ("partial_evidence" if out["results"] else "missing_evidence"):
+                                        failures.append(f"{tag}: status {out['status']}")
+                    cit = idx.answer("12 CFR 217.10(a)", mode="exact", scope="current", k=1)
+                    if cit["status"] != "evidence_found" or not cit["citations"][0]["resolved"] or unver(cit) or unavail(cit):
+                        failures.append(f"{src_name}/{tamper}: citation-only resolution changed")
+                    if (cit["applicability_status"], idx.delta("12 CFR 217.10")["legal_validity"]) != ("not_assessed", "not_determined"):
+                        failures.append(f"{src_name}/{tamper}: applicability or legal validity changed")
+                finally:
+                    idx.conn.close()
+                    if hashlib.sha256(dbfile.read_bytes()).hexdigest() != before:
+                        failures.append(f"{src_name}/{tamper}: reading the index changed its bytes")
+                    tmp.cleanup()
     return {"id": item["id"], "kind": kind, "passed": not failures, "failures": failures[:10]}
 
 
