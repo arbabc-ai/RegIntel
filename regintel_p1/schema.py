@@ -1,7 +1,23 @@
 """Relational schema for the Phase 1 evidence index (SQLite, standard library)."""
+import hashlib
 import sqlite3
+from pathlib import Path
 
-SCHEMA_VERSION = "p1-0.7"
+SCHEMA_VERSION = "p1-0.8"
+# Identifies the dependency-check procedure (topic_dependencies.json reconciled against indexed evidence at build). An index built
+# by it records this id and the exact fingerprints of the two inputs; a reader trusts the persisted gap tables only if all match.
+DEPENDENCY_CHECK_CONTRACT = "p1-dependency-check-1"
+DEPENDENCY_META_KEYS = ("dependency_check_contract", "topic_dependencies_sha256", "topics_sha256")
+
+
+def file_sha256(path):
+    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
+
+def dependency_fingerprints(dependencies_path, topics_path):
+    """The metadata a build persists to establish that its dependency tables were checked against these exact inputs."""
+    return {"dependency_check_contract": DEPENDENCY_CHECK_CONTRACT, "topic_dependencies_sha256": file_sha256(dependencies_path),
+            "topics_sha256": file_sha256(topics_path)}
 
 DDL = """
 CREATE TABLE index_meta (key TEXT PRIMARY KEY, value TEXT);

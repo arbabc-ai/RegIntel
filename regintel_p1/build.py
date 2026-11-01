@@ -192,6 +192,8 @@ def build(corpus_dir, db_path, as_of, log=print):
     link_rulemakings(conn)
     load_topics(conn, counts)
     record_source_status(conn, source_status, counts)
+    for k, v in schema.dependency_fingerprints(DEPENDENCIES_PATH, TOPICS_PATH).items():  # the dependency check ran against these exact inputs
+        conn.execute("INSERT INTO index_meta VALUES (?, ?)", (k, v))
     conn.execute("INSERT INTO index_meta VALUES ('as_of', ?)", (as_of,))
     conn.execute("INSERT INTO index_meta VALUES ('built_at', ?)", (time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),))
     conn.execute("INSERT INTO index_meta VALUES ('manifest_sha256', ?)", (sha256_file(corpus / "manifest.json"),))

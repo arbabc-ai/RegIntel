@@ -1563,6 +1563,111 @@ def check_rulemaking_sources(index, item):
     return {"id": item["id"], "kind": kind, "passed": not failures, "failures": failures[:10]}
 
 
+def _tamper_index(tmp, as_of, variant):
+    """Rewrite a copy of a fresh synthetic index into a legacy/parent-era/mismatched one (the read-only original is a temporary file)."""
+    import sqlite3
+    path = str(Path(tmp.name) / "t.sqlite")
+    conn = sqlite3.connect(path)
+    keys = ("dependency_check_contract", "topic_dependencies_sha256", "topics_sha256")
+    if variant == "legacy_absent_tables":
+        conn.executescript("DROP TABLE source_status; DROP TABLE topic_source_gap;")
+        conn.execute("DELETE FROM index_meta WHERE key IN (?,?,?)", keys)
+        conn.execute("UPDATE index_meta SET value='p1-0.6' WHERE key='schema_version'")
+    elif variant == "parent_era_p1_0_7":
+        conn.execute("DELETE FROM index_meta WHERE key IN (?,?,?)", keys)
+        conn.execute("UPDATE index_meta SET value='p1-0.7' WHERE key='schema_version'")
+    elif variant == "incomplete_metadata":
+        conn.execute("DELETE FROM index_meta WHERE key='topics_sha256'")
+    elif variant == "obsolete_contract":
+        conn.execute("UPDATE index_meta SET value='p1-dependency-check-0' WHERE key='dependency_check_contract'")
+    elif variant == "mismatched_topics":
+        conn.execute("UPDATE index_meta SET value=? WHERE key='topics_sha256'", ("0" * 64,))
+    elif variant == "mismatched_dependencies":
+        conn.execute("UPDATE index_meta SET value=? WHERE key='topic_dependencies_sha256'", ("f" * 64,))
+    else:
+        raise ValueError(variant)
+    conn.commit()
+    conn.close()
+    return Index(path, as_of)
+
+
+def check_dependency_verification(index, item):
+    """Guard for dependency-check provenance. `corpus`: the evaluated index carries the current dependency-check contract and exact
+    input fingerprints (verified) and its topic answers carry no unverified-dependencies gap. `verified`: fresh synthetic builds, complete
+    (evidence_found, no gap) and degraded (a confirmed `source_unavailable` gap, never `dependencies_unverified`). `unverified`: legacy
+    indexes with no dependency tables, parent-era p1-0.7 indexes, and indexes with incomplete, obsolete or mismatched verification
+    metadata report `dependencies_unverified` with the reason for every matched acquired topic across modes, scopes, part filters and k=1,
+    never evidence_found (partial_evidence when results remain, otherwise missing_evidence), never as a confirmed missing source, while
+    citation-only resolution and non-acquired topics keep their behavior. Verification status only; no source is asserted present or absent."""
+    failures, kind = [], item["kind"]
+    unver = lambda out: [g for g in out["coverage_gaps"] if g.get("coverage") == "dependencies_unverified"]
+    unavail = lambda out: [g for g in out["coverage_gaps"] if g.get("coverage") == "source_unavailable"]
+    if kind == "corpus":
+        v = index.dependency_verification
+        if v["status"] != "verified":
+            failures.append(f"the evaluated index is {v['status']}: {v['reason']}")
+        for q in item["queries"]:
+            for mode in ("hybrid", "bm25"):
+                out = index.answer(q, mode=mode, scope="both", k=10)
+                if unver(out) or out["status"] != "evidence_found":
+                    failures.append(f"'{q}' {mode}: {out['status']} with {len(unver(out))} unverified gaps")
+    elif kind == "verified":
+        for variant, builder in item["variants"].items():
+            tmp, idx = _synthetic_source_index("complete", index.as_of, (), "complete" if variant == "fresh_complete" else "omitted")
+            try:
+                if idx.dependency_verification["status"] != "verified":
+                    failures.append(f"{variant}: a fresh build is {idx.dependency_verification['status']}")
+                for q in item["queries"]:
+                    for mode in ("hybrid", "bm25", "topic"):
+                        for scope in ("current", "future", "both"):
+                            for parts in (None, ["12:3"], ["12:217"]):
+                                out = idx.answer(q, mode=mode, scope=scope, parts=parts, k=1)
+                                tag = f"{variant} '{q}' {mode}/{scope}/{parts or 'nofilter'}/k1"
+                                if unver(out):
+                                    failures.append(f"{tag}: a verified index reported unverified dependencies")
+                                if variant == "fresh_degraded" and not unavail(out):
+                                    failures.append(f"{tag}: the confirmed missing rule was not reported")
+                                if variant == "fresh_complete" and (unavail(out) or (out["results"] and out["status"] != "evidence_found" and scope != "future")):
+                                    failures.append(f"{tag}: a complete verified build lost evidence_found")
+                idx.conn.close()
+            finally:
+                tmp.cleanup()
+    elif kind == "unverified":
+        for variant, reason in item["variants"].items():
+            tmp, base = _synthetic_source_index("complete", index.as_of)
+            base.conn.close()
+            idx = _tamper_index(tmp, index.as_of, variant)
+            try:
+                v = idx.dependency_verification
+                if v["status"] != "unverified" or v["reason"] != reason:
+                    failures.append(f"{variant}: verification {v['status']}/{v['reason']}, expected unverified/{reason}")
+                for q in item["queries"]:
+                    for mode in ("hybrid", "bm25", "topic"):
+                        for scope in ("current", "future", "both"):
+                            for parts in (None, ["12:3"], ["12:217"]):
+                                out = idx.answer(q, mode=mode, scope=scope, parts=parts, k=1)
+                                tag = f"{variant} '{q}' {mode}/{scope}/{parts or 'nofilter'}/k1"
+                                got = unver(out)
+                                if not got or any(g["verification"]["reason"] != reason for g in got):
+                                    failures.append(f"{tag}: missing or wrong unverified-dependencies diagnostic")
+                                if unavail(out):
+                                    failures.append(f"{tag}: unknown verification was reported as a confirmed missing source")
+                                if out["status"] != ("partial_evidence" if out["results"] else "missing_evidence"):
+                                    failures.append(f"{tag}: status {out['status']}")
+                cit = idx.answer("12 CFR 217.10(a)", mode="exact", scope="current", k=1)
+                if cit["status"] != "evidence_found" or not cit["citations"][0]["resolved"] or unver(cit):
+                    failures.append(f"{variant}: citation-only resolution changed")
+                other = idx.answer("CECL under ASC 326", mode="hybrid", scope="current", k=5)
+                if unver(other):
+                    failures.append(f"{variant}: a non-acquired topic gained an unverified-dependencies gap")
+                if (cit["applicability_status"], idx.delta("12 CFR 217.10")["legal_validity"]) != ("not_assessed", "not_determined"):
+                    failures.append(f"{variant}: applicability or legal validity changed")
+            finally:
+                idx.conn.close()
+                tmp.cleanup()
+    return {"id": item["id"], "kind": kind, "passed": not failures, "failures": failures[:10]}
+
+
 def run_regressions(index, path):
     spec = json.loads(Path(path).read_text())
     out = {"version": spec["version"], "task": spec["task"],
@@ -1596,7 +1701,8 @@ def run_regressions(index, path):
            "list_recovery": [check_list_recovery(index, x) for x in spec.get("list_recovery", [])],
            "source_coverage": [check_source_coverage(index, x) for x in spec.get("source_coverage", [])],
            "required_sections": [check_required_sections(index, x) for x in spec.get("required_sections", [])],
-           "rulemaking_sources": [check_rulemaking_sources(index, x) for x in spec.get("rulemaking_sources", [])]}
+           "rulemaking_sources": [check_rulemaking_sources(index, x) for x in spec.get("rulemaking_sources", [])],
+           "dependency_verification": [check_dependency_verification(index, x) for x in spec.get("dependency_verification", [])]}
     out["passed"] = (all(d["passed"] for d in out["delta"]) and out["relationship_integrity"]["passed"]
                      and all(c["passed"] for c in out["citation_scope"]) and all(x["passed"] for x in out["status"])
                      and all(x["passed"] for x in out["citation_completeness"])
@@ -1625,12 +1731,13 @@ def run_regressions(index, path):
                      and all(x["passed"] for x in out["list_recovery"])
                      and all(x["passed"] for x in out["source_coverage"])
                      and all(x["passed"] for x in out["required_sections"])
-                     and all(x["passed"] for x in out["rulemaking_sources"]))
+                     and all(x["passed"] for x in out["rulemaking_sources"])
+                     and all(x["passed"] for x in out["dependency_verification"]))
     return out
 
 
 REGRESSION_GROUPS = ("delta", "relationship_integrity", "citation_scope", "status", "citation_completeness",
-                     "mixed_source", "delta_precision", "instruction_boundary", "current_agreement", "amendatory_lists", "designator_integrity", "query_citations", "suffix_integrity", "appendix_evidence", "titleless_delta", "query_lists", "query_ranges", "connector_operands", "part_ranges", "part_to_ranges", "part_lists", "four_digit_parts", "candidate_titles", "explicit_title_sign", "punctuated_cfr_title", "citation_tokens", "hyphen_tails", "list_recovery", "source_coverage", "required_sections", "rulemaking_sources")
+                     "mixed_source", "delta_precision", "instruction_boundary", "current_agreement", "amendatory_lists", "designator_integrity", "query_citations", "suffix_integrity", "appendix_evidence", "titleless_delta", "query_lists", "query_ranges", "connector_operands", "part_ranges", "part_to_ranges", "part_lists", "four_digit_parts", "candidate_titles", "explicit_title_sign", "punctuated_cfr_title", "citation_tokens", "hyphen_tails", "list_recovery", "source_coverage", "required_sections", "rulemaking_sources", "dependency_verification")
 
 
 def overall(report):
@@ -1713,6 +1820,8 @@ def render(report):
         lines.append(f"  {ri['id']} {'PASS' if ri['passed'] else 'FAIL'} relationship integrity violations={ri['violations']} {'; '.join(ri['failures'])}")
         for c in reg["citation_scope"]:
             lines.append(f"  {c['id']} {'PASS' if c['passed'] else 'FAIL'} citation scope '{c['query']}' {'; '.join(c['failures'])}")
+        for x in reg.get("dependency_verification", []):
+            lines.append(f"  {x['id']} {'PASS' if x['passed'] else 'FAIL'} dependency verification [{x['kind']}] {'; '.join(x['failures'])}")
         for x in reg.get("rulemaking_sources", []):
             lines.append(f"  {x['id']} {'PASS' if x['passed'] else 'FAIL'} rulemaking sources [{x['kind']}] {'; '.join(x['failures'])}")
         for x in reg.get("required_sections", []):

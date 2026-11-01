@@ -11,6 +11,7 @@ from pathlib import Path
 from collections import defaultdict
 from itertools import zip_longest
 
+from . import schema
 from .fedreg import DEPTH_CLASS, designator_classes, expand_shorthand, paren_suffix
 
 STOP = set("""a an and are as at be by can do does for from has have how if in into is it its of on or that the their
@@ -508,6 +509,38 @@ class Index:
         self._rulemaking = {r["doc_key"]: dict(r) for r in self.conn.execute("SELECT * FROM rulemaking")}
         self._load_source_requests()
         self.source_gaps = self._load_source_gaps()
+        self.dependency_verification = self._verify_dependencies()
+
+    def _verify_dependencies(self):
+        """Whether the persisted dependency tables were produced by the current dependency-check contract on the current inputs.
+
+        A build records the contract id and the sha256 of topic_dependencies.json and topics.json it checked. Legacy indexes (no
+        dependency tables), parent-era indexes (tables but no verification metadata), a different contract, or inputs that have changed
+        since the build leave the dependencies *unverified*: that is unknown, not a confirmed missing source, and the index is never
+        modified. Only a separately named fresh build establishes verification.
+        """
+        base = Path(__file__).parent
+        want = schema.dependency_fingerprints(base / "topic_dependencies.json", base / "topics.json")
+        tables = {r[0] for r in self.conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        problems = []
+        absent = sorted({"source_status", "topic_source_gap"} - tables)
+        if absent:
+            problems.append(("dependency_tables_absent", f"the index has no {', '.join(absent)} table"))
+        have = {k: self.meta.get(k) for k in schema.DEPENDENCY_META_KEYS}
+        if not any(have.values()):
+            problems.append(("verification_metadata_missing", "the index records no dependency-check contract or input fingerprints"))
+        elif not all(have.values()):
+            problems.append(("verification_metadata_incomplete", "missing: " + ", ".join(k for k, v in have.items() if not v)))
+        else:
+            if have["dependency_check_contract"] != want["dependency_check_contract"]:
+                problems.append(("obsolete_dependency_check_contract",
+                                 f"built under {have['dependency_check_contract']}, current is {want['dependency_check_contract']}"))
+            for key in ("topic_dependencies_sha256", "topics_sha256"):
+                if have[key] != want[key]:
+                    problems.append(("dependency_fingerprint_mismatch", f"{key} differs from the current file"))
+        return {"status": "unverified" if problems else "verified", "reason": problems[0][0] if problems else None,
+                "problems": [{"reason": r, "detail": d} for r, d in problems], "contract": want["dependency_check_contract"],
+                "index_schema_version": self.meta.get("schema_version"), "recorded": have}
 
     def _load_source_gaps(self):
         """topic id -> [{doc_key, status, reason}] for declared eCFR baseline dependencies that are not indexed (persisted at build).
@@ -1077,6 +1110,18 @@ class Index:
                 unavailable.append(t)
                 gaps.append({"topic": t["id"], "coverage": "source_unavailable", "unavailable_sources": missing,
                              "note": self._source_gap_note(missing)})
+        # Unverified dependencies: the index cannot show its declared sources were checked (legacy, parent-era or mismatched). That is
+        # unknown, not a confirmed missing source, so it is reported under its own coverage and never as source_unavailable.
+        unverified = []
+        if self.dependency_verification["status"] != "verified":
+            for t, _ in topic_hits:
+                if t["coverage"] == "acquired":
+                    unverified.append(t)
+                    gaps.append({"topic": t["id"], "coverage": "dependencies_unverified", "verification": self.dependency_verification,
+                                 "note": "This index has no verified dependency check (" + self.dependency_verification["reason"] + "), so whether the "
+                                         "sources this acquired topic depends on are present is unknown, not confirmed missing. Build a fresh, "
+                                         "separately named index to establish verification. This reports verification status only, not "
+                                         "provision coverage, rulemaking coverage, operative effect or applicability."})
         # A citation-only query is self-describing: it resolves to named provisions in the requested scope and part
         # filter, so it needs no topic. Any other query that matches no catalog topic has unassessed source
         # coverage, and a lexical hit alone does not establish that the sources it needs are acquired.
@@ -1111,7 +1156,7 @@ class Index:
                                  "does not show that the sources needed to answer it are acquired."})
         if not results:
             status = "missing_evidence"
-        elif blocked or partial or unassessed or unresolved or sources or unavailable:
+        elif blocked or partial or unassessed or unresolved or sources or unavailable or unverified:
             status = "partial_evidence"   # results exist, but coverage, a named source or a requested citation is incomplete
         else:
             status = "evidence_found"
@@ -1125,7 +1170,8 @@ class Index:
             "citations": [{k: v for k, v in c.items() if not k.startswith("_")} for c in citations],
             "source_requests": sources,
             "index": {"manifest_sha256": self.meta.get("manifest_sha256"), "built_at": self.meta.get("built_at"),
-                      "unavailable_topic_sources": {t["id"]: self.source_gaps[t["id"]] for t in unavailable}},
+                      "unavailable_topic_sources": {t["id"]: self.source_gaps[t["id"]] for t in unavailable},
+                      "dependency_verification": self.dependency_verification},
         }
 
     # ---------- current-to-future ----------
