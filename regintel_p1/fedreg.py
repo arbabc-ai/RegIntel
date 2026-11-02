@@ -341,13 +341,13 @@ def _relative_to_enclosing_location(stripped, match, locations):
     return any(loc is not match and loc.end() <= match.start() and loc.end() > start for loc in locations)
 
 
-NESTED_BY_GAP = re.compile(r"(?:[^.;:]|(?<=\d)\.(?=\d))*\bby\s*", re.I)  # periods inside citation numbers (3.22) are not breaks
+NESTED_BY_GAP = re.compile(r"(?:[^.;:]|(?<=\d)\.(?=\d))*\b(?:by|to)\s*", re.I)  # periods inside citation numbers (3.22) are not breaks
 
 
 def _nested_by_child(stripped, previous, match):
-    """True when `match` is a child action introduced by "by" directly after the previous paragraph action in the same clause.
+    """True when `match` is a child action introduced by "by" or an infinitive "to" directly after the previous paragraph action in the same clause.
 
-    `revise paragraph (d) by adding paragraph (7)` names the parent (d); the (7) added by that action is a child of (d), so a standalone
+    `revise paragraph (d) by adding paragraph (7)` and `revise paragraph (d) to add paragraph (7)` name the parent (d); the (7) added by that action is a child of (d), so a standalone
     `(7)` is not a path and `(d)(7)` is not inferred. The previous match must end right before a gap that contains only the connecting
     "by" (no sentence break and no new section location; a reference citation does not interrupt it). A child written out as a complete path (`by adding paragraph (d)(7)`, first designator a top-level letter) is still a
     path; independent sibling actions (`revise paragraph (d) and add paragraph (e)`, a new enumerator clause) are not nested.
