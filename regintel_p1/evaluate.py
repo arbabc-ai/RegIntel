@@ -1912,6 +1912,33 @@ def check_passive_location_paragraphs(index, item):
     return {"id": item["id"], "kind": kind, "passed": not failures, "failures": failures[:10]}
 
 
+def check_nested_by_paragraph_scope(index, item):
+    """Guard for a child paragraph action introduced by "by" under an explicit parent paragraph ("In § 265.7, revise paragraph (d) by adding
+    paragraph (7)"). `grammar`: literal expected paths: the named parent stays, a single-designator child is not a top-level path and
+    (d)(7) is not inferred, in active and passive forms and with whitespace variants, while sibling actions, fully explicit paths, new
+    locations, quoted text and references keep their behavior. `stored`: in the evaluated index, no instruction with a "paragraph (x) by
+    <verb>ing paragraph (y)" construction stores a path its own text does not name under the current grammar. Textual evidence only."""
+    from . import fedreg
+    failures, kind = [], item["kind"]
+    if kind == "grammar":
+        for t in item["texts"]:
+            got = fedreg.named_paragraph_paths(t["text"])
+            if got != t["paths"]:
+                failures.append(f"'{t['text'][:70]}': named {got}, expected {t['paths']}")
+    elif kind == "stored":
+        construction = re.compile(r"paragraphs?\s+\([^)]*\)(?:\([^)]*\))*\s+by\s+\w+\s+(?:new\s+)?paragraphs?\b", re.I)
+        for doc, loc, instruction, ev in index.conn.execute(
+                """SELECT d.doc_key, p.locator, p.instruction, p.explicit_paragraphs FROM provision p JOIN source_document d ON d.id=p.doc_id
+                   WHERE p.kind='amendment' AND p.instruction IS NOT NULL"""):
+            if not construction.search(fedreg.parsing_view(instruction)):
+                continue
+            paths = (json.loads(ev or "{}")).get("paths") or []
+            stale = [p for p in paths if p not in fedreg.named_paragraph_paths(instruction)]
+            if stale:
+                failures.append(f"{doc} {loc}: stored {stale} is not named under the current grammar")
+    return {"id": item["id"], "kind": kind, "passed": not failures, "failures": failures[:10]}
+
+
 def run_regressions(index, path):
     spec = json.loads(Path(path).read_text())
     out = {"version": spec["version"], "task": spec["task"],
@@ -1951,7 +1978,8 @@ def run_regressions(index, path):
            "paragraph_evidence": [check_paragraph_evidence_integrity(index, x) for x in spec.get("paragraph_evidence", [])],
            "relative_action_paragraphs": [check_relative_action_paragraphs(index, x) for x in spec.get("relative_action_paragraphs", [])],
            "enumerated_relative_paragraphs": [check_enumerated_relative_paragraphs(index, x) for x in spec.get("enumerated_relative_paragraphs", [])],
-           "passive_location_paragraphs": [check_passive_location_paragraphs(index, x) for x in spec.get("passive_location_paragraphs", [])]}
+           "passive_location_paragraphs": [check_passive_location_paragraphs(index, x) for x in spec.get("passive_location_paragraphs", [])],
+           "nested_by_paragraph_scope": [check_nested_by_paragraph_scope(index, x) for x in spec.get("nested_by_paragraph_scope", [])]}
     out["passed"] = (all(d["passed"] for d in out["delta"]) and out["relationship_integrity"]["passed"]
                      and all(c["passed"] for c in out["citation_scope"]) and all(x["passed"] for x in out["status"])
                      and all(x["passed"] for x in out["citation_completeness"])
@@ -1986,12 +2014,13 @@ def run_regressions(index, path):
                      and all(x["passed"] for x in out["paragraph_evidence"])
                      and all(x["passed"] for x in out["relative_action_paragraphs"])
                      and all(x["passed"] for x in out["enumerated_relative_paragraphs"])
-                     and all(x["passed"] for x in out["passive_location_paragraphs"]))
+                     and all(x["passed"] for x in out["passive_location_paragraphs"])
+                     and all(x["passed"] for x in out["nested_by_paragraph_scope"]))
     return out
 
 
 REGRESSION_GROUPS = ("delta", "relationship_integrity", "citation_scope", "status", "citation_completeness",
-                     "mixed_source", "delta_precision", "instruction_boundary", "current_agreement", "amendatory_lists", "designator_integrity", "query_citations", "suffix_integrity", "appendix_evidence", "titleless_delta", "query_lists", "query_ranges", "connector_operands", "part_ranges", "part_to_ranges", "part_lists", "four_digit_parts", "candidate_titles", "explicit_title_sign", "punctuated_cfr_title", "citation_tokens", "hyphen_tails", "list_recovery", "source_coverage", "required_sections", "rulemaking_sources", "dependency_verification", "lowercase_paragraph_clause", "paragraph_evidence", "relative_action_paragraphs", "enumerated_relative_paragraphs", "passive_location_paragraphs")
+                     "mixed_source", "delta_precision", "instruction_boundary", "current_agreement", "amendatory_lists", "designator_integrity", "query_citations", "suffix_integrity", "appendix_evidence", "titleless_delta", "query_lists", "query_ranges", "connector_operands", "part_ranges", "part_to_ranges", "part_lists", "four_digit_parts", "candidate_titles", "explicit_title_sign", "punctuated_cfr_title", "citation_tokens", "hyphen_tails", "list_recovery", "source_coverage", "required_sections", "rulemaking_sources", "dependency_verification", "lowercase_paragraph_clause", "paragraph_evidence", "relative_action_paragraphs", "enumerated_relative_paragraphs", "passive_location_paragraphs", "nested_by_paragraph_scope")
 
 
 def overall(report):
@@ -2074,6 +2103,8 @@ def render(report):
         lines.append(f"  {ri['id']} {'PASS' if ri['passed'] else 'FAIL'} relationship integrity violations={ri['violations']} {'; '.join(ri['failures'])}")
         for c in reg["citation_scope"]:
             lines.append(f"  {c['id']} {'PASS' if c['passed'] else 'FAIL'} citation scope '{c['query']}' {'; '.join(c['failures'])}")
+        for x in reg.get("nested_by_paragraph_scope", []):
+            lines.append(f"  {x['id']} {'PASS' if x['passed'] else 'FAIL'} nested-by paragraph scope [{x['kind']}] {'; '.join(x['failures'])}")
         for x in reg.get("passive_location_paragraphs", []):
             lines.append(f"  {x['id']} {'PASS' if x['passed'] else 'FAIL'} passive location paragraphs [{x['kind']}] {'; '.join(x['failures'])}")
         for x in reg.get("enumerated_relative_paragraphs", []):

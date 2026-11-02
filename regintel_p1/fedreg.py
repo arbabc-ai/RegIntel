@@ -341,6 +341,21 @@ def _relative_to_enclosing_location(stripped, match, locations):
     return any(loc is not match and loc.end() <= match.start() and loc.end() > start for loc in locations)
 
 
+NESTED_BY_GAP = re.compile(r"(?:[^.;:]|(?<=\d)\.(?=\d))*\bby\s*", re.I)  # periods inside citation numbers (3.22) are not breaks
+
+
+def _nested_by_child(stripped, previous, match):
+    """True when `match` is a child action introduced by "by" directly after the previous paragraph action in the same clause.
+
+    `revise paragraph (d) by adding paragraph (7)` names the parent (d); the (7) added by that action is a child of (d), so a standalone
+    `(7)` is not a path and `(d)(7)` is not inferred. The previous match must end right before a gap that contains only the connecting
+    "by" (no sentence break and no new section location; a reference citation does not interrupt it). A child written out as a complete path (`by adding paragraph (d)(7)`, first designator a top-level letter) is still a
+    path; independent sibling actions (`revise paragraph (d) and add paragraph (e)`, a new enumerator clause) are not nested.
+    """
+    gap = stripped[previous.end():match.start()]
+    return bool(NESTED_BY_GAP.fullmatch(gap)) and not (LOCATION_CITE.search(gap) or PASSIVE_LOCATION_CITE.search(gap))
+
+
 def named_paragraph_paths(text):
     """Complete paragraph paths an instruction names as objects of an action, e.g. `(c)(1)`, `(a)(2)(i)`, `(i)`.
 
@@ -353,14 +368,20 @@ def named_paragraph_paths(text):
     paths = []
     locations = list(PARA_LOCATION.finditer(stripped))
     matches = sorted([*PARA_ACTION.finditer(stripped), *locations], key=lambda m: m.start())
-    for m in matches:
+    for index, m in enumerate(matches):
         if _relative_to_enclosing_location(stripped, m, locations):
             continue  # a paragraph named inside a paragraph-qualified location is relative to it: not a path, not an inferred one
+        nested = index > 0 and _nested_by_child(stripped, matches[index - 1], m)
         previous = None  # list of designators of the previous path; "unknown" once shorthand could not be settled
         for token in re.finditer(PARA_TOKEN, m.group(1)):
             if incomplete_after(stripped, m.start(1) + token.end()):
                 break  # a valid prefix of an unread designator sequence is never a named parent; drop the rest of the list
             parts = PARA_PART.findall(token.group(0))
+            if nested and (len(parts) == 1 or designator_classes(parts[0]) != {"letter"}):
+                # A child introduced by "by" under a named parent is relative to it unless it is written out as a complete path, which
+                # needs a first designator that can only be a top-level letter: (7), (ii), (B)(3) are relative; (d)(7) is complete.
+                previous = "unknown"
+                continue
             if len(parts) > 1 or previous is None:
                 resolved = parts  # written in full, or the first item of a list
             elif previous == "unknown":
