@@ -321,7 +321,12 @@ PASSIVE_LOCATION_CITE = re.compile(
 
 
 CAPITAL_IN_LOCATION = re.compile(r"(?:[.;:,]\s+|[a-z0-9]{1,3}\.\s+)?In\s")  # the clause-initial capital "In paragraph …" form of PARA_ACTION
-ENUM_BOUNDARY = re.compile(r"([.;:])\s+(?:(\d{1,2}|[A-Za-z]{1,4})\.\s+)?")  # a boundary and the enumerator that follows it (`; 2. `, `: i. `)
+ENUM_BOUNDARY = re.compile(r"([.;:])\s+(?:(?:(\d{1,2}|[A-Za-z]{1,4})\.|\((\d{1,2}|[A-Za-z]{1,4})\))\s+)?")  # a boundary and its enumerator (`; 2. `, `: i. `, `: (ii) `)
+
+
+def _boundary_token(boundary):
+    """The enumerator token after a boundary, whether written `2.` or parenthesized `(2)`; None when there is none."""
+    return boundary.group(2) or boundary.group(3)
 
 
 def _enum_class(token):
@@ -351,10 +356,10 @@ def _scope_continues(stripped, loc, match):
     first = boundaries[0]
     if first.group(1) != ":" or PARA_ACTION.search(region, 0, first.start()):
         return False
-    if first.group(2) is None:
+    if _boundary_token(first) is None:
         return len(boundaries) == 1  # an unenumerated colon clause: nothing may follow it before the action
-    sub = _enum_class(first.group(2))
-    return all(b.group(2) is not None and sub == _enum_class(b.group(2)) for b in boundaries[1:])
+    sub = _enum_class(_boundary_token(first))
+    return all(_boundary_token(b) is not None and sub == _enum_class(_boundary_token(b)) for b in boundaries[1:])
 
 
 def _relative_to_enclosing_location(stripped, match, own_locations=()):
