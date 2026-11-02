@@ -1,6 +1,6 @@
 {
- "version": "p1-regress-0.38",
- "task": "S7-P1-EVIDENCE-BOUNDARIES-01 + S7-P1-EVIDENCE-COMPLETENESS-02 + S7-P1-COVERAGE-GUARDS-03 + S7-P1-CITATION-COMPLETENESS-04 + S7-P1-FUTURE-PARAGRAPH-PRECISION-05 + S7-P1-MIXED-SOURCE-COVERAGE-06 + S7-P1-DELTA-PRECISION-07 + S7-P1-INSTRUCTION-BOUNDARY-08 + S7-P1-RESERVED-RANGE-CONSISTENCY-09 + S7-P1-AMENDATORY-LIST-PRECISION-11 + S7-P1-DESIGNATOR-TOKEN-INTEGRITY-12 + S7-P1-QUERY-CITATION-INTEGRITY-13 + S7-P1-SUFFIX-INTEGRITY-14 + S7-P1-SUFFIX-INTEGRITY-14 + S7-P1-SUFFIX-BOUNDARY-15 + S7-P1-APPENDIX-EVIDENCE-16 + S7-P1-TITLELESS-DELTA-17 + S7-P1-QUERY-LIST-COMPLETENESS-18 + S7-P1-QUERY-RANGE-INTEGRITY-19 + S7-P1-CONNECTOR-DESIGNATOR-INTEGRITY-20 + S7-P1-PART-RANGE-INTEGRITY-21 + S7-P1-PART-TO-RANGE-22 + S7-P1-PART-LIST-COMPLETENESS-23 + S7-P1-FOUR-DIGIT-PART-OPERANDS-24 + S7-P1-DELTA-CANDIDATE-TITLE-25 + S7-P1-EXPLICIT-TITLE-SECTION-SIGN-26 + S7-P1-PUNCTUATED-CFR-TITLE-27 + S7-P1-CITATION-TOKEN-INTEGRITY-28 + S7-P1-HYPHEN-TAIL-INTEGRITY-29 + S7-P1-MALFORMED-LIST-RECOVERY-30 + S7-P1-INDEX-SOURCE-COVERAGE-31 + S7-P1-REQUIRED-SECTIONS-32 + S7-P1-RULEMAKING-SOURCE-AVAILABILITY-33 + S7-P1-DEPENDENCY-VERIFICATION-34 + S7-P1-UNVERIFIED-SOURCE-DIAGNOSTICS-35 + S7-P1-LOWERCASE-PARAGRAPH-CLAUSE-36 + S7-P1-PARAGRAPH-EVIDENCE-INTEGRITY-37 + S7-P1-RELATIVE-ACTION-PARAGRAPHS-38 + S7-P1-ENUMERATED-RELATIVE-PARAGRAPHS-39",
+ "version": "p1-regress-0.39",
+ "task": "S7-P1-EVIDENCE-BOUNDARIES-01 + S7-P1-EVIDENCE-COMPLETENESS-02 + S7-P1-COVERAGE-GUARDS-03 + S7-P1-CITATION-COMPLETENESS-04 + S7-P1-FUTURE-PARAGRAPH-PRECISION-05 + S7-P1-MIXED-SOURCE-COVERAGE-06 + S7-P1-DELTA-PRECISION-07 + S7-P1-INSTRUCTION-BOUNDARY-08 + S7-P1-RESERVED-RANGE-CONSISTENCY-09 + S7-P1-AMENDATORY-LIST-PRECISION-11 + S7-P1-DESIGNATOR-TOKEN-INTEGRITY-12 + S7-P1-QUERY-CITATION-INTEGRITY-13 + S7-P1-SUFFIX-INTEGRITY-14 + S7-P1-SUFFIX-INTEGRITY-14 + S7-P1-SUFFIX-BOUNDARY-15 + S7-P1-APPENDIX-EVIDENCE-16 + S7-P1-TITLELESS-DELTA-17 + S7-P1-QUERY-LIST-COMPLETENESS-18 + S7-P1-QUERY-RANGE-INTEGRITY-19 + S7-P1-CONNECTOR-DESIGNATOR-INTEGRITY-20 + S7-P1-PART-RANGE-INTEGRITY-21 + S7-P1-PART-TO-RANGE-22 + S7-P1-PART-LIST-COMPLETENESS-23 + S7-P1-FOUR-DIGIT-PART-OPERANDS-24 + S7-P1-DELTA-CANDIDATE-TITLE-25 + S7-P1-EXPLICIT-TITLE-SECTION-SIGN-26 + S7-P1-PUNCTUATED-CFR-TITLE-27 + S7-P1-CITATION-TOKEN-INTEGRITY-28 + S7-P1-HYPHEN-TAIL-INTEGRITY-29 + S7-P1-MALFORMED-LIST-RECOVERY-30 + S7-P1-INDEX-SOURCE-COVERAGE-31 + S7-P1-REQUIRED-SECTIONS-32 + S7-P1-RULEMAKING-SOURCE-AVAILABILITY-33 + S7-P1-DEPENDENCY-VERIFICATION-34 + S7-P1-UNVERIFIED-SOURCE-DIAGNOSTICS-35 + S7-P1-LOWERCASE-PARAGRAPH-CLAUSE-36 + S7-P1-PARAGRAPH-EVIDENCE-INTEGRITY-37 + S7-P1-RELATIVE-ACTION-PARAGRAPHS-38 + S7-P1-ENUMERATED-RELATIVE-PARAGRAPHS-39 + S7-P1-PASSIVE-LOCATION-PARAGRAPHS-40",
  "note": "Deterministic regression checks over the acquired corpus for amendment-target integrity and retrieval scope filtering. Kept separate from questions.json so the 37-item baseline stays frozen. A pass means the contract holds, not that any rule applies to a bank.",
  "delta": [
   {
@@ -2723,6 +2723,127 @@
     "12 CFR 35.4{op}"
    ],
    "excluded_part": "12:3"
+  }
+ ],
+ "passive_location_paragraphs": [
+  {
+   "id": "PA01",
+   "kind": "grammar",
+   "texts": [
+    {
+     "text": "§ 265.7(d) is amended by revising paragraph (7) to read as follows:",
+     "paths": []
+    },
+    {
+     "text": "Section 265.7(d)(7) is amended by removing paragraph (ii).",
+     "paths": []
+    },
+    {
+     "text": "§ 265.7(d) is amended by adding paragraph (7) to read as follows:",
+     "paths": []
+    },
+    {
+     "text": "§ 265.7(d) is amended by removing and reserving paragraph (7).",
+     "paths": []
+    },
+    {
+     "text": "§ 265.7(d)(7) is amended by revising paragraph (ii)(B).",
+     "paths": []
+    },
+    {
+     "text": "§ 265.7(d) is amended by: a. Revising paragraph (7); b. Removing paragraph (8).",
+     "paths": []
+    },
+    {
+     "text": "Section 265.7(d) is amended by: 1. In paragraph (7), removing “x”. 2. In paragraph (8), removing “y”.",
+     "paths": []
+    },
+    {
+     "text": "§ 265.7(d) is amended by: i. Revising paragraph (7); ii. Revising paragraph (8).",
+     "paths": []
+    },
+    {
+     "text": "§ 265.7 ( d ) is amended by revising paragraph ( 7 ).",
+     "paths": []
+    },
+    {
+     "text": "§ 265.7(d)\n is amended by:\n a. Revising paragraph (7);\n b. Removing paragraph (8).",
+     "paths": []
+    },
+    {
+     "text": "§§ 265.7(d) and 265.8 are amended by revising paragraph (7).",
+     "paths": []
+    },
+    {
+     "text": "§ 265.7(d) is amended by revising paragraph (7) as described in § 3.22; revising paragraph (8).",
+     "paths": []
+    },
+    {
+     "text": "§ 265.7(d) is amended by revising paragraph (7) for purposes of § 3.10(a)(5); revising paragraph (8).",
+     "paths": []
+    },
+    {
+     "text": "§ 265.7(d) is amended by revising the text to read “§ 265.8 is amended by revising paragraph (a).”",
+     "paths": []
+    },
+    {
+     "text": "§ 265.7 is amended by revising the text to read “§ 265.7(d) is amended by revising paragraph (7)” and revising paragraph (e)(1).",
+     "paths": [
+      "(e)(1)"
+     ]
+    },
+    {
+     "text": "§ 265.7 is amended by revising paragraph (d)(7).",
+     "paths": [
+      "(d)(7)"
+     ]
+    },
+    {
+     "text": "Section 265.7 is amended by: a. Revising paragraph (a)(1); b. Removing paragraph (e)(2).",
+     "paths": [
+      "(a)(1)",
+      "(e)(2)"
+     ]
+    },
+    {
+     "text": "§§ 265.7 and 265.8 are amended by revising paragraph (c)(2).",
+     "paths": [
+      "(c)(2)"
+     ]
+    },
+    {
+     "text": "§ 265.7(d) is amended by revising paragraph (7). § 265.8 is amended by revising paragraph (a)(2).",
+     "paths": [
+      "(a)(2)"
+     ]
+    },
+    {
+     "text": "§ 265.7(d) is amended by revising paragraph (7); Section 265.9 is amended by removing paragraph (b)(3).",
+     "paths": [
+      "(b)(3)"
+     ]
+    },
+    {
+     "text": "§ 265.7(d) is amended by revising the heading. In § 265.8, revise paragraph (a).",
+     "paths": [
+      "(a)"
+     ]
+    },
+    {
+     "text": "In § 265.7(d), revise paragraph (7).",
+     "paths": []
+    },
+    {
+     "text": "In § 265.7, revise paragraph (d)(7).",
+     "paths": [
+      "(d)(7)"
+     ]
+    }
+   ]
+  },
+  {
+   "id": "PA02",
+   "kind": "stored"
   }
  ]
 }

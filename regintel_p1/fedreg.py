@@ -313,12 +313,17 @@ def incomplete_after(view, position):
 # "for purposes of § 3.10(a)(5)" or "as described in § 3.22(c)", which never changes the governing location.
 LOCATION_CITE = re.compile(
     rf"(?:(?<![A-Za-z])(?-i:In)|\b{VERB})\s+(?:new\s+)?\u00a7\u00a7?\s*\d+\.\d+[A-Za-z]?((?:\s*\([A-Za-z0-9]+\))*)", re.I)
+# The passive form of the same location ("§ 265.7(d) is amended by revising …", "Section 265.7(d)(7) is amended by …"), the construction
+# `parse_instruction` already accepts as a target. Its paragraph designator qualifies the location exactly as in the active forms.
+PASSIVE_LOCATION_CITE = re.compile(
+    rf"(?:\u00a7\u00a7?|\bSections?)\s*\d+\.\d+[A-Za-z]?((?:\s*\([A-Za-z0-9]+\))*)"
+    rf"(?=(?:\s*{LIST_SEPARATOR}\s*(?:\u00a7+\s*)?{SEC_ITEM})*\s+(?:is|are)\s+{DONE})", re.I)
 
 
 def _relative_to_enclosing_location(stripped, match, locations):
     """True when `match` (an action or location clause naming paragraphs) sits inside a location that already carries a paragraph.
 
-    The governing location is the last section *location* citation (`In § …`, `Amend § …`; not a reference such as `for purposes of § 3.10(a)(5)`)
+    The governing location is the last section *location* citation (`In § …`, `Amend § …`, or the passive `§ 265.7(d) is amended`; not a reference such as `for purposes of § 3.10(a)(5)`)
     before the match anywhere in the instruction: colons, semicolons, sentence
     ends and enumerators (`Amend § 35.4(a)(2) by: a. In paragraph (i), removing …; b. In paragraph (ii), …`) do not end it; only a new
     section citation does. If that citation carries a paragraph designator, the named paragraph is relative to it and is not a complete
@@ -328,7 +333,8 @@ def _relative_to_enclosing_location(stripped, match, locations):
     """
     if match in locations:
         return False  # a lowercase location clause carries its own bare section citation, which governs it
-    cites = list(LOCATION_CITE.finditer(stripped, 0, match.start()))
+    cites = sorted([*LOCATION_CITE.finditer(stripped, 0, match.start()), *PASSIVE_LOCATION_CITE.finditer(stripped, 0, match.start())],
+                   key=lambda c: c.start())
     start = cites[-1].start() if cites else 0
     if cites and cites[-1].group(1).strip():
         return True
