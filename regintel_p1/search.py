@@ -865,24 +865,32 @@ class Index:
         carried text, or an ancestor is not evidence for a deeper path, and hierarchy is not inferred from the order
         of carried paragraphs. Returns [(doc_key, locator)] of supporting units.
         """
+        return [(d, loc) for _, d, loc in self._paragraph_support_rows(ids, paras)]
+
+    def _paragraph_support_rows(self, ids, paras):
+        """[(provision id, doc_key, locator)] of the supporting units, in the order of `ids`."""
         wanted = "".join(re.findall(r"\([A-Za-z0-9]+\)", paras))
         if not wanted or not ids:
             return []
-        out = []
+        found = {}
         for row in self.conn.execute(
-                f"""SELECT d.doc_key, p.locator, p.explicit_paragraphs FROM provision p JOIN source_document d ON d.id=p.doc_id
+                f"""SELECT p.id, d.doc_key, p.locator, p.explicit_paragraphs FROM provision p JOIN source_document d ON d.id=p.doc_id
                     WHERE p.id IN ({','.join('?' * len(ids))})""", ids):
             ev = json.loads(row["explicit_paragraphs"] or "{}")
             if ev.get("status") == "attributed" and wanted in ev.get("paths", []):
-                out.append((row["doc_key"], row["locator"]))
-        return out
+                found[row["id"]] = (row["id"], row["doc_key"], row["locator"])
+        return [found[i] for i in ids if i in found]
 
     def _resolve_one(self, label, title, part, section, paras, scope, parts):
         cur = self._exact_current(title, part, section, paras, parts) if scope in ("current", "both") else []
         fut = self._exact_future(title, part, section, parts, section and section.split(".", 1)[1]) \
             if scope in ("future", "both") else []
         precision = "paragraph" if (section and paras) else ("section" if section else "part")
-        support = self._paragraph_support(fut, paras) if (fut and paras) else []
+        support_rows = self._paragraph_support_rows(fut, paras) if (fut and paras) else []
+        support = [(d, loc) for _, d, loc in support_rows]
+        if support_rows:  # units that support the requested path lead the future list, so ranking and truncation keep them
+            lead = [pid for pid, _, _ in support_rows]
+            fut = lead + [pid for pid in fut if pid not in set(lead)]
         fut_precise = bool(fut) and (not paras or bool(support))
         resolved = bool(cur) or fut_precise
         achieved = precision if resolved else ("section_only" if (paras and fut) else None)

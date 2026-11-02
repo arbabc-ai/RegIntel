@@ -176,8 +176,11 @@ PARA_PART = re.compile(r"\([A-Za-z0-9]+\)")
 # "in paragraph PATH," that must be followed by an action verb. It names PATH only in this exact form; a bare lowercase "in paragraph"
 # anywhere else ("provided in paragraph (e)(3)", "as described in paragraph (a)") stays a cross-reference, and "In §§ A and B, in
 # paragraph (a)" (several sections) is not read here because one section cannot be attributed.
+# A bare section number only: "In § 265.7(d), in paragraph (7)" carries a paragraph in the section clause, so the lowercase path is relative to
+# it and can be neither a top-level (7) nor an inferred (d)(7); it is left unattributed (section context).
+BARE_SECTION = r"\d+\.\d+[A-Za-z]?(?!\s*\()"
 PARA_LOCATION = re.compile(
-    rf"(?<![A-Za-z])(?-i:In)\s+\u00a7\s*{SEC_ITEM}\s*,\s+(?-i:in)\s+paragraphs?\s+{PARA_LIST}(?=\s*,\s*{VERB}\b)", re.I)
+    rf"(?<![A-Za-z])(?-i:In)\s+\u00a7\s*{BARE_SECTION}\s*,\s+(?-i:in)\s+paragraphs?\s+{PARA_LIST}(?=\s*,\s*{VERB}\b)", re.I)
 
 
 def _list_members(body):

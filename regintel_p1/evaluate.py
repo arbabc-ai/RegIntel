@@ -1764,6 +1764,48 @@ def check_lowercase_paragraph_clause(index, item):
     return {"id": item["id"], "kind": kind, "passed": not failures, "failures": failures[:10]}
 
 
+def check_paragraph_evidence_integrity(index, item):
+    """Guard for paragraph evidence. `grammar`: an explicit location clause names a path only for a bare section number ("In § 265.7, in
+    paragraph (d)(7)(ii)(B)(3), remove"); "In § 265.7(d), in paragraph (7), remove" establishes neither (7) nor (d)(7). `ranking`: where the
+    acquired index holds the supporting instrument, exact and hybrid answers in future and both scopes keep its supporting unit first at
+    k=1 and at larger budgets, a newer section-context unit does not displace it, an excluded-part filter returns nothing, an unsupported
+    path stays unresolved, and current scope returns no Federal Register unit. Textual evidence only; no legal effect is determined."""
+    from . import fedreg
+    failures, kind = [], item["kind"]
+    if kind == "grammar":
+        for t in item["texts"]:
+            got = fedreg.named_paragraph_paths(t["text"])
+            if got != t["paths"]:
+                failures.append(f"'{t['text'][:60]}': named {got}, expected {t['paths']}")
+    elif kind == "ranking":
+        have = {r[0] for r in index.conn.execute("SELECT doc_key FROM source_document")}
+        for d in item["citations"]:
+            if d["doc_key"] not in have:
+                continue
+            for mode in ("exact", "hybrid"):
+                for scope in ("future", "both"):
+                    for k in (1, 2, 5):
+                        out = index.answer(d["citation"], mode=mode, scope=scope, k=k)
+                        tag = f"{d['citation']} {mode}/{scope}/k{k}"
+                        if not out["results"] or out["results"][0]["locator"] != d["locator"]:
+                            failures.append(f"{tag}: first result is {out['results'][0]['locator'] if out['results'] else None}, expected {d['locator']}")
+            blocked = index.answer(d["citation"], mode="exact", scope="future", k=1, parts=[d["excluded_part"]])
+            if blocked["results"]:
+                failures.append(f"{d['citation']}: an excluded-part filter still returned {len(blocked['results'])} results")
+            cur = index.answer(d["citation"], mode="exact", scope="current", k=5)
+            if any(r["doc_key"].startswith("fr:") for r in cur["results"]):
+                failures.append(f"{d['citation']}: current scope returned a Federal Register unit")
+            inst = {g["doc_key"]: g["paragraph_precision"] for g in index.delta(d["citation"])["instruments"]}
+            for other in d.get("section_context", []):
+                q = inst.get(other)
+                if q is not None and (q["resolved"] or q["achieved"] != "section_only"):
+                    failures.append(f"{d['citation']}: {other} should stay section context")
+            un = index.resolve_citations(d["unsupported"], "future")[0]
+            if un["resolved"]:
+                failures.append(f"{d['unsupported']}: an unsupported path resolved")
+    return {"id": item["id"], "kind": kind, "passed": not failures, "failures": failures[:10]}
+
+
 def run_regressions(index, path):
     spec = json.loads(Path(path).read_text())
     out = {"version": spec["version"], "task": spec["task"],
@@ -1799,7 +1841,8 @@ def run_regressions(index, path):
            "required_sections": [check_required_sections(index, x) for x in spec.get("required_sections", [])],
            "rulemaking_sources": [check_rulemaking_sources(index, x) for x in spec.get("rulemaking_sources", [])],
            "dependency_verification": [check_dependency_verification(index, x) for x in spec.get("dependency_verification", [])],
-           "lowercase_paragraph_clause": [check_lowercase_paragraph_clause(index, x) for x in spec.get("lowercase_paragraph_clause", [])]}
+           "lowercase_paragraph_clause": [check_lowercase_paragraph_clause(index, x) for x in spec.get("lowercase_paragraph_clause", [])],
+           "paragraph_evidence": [check_paragraph_evidence_integrity(index, x) for x in spec.get("paragraph_evidence", [])]}
     out["passed"] = (all(d["passed"] for d in out["delta"]) and out["relationship_integrity"]["passed"]
                      and all(c["passed"] for c in out["citation_scope"]) and all(x["passed"] for x in out["status"])
                      and all(x["passed"] for x in out["citation_completeness"])
@@ -1830,12 +1873,13 @@ def run_regressions(index, path):
                      and all(x["passed"] for x in out["required_sections"])
                      and all(x["passed"] for x in out["rulemaking_sources"])
                      and all(x["passed"] for x in out["dependency_verification"])
-                     and all(x["passed"] for x in out["lowercase_paragraph_clause"]))
+                     and all(x["passed"] for x in out["lowercase_paragraph_clause"])
+                     and all(x["passed"] for x in out["paragraph_evidence"]))
     return out
 
 
 REGRESSION_GROUPS = ("delta", "relationship_integrity", "citation_scope", "status", "citation_completeness",
-                     "mixed_source", "delta_precision", "instruction_boundary", "current_agreement", "amendatory_lists", "designator_integrity", "query_citations", "suffix_integrity", "appendix_evidence", "titleless_delta", "query_lists", "query_ranges", "connector_operands", "part_ranges", "part_to_ranges", "part_lists", "four_digit_parts", "candidate_titles", "explicit_title_sign", "punctuated_cfr_title", "citation_tokens", "hyphen_tails", "list_recovery", "source_coverage", "required_sections", "rulemaking_sources", "dependency_verification", "lowercase_paragraph_clause")
+                     "mixed_source", "delta_precision", "instruction_boundary", "current_agreement", "amendatory_lists", "designator_integrity", "query_citations", "suffix_integrity", "appendix_evidence", "titleless_delta", "query_lists", "query_ranges", "connector_operands", "part_ranges", "part_to_ranges", "part_lists", "four_digit_parts", "candidate_titles", "explicit_title_sign", "punctuated_cfr_title", "citation_tokens", "hyphen_tails", "list_recovery", "source_coverage", "required_sections", "rulemaking_sources", "dependency_verification", "lowercase_paragraph_clause", "paragraph_evidence")
 
 
 def overall(report):
@@ -1918,6 +1962,8 @@ def render(report):
         lines.append(f"  {ri['id']} {'PASS' if ri['passed'] else 'FAIL'} relationship integrity violations={ri['violations']} {'; '.join(ri['failures'])}")
         for c in reg["citation_scope"]:
             lines.append(f"  {c['id']} {'PASS' if c['passed'] else 'FAIL'} citation scope '{c['query']}' {'; '.join(c['failures'])}")
+        for x in reg.get("paragraph_evidence", []):
+            lines.append(f"  {x['id']} {'PASS' if x['passed'] else 'FAIL'} paragraph evidence [{x['kind']}] {'; '.join(x['failures'])}")
         for x in reg.get("lowercase_paragraph_clause", []):
             lines.append(f"  {x['id']} {'PASS' if x['passed'] else 'FAIL'} lowercase paragraph clause [{x['kind']}] {'; '.join(x['failures'])}")
         for x in reg.get("dependency_verification", []):
