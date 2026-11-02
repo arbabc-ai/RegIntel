@@ -1806,6 +1806,37 @@ def check_paragraph_evidence_integrity(index, item):
     return {"id": item["id"], "kind": kind, "passed": not failures, "failures": failures[:10]}
 
 
+def check_relative_action_paragraphs(index, item):
+    """Guard for paragraphs named inside a paragraph-qualified section location ("In § 265.7(d), revise paragraph (7)"). `grammar`: such a
+    relative action establishes neither a top-level path nor an inferred joined one (revise/remove/add, nested enclosing designators,
+    whitespace variants), while fully explicit paths after a bare section location are still named. `stored`: every attributed path stored in
+    the evaluated index is still named by its own instruction under the current grammar (a stale or over-eager attribution fails), and no
+    stored path comes from an instruction whose governing location is paragraph-qualified. Textual evidence only; no legal effect is determined."""
+    from . import fedreg
+    failures, kind = [], item["kind"]
+    if kind == "grammar":
+        for t in item["texts"]:
+            got = fedreg.named_paragraph_paths(t["text"])
+            if got != t["paths"]:
+                failures.append(f"'{t['text'][:70]}': named {got}, expected {t['paths']}")
+    elif kind == "stored":
+        checked = 0
+        for doc, loc, instruction, ev in index.conn.execute(
+                """SELECT d.doc_key, p.locator, p.instruction, p.explicit_paragraphs FROM provision p JOIN source_document d ON d.id=p.doc_id
+                   WHERE p.kind='amendment' AND p.instruction IS NOT NULL"""):
+            paths = (json.loads(ev or "{}")).get("paths") or []
+            if not paths:
+                continue
+            checked += 1
+            named = fedreg.named_paragraph_paths(instruction)
+            stale = [p for p in paths if p not in named]
+            if stale:
+                failures.append(f"{doc} {loc}: stored {stale} is not named by its instruction under the current grammar")
+        if not checked:
+            failures.append("no attributed paragraph paths were found to check")
+    return {"id": item["id"], "kind": kind, "passed": not failures, "failures": failures[:10]}
+
+
 def run_regressions(index, path):
     spec = json.loads(Path(path).read_text())
     out = {"version": spec["version"], "task": spec["task"],
@@ -1842,7 +1873,8 @@ def run_regressions(index, path):
            "rulemaking_sources": [check_rulemaking_sources(index, x) for x in spec.get("rulemaking_sources", [])],
            "dependency_verification": [check_dependency_verification(index, x) for x in spec.get("dependency_verification", [])],
            "lowercase_paragraph_clause": [check_lowercase_paragraph_clause(index, x) for x in spec.get("lowercase_paragraph_clause", [])],
-           "paragraph_evidence": [check_paragraph_evidence_integrity(index, x) for x in spec.get("paragraph_evidence", [])]}
+           "paragraph_evidence": [check_paragraph_evidence_integrity(index, x) for x in spec.get("paragraph_evidence", [])],
+           "relative_action_paragraphs": [check_relative_action_paragraphs(index, x) for x in spec.get("relative_action_paragraphs", [])]}
     out["passed"] = (all(d["passed"] for d in out["delta"]) and out["relationship_integrity"]["passed"]
                      and all(c["passed"] for c in out["citation_scope"]) and all(x["passed"] for x in out["status"])
                      and all(x["passed"] for x in out["citation_completeness"])
@@ -1874,12 +1906,13 @@ def run_regressions(index, path):
                      and all(x["passed"] for x in out["rulemaking_sources"])
                      and all(x["passed"] for x in out["dependency_verification"])
                      and all(x["passed"] for x in out["lowercase_paragraph_clause"])
-                     and all(x["passed"] for x in out["paragraph_evidence"]))
+                     and all(x["passed"] for x in out["paragraph_evidence"])
+                     and all(x["passed"] for x in out["relative_action_paragraphs"]))
     return out
 
 
 REGRESSION_GROUPS = ("delta", "relationship_integrity", "citation_scope", "status", "citation_completeness",
-                     "mixed_source", "delta_precision", "instruction_boundary", "current_agreement", "amendatory_lists", "designator_integrity", "query_citations", "suffix_integrity", "appendix_evidence", "titleless_delta", "query_lists", "query_ranges", "connector_operands", "part_ranges", "part_to_ranges", "part_lists", "four_digit_parts", "candidate_titles", "explicit_title_sign", "punctuated_cfr_title", "citation_tokens", "hyphen_tails", "list_recovery", "source_coverage", "required_sections", "rulemaking_sources", "dependency_verification", "lowercase_paragraph_clause", "paragraph_evidence")
+                     "mixed_source", "delta_precision", "instruction_boundary", "current_agreement", "amendatory_lists", "designator_integrity", "query_citations", "suffix_integrity", "appendix_evidence", "titleless_delta", "query_lists", "query_ranges", "connector_operands", "part_ranges", "part_to_ranges", "part_lists", "four_digit_parts", "candidate_titles", "explicit_title_sign", "punctuated_cfr_title", "citation_tokens", "hyphen_tails", "list_recovery", "source_coverage", "required_sections", "rulemaking_sources", "dependency_verification", "lowercase_paragraph_clause", "paragraph_evidence", "relative_action_paragraphs")
 
 
 def overall(report):
@@ -1962,6 +1995,8 @@ def render(report):
         lines.append(f"  {ri['id']} {'PASS' if ri['passed'] else 'FAIL'} relationship integrity violations={ri['violations']} {'; '.join(ri['failures'])}")
         for c in reg["citation_scope"]:
             lines.append(f"  {c['id']} {'PASS' if c['passed'] else 'FAIL'} citation scope '{c['query']}' {'; '.join(c['failures'])}")
+        for x in reg.get("relative_action_paragraphs", []):
+            lines.append(f"  {x['id']} {'PASS' if x['passed'] else 'FAIL'} relative action paragraphs [{x['kind']}] {'; '.join(x['failures'])}")
         for x in reg.get("paragraph_evidence", []):
             lines.append(f"  {x['id']} {'PASS' if x['passed'] else 'FAIL'} paragraph evidence [{x['kind']}] {'; '.join(x['failures'])}")
         for x in reg.get("lowercase_paragraph_clause", []):

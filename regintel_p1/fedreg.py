@@ -309,6 +309,26 @@ def incomplete_after(view, position):
     return bool(r and r[0] == "incomplete")
 
 
+SENTENCE_BREAK = re.compile(r"[.;:]\s")
+SECTION_CITE = re.compile(r"\u00a7\u00a7?\s*\d+\.\d+[A-Za-z]?((?:\s*\([A-Za-z0-9]+\))*)")
+
+
+def _relative_to_enclosing_location(stripped, match, locations):
+    """True when `match` (an action or location clause naming paragraphs) sits inside a location that already carries a paragraph.
+
+    Within the same sentence the governing location is the last section citation before the match. If that citation carries a paragraph
+    designator (`In § 265.7(d), revise paragraph (7)`), the named paragraph is relative to it and is not a complete path. If an earlier
+    lowercase location clause (`In § 265.7, in paragraph (d), revise paragraph (7)`) has already fixed a paragraph, the action is
+    relative to that path too. Neither is established as a top-level path or inferred by joining designators: the unit stays section context.
+    """
+    breaks = [b.end() for b in SENTENCE_BREAK.finditer(stripped, 0, match.start())]
+    start = breaks[-1] if breaks else 0
+    cites = list(SECTION_CITE.finditer(stripped, start, match.start()))
+    if cites and cites[-1].group(1).strip():
+        return True
+    return any(loc is not match and loc.end() <= match.start() and loc.start() >= start for loc in locations)
+
+
 def named_paragraph_paths(text):
     """Complete paragraph paths an instruction names as objects of an action, e.g. `(c)(1)`, `(a)(2)(i)`, `(i)`.
 
@@ -319,8 +339,11 @@ def named_paragraph_paths(text):
     """
     stripped = parsing_view(QUOTED.sub(" \u2039q\u203a ", text))
     paths = []
-    matches = sorted([*PARA_ACTION.finditer(stripped), *PARA_LOCATION.finditer(stripped)], key=lambda m: m.start())
+    locations = list(PARA_LOCATION.finditer(stripped))
+    matches = sorted([*PARA_ACTION.finditer(stripped), *locations], key=lambda m: m.start())
     for m in matches:
+        if _relative_to_enclosing_location(stripped, m, locations):
+            continue  # a paragraph named inside a paragraph-qualified location is relative to it: not a path, not an inferred one
         previous = None  # list of designators of the previous path; "unknown" once shorthand could not be settled
         for token in re.finditer(PARA_TOKEN, m.group(1)):
             if incomplete_after(stripped, m.start(1) + token.end()):
