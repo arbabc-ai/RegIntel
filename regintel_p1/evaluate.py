@@ -1837,6 +1837,54 @@ def check_relative_action_paragraphs(index, item):
     return {"id": item["id"], "kind": kind, "passed": not failures, "failures": failures[:10]}
 
 
+def check_enumerated_relative_paragraphs(index, item):
+    """Guard for enumerated operands under a paragraph-qualified location ("Amend § 35.4(a)(2) by: a. In paragraph (i), removing …; b. …").
+    `grammar`: literal expected paths for colon, semicolon, sentence and enumerator variants (relative operands name nothing; a new location
+    citation or a bare-section location still names explicit paths; reference citations and quoted text do not change the context).
+    `acquired`: the hash-verified acquired instruction keeps its operands as section context: the source sha256 matches the pinned value, the
+    operands read independently of the parser equal the literal list, the stored attribution is the literal expected paths, per-instrument
+    delta is section-only for each operand, exact and hybrid answers in future and both scope at small budgets are not evidence_found, and an
+    excluded-part filter returns nothing. Expected values are literals, never the parser's own output. Textual evidence only."""
+    from . import fedreg
+    failures, kind = [], item["kind"]
+    if kind == "grammar":
+        for t in item["texts"]:
+            got = fedreg.named_paragraph_paths(t["text"])
+            if got != t["paths"]:
+                failures.append(f"'{t['text'][:70]}': named {got}, expected {t['paths']}")
+    elif kind == "acquired":
+        row = index.conn.execute("SELECT sha256 FROM source_document WHERE doc_key=?", (item["doc_key"],)).fetchone()
+        if row is not None:
+            if row[0] != item["sha256"]:
+                failures.append(f"{item['doc_key']}: source sha256 {row[0]} is not the pinned {item['sha256']}")
+            rec = index.conn.execute("""SELECT p.instruction, p.explicit_paragraphs FROM provision p JOIN source_document d ON d.id=p.doc_id
+                                        WHERE d.doc_key=? AND p.locator=?""", (item["doc_key"], item["locator"])).fetchone()
+            if rec is None or not rec[0].startswith(item["instruction_prefix"]):
+                failures.append(f"{item['locator']}: instruction not found or different")
+            else:
+                operands = ["(" + m + ")" for m in re.findall(item["operand_regex"], rec[0])]
+                if operands != item["operands"]:
+                    failures.append(f"operands {operands} != {item['operands']}")
+                stored = json.loads(rec[1] or "{}").get("paths")
+                if stored != item["expected_paths"]:
+                    failures.append(f"stored paths {stored} != {item['expected_paths']}")
+                for op in item["operands"]:
+                    for template in item["citations"]:
+                        cite = template.replace("{op}", op)
+                        inst = {g["doc_key"]: g["paragraph_precision"] for g in index.delta(cite)["instruments"]}
+                        q = inst.get(item["doc_key"])
+                        if q is None or q["resolved"] or q["achieved"] != "section_only" or q["supported_by"]:
+                            failures.append(f"{cite}: {item['doc_key']} is not section context only")
+                        for mode in ("exact", "hybrid"):
+                            for scope in ("future", "both"):
+                                for k in (1, 2):
+                                    if index.answer(cite, mode=mode, scope=scope, k=k)["status"] == "evidence_found":
+                                        failures.append(f"{cite} {mode}/{scope}/k{k}: evidence_found without paragraph support")
+                        if index.answer(cite, mode="exact", scope="future", k=1, parts=[item["excluded_part"]])["results"]:
+                            failures.append(f"{cite}: an excluded-part filter still returned results")
+    return {"id": item["id"], "kind": kind, "passed": not failures, "failures": failures[:10]}
+
+
 def run_regressions(index, path):
     spec = json.loads(Path(path).read_text())
     out = {"version": spec["version"], "task": spec["task"],
@@ -1874,7 +1922,8 @@ def run_regressions(index, path):
            "dependency_verification": [check_dependency_verification(index, x) for x in spec.get("dependency_verification", [])],
            "lowercase_paragraph_clause": [check_lowercase_paragraph_clause(index, x) for x in spec.get("lowercase_paragraph_clause", [])],
            "paragraph_evidence": [check_paragraph_evidence_integrity(index, x) for x in spec.get("paragraph_evidence", [])],
-           "relative_action_paragraphs": [check_relative_action_paragraphs(index, x) for x in spec.get("relative_action_paragraphs", [])]}
+           "relative_action_paragraphs": [check_relative_action_paragraphs(index, x) for x in spec.get("relative_action_paragraphs", [])],
+           "enumerated_relative_paragraphs": [check_enumerated_relative_paragraphs(index, x) for x in spec.get("enumerated_relative_paragraphs", [])]}
     out["passed"] = (all(d["passed"] for d in out["delta"]) and out["relationship_integrity"]["passed"]
                      and all(c["passed"] for c in out["citation_scope"]) and all(x["passed"] for x in out["status"])
                      and all(x["passed"] for x in out["citation_completeness"])
@@ -1907,12 +1956,13 @@ def run_regressions(index, path):
                      and all(x["passed"] for x in out["dependency_verification"])
                      and all(x["passed"] for x in out["lowercase_paragraph_clause"])
                      and all(x["passed"] for x in out["paragraph_evidence"])
-                     and all(x["passed"] for x in out["relative_action_paragraphs"]))
+                     and all(x["passed"] for x in out["relative_action_paragraphs"])
+                     and all(x["passed"] for x in out["enumerated_relative_paragraphs"]))
     return out
 
 
 REGRESSION_GROUPS = ("delta", "relationship_integrity", "citation_scope", "status", "citation_completeness",
-                     "mixed_source", "delta_precision", "instruction_boundary", "current_agreement", "amendatory_lists", "designator_integrity", "query_citations", "suffix_integrity", "appendix_evidence", "titleless_delta", "query_lists", "query_ranges", "connector_operands", "part_ranges", "part_to_ranges", "part_lists", "four_digit_parts", "candidate_titles", "explicit_title_sign", "punctuated_cfr_title", "citation_tokens", "hyphen_tails", "list_recovery", "source_coverage", "required_sections", "rulemaking_sources", "dependency_verification", "lowercase_paragraph_clause", "paragraph_evidence", "relative_action_paragraphs")
+                     "mixed_source", "delta_precision", "instruction_boundary", "current_agreement", "amendatory_lists", "designator_integrity", "query_citations", "suffix_integrity", "appendix_evidence", "titleless_delta", "query_lists", "query_ranges", "connector_operands", "part_ranges", "part_to_ranges", "part_lists", "four_digit_parts", "candidate_titles", "explicit_title_sign", "punctuated_cfr_title", "citation_tokens", "hyphen_tails", "list_recovery", "source_coverage", "required_sections", "rulemaking_sources", "dependency_verification", "lowercase_paragraph_clause", "paragraph_evidence", "relative_action_paragraphs", "enumerated_relative_paragraphs")
 
 
 def overall(report):
@@ -1995,6 +2045,8 @@ def render(report):
         lines.append(f"  {ri['id']} {'PASS' if ri['passed'] else 'FAIL'} relationship integrity violations={ri['violations']} {'; '.join(ri['failures'])}")
         for c in reg["citation_scope"]:
             lines.append(f"  {c['id']} {'PASS' if c['passed'] else 'FAIL'} citation scope '{c['query']}' {'; '.join(c['failures'])}")
+        for x in reg.get("enumerated_relative_paragraphs", []):
+            lines.append(f"  {x['id']} {'PASS' if x['passed'] else 'FAIL'} enumerated relative paragraphs [{x['kind']}] {'; '.join(x['failures'])}")
         for x in reg.get("relative_action_paragraphs", []):
             lines.append(f"  {x['id']} {'PASS' if x['passed'] else 'FAIL'} relative action paragraphs [{x['kind']}] {'; '.join(x['failures'])}")
         for x in reg.get("paragraph_evidence", []):

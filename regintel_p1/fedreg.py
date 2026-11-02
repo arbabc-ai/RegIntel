@@ -309,24 +309,30 @@ def incomplete_after(view, position):
     return bool(r and r[0] == "incomplete")
 
 
-SENTENCE_BREAK = re.compile(r"[.;:]\s")
-SECTION_CITE = re.compile(r"\u00a7\u00a7?\s*\d+\.\d+[A-Za-z]?((?:\s*\([A-Za-z0-9]+\))*)")
+# A section citation that is a *location* (introduced by a clause-initial capital "In" or an action verb), as opposed to a reference such as
+# "for purposes of § 3.10(a)(5)" or "as described in § 3.22(c)", which never changes the governing location.
+LOCATION_CITE = re.compile(
+    rf"(?:(?<![A-Za-z])(?-i:In)|\b{VERB})\s+(?:new\s+)?\u00a7\u00a7?\s*\d+\.\d+[A-Za-z]?((?:\s*\([A-Za-z0-9]+\))*)", re.I)
 
 
 def _relative_to_enclosing_location(stripped, match, locations):
     """True when `match` (an action or location clause naming paragraphs) sits inside a location that already carries a paragraph.
 
-    Within the same sentence the governing location is the last section citation before the match. If that citation carries a paragraph
-    designator (`In § 265.7(d), revise paragraph (7)`), the named paragraph is relative to it and is not a complete path. If an earlier
-    lowercase location clause (`In § 265.7, in paragraph (d), revise paragraph (7)`) has already fixed a paragraph, the action is
-    relative to that path too. Neither is established as a top-level path or inferred by joining designators: the unit stays section context.
+    The governing location is the last section *location* citation (`In § …`, `Amend § …`; not a reference such as `for purposes of § 3.10(a)(5)`)
+    before the match anywhere in the instruction: colons, semicolons, sentence
+    ends and enumerators (`Amend § 35.4(a)(2) by: a. In paragraph (i), removing …; b. In paragraph (ii), …`) do not end it; only a new
+    section citation does. If that citation carries a paragraph designator, the named paragraph is relative to it and is not a complete
+    path. If an earlier lowercase location clause after that citation (`In § 265.7, in paragraph (d), revise paragraph (7)`) has already
+    fixed a paragraph, the action is relative to that path too. Neither is established as a top-level path or inferred by joining
+    designators: the unit stays section context.
     """
-    breaks = [b.end() for b in SENTENCE_BREAK.finditer(stripped, 0, match.start())]
-    start = breaks[-1] if breaks else 0
-    cites = list(SECTION_CITE.finditer(stripped, start, match.start()))
+    if match in locations:
+        return False  # a lowercase location clause carries its own bare section citation, which governs it
+    cites = list(LOCATION_CITE.finditer(stripped, 0, match.start()))
+    start = cites[-1].start() if cites else 0
     if cites and cites[-1].group(1).strip():
         return True
-    return any(loc is not match and loc.end() <= match.start() and loc.start() >= start for loc in locations)
+    return any(loc is not match and loc.end() <= match.start() and loc.end() > start for loc in locations)
 
 
 def named_paragraph_paths(text):

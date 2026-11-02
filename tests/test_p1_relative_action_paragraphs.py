@@ -108,7 +108,7 @@ class AcquiredCorpusTests(unittest.TestCase):
         self.assertEqual(got["2026-04373:reg:6"], ["(a)(2)(i)"])
         self.assertEqual(got["2026-04373:reg:9"], [P7])
 
-    def test_the_only_acquired_change_is_the_relative_330_11_a_action(self):
+    def test_only_relative_action_instructions_change_in_the_acquired_corpus(self):
         manifest = json.loads((CORPUS / "manifest.json").read_text())["documents"]
 
         def named():
@@ -123,10 +123,11 @@ class AcquiredCorpusTests(unittest.TestCase):
         with mock.patch.object(fedreg, "_relative_to_enclosing_location", lambda *a: False):
             old = named()
         changed = sorted(k for k in new if new[k] != old[k])
-        self.assertEqual(len(changed), 1, changed)
-        key, pos = changed[0]
-        self.assertEqual((key, old[changed[0]], new[changed[0]]), ("fr:2026-06974", ["(3)"], []))
-        ins = self.units(key)[pos]["instruction"]
+        # Task 38 changed fr:2026-06974; task 39 (enumerated operands under a paragraph-qualified location) adds fr:2026-16454.
+        self.assertEqual([(k[0], old[k], new[k]) for k in changed],
+                         [("fr:2026-06974", ["(3)"], []),
+                          ("fr:2026-16454", ["(i)", "(ii)", "(iii)", "(iv)", "(v)", "(vi)", "(vii)"], [])], changed)
+        ins = self.units("fr:2026-06974")[changed[0][1]]["instruction"]
         self.assertIn("Amend § 330.11(a) by adding paragraph (3)", ins)  # the path is (a)(3): the old top-level (3) was false evidence
 
 

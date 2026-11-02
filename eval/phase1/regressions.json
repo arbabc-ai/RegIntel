@@ -1,6 +1,6 @@
 {
- "version": "p1-regress-0.37",
- "task": "S7-P1-EVIDENCE-BOUNDARIES-01 + S7-P1-EVIDENCE-COMPLETENESS-02 + S7-P1-COVERAGE-GUARDS-03 + S7-P1-CITATION-COMPLETENESS-04 + S7-P1-FUTURE-PARAGRAPH-PRECISION-05 + S7-P1-MIXED-SOURCE-COVERAGE-06 + S7-P1-DELTA-PRECISION-07 + S7-P1-INSTRUCTION-BOUNDARY-08 + S7-P1-RESERVED-RANGE-CONSISTENCY-09 + S7-P1-AMENDATORY-LIST-PRECISION-11 + S7-P1-DESIGNATOR-TOKEN-INTEGRITY-12 + S7-P1-QUERY-CITATION-INTEGRITY-13 + S7-P1-SUFFIX-INTEGRITY-14 + S7-P1-SUFFIX-INTEGRITY-14 + S7-P1-SUFFIX-BOUNDARY-15 + S7-P1-APPENDIX-EVIDENCE-16 + S7-P1-TITLELESS-DELTA-17 + S7-P1-QUERY-LIST-COMPLETENESS-18 + S7-P1-QUERY-RANGE-INTEGRITY-19 + S7-P1-CONNECTOR-DESIGNATOR-INTEGRITY-20 + S7-P1-PART-RANGE-INTEGRITY-21 + S7-P1-PART-TO-RANGE-22 + S7-P1-PART-LIST-COMPLETENESS-23 + S7-P1-FOUR-DIGIT-PART-OPERANDS-24 + S7-P1-DELTA-CANDIDATE-TITLE-25 + S7-P1-EXPLICIT-TITLE-SECTION-SIGN-26 + S7-P1-PUNCTUATED-CFR-TITLE-27 + S7-P1-CITATION-TOKEN-INTEGRITY-28 + S7-P1-HYPHEN-TAIL-INTEGRITY-29 + S7-P1-MALFORMED-LIST-RECOVERY-30 + S7-P1-INDEX-SOURCE-COVERAGE-31 + S7-P1-REQUIRED-SECTIONS-32 + S7-P1-RULEMAKING-SOURCE-AVAILABILITY-33 + S7-P1-DEPENDENCY-VERIFICATION-34 + S7-P1-UNVERIFIED-SOURCE-DIAGNOSTICS-35 + S7-P1-LOWERCASE-PARAGRAPH-CLAUSE-36 + S7-P1-PARAGRAPH-EVIDENCE-INTEGRITY-37 + S7-P1-RELATIVE-ACTION-PARAGRAPHS-38",
+ "version": "p1-regress-0.38",
+ "task": "S7-P1-EVIDENCE-BOUNDARIES-01 + S7-P1-EVIDENCE-COMPLETENESS-02 + S7-P1-COVERAGE-GUARDS-03 + S7-P1-CITATION-COMPLETENESS-04 + S7-P1-FUTURE-PARAGRAPH-PRECISION-05 + S7-P1-MIXED-SOURCE-COVERAGE-06 + S7-P1-DELTA-PRECISION-07 + S7-P1-INSTRUCTION-BOUNDARY-08 + S7-P1-RESERVED-RANGE-CONSISTENCY-09 + S7-P1-AMENDATORY-LIST-PRECISION-11 + S7-P1-DESIGNATOR-TOKEN-INTEGRITY-12 + S7-P1-QUERY-CITATION-INTEGRITY-13 + S7-P1-SUFFIX-INTEGRITY-14 + S7-P1-SUFFIX-INTEGRITY-14 + S7-P1-SUFFIX-BOUNDARY-15 + S7-P1-APPENDIX-EVIDENCE-16 + S7-P1-TITLELESS-DELTA-17 + S7-P1-QUERY-LIST-COMPLETENESS-18 + S7-P1-QUERY-RANGE-INTEGRITY-19 + S7-P1-CONNECTOR-DESIGNATOR-INTEGRITY-20 + S7-P1-PART-RANGE-INTEGRITY-21 + S7-P1-PART-TO-RANGE-22 + S7-P1-PART-LIST-COMPLETENESS-23 + S7-P1-FOUR-DIGIT-PART-OPERANDS-24 + S7-P1-DELTA-CANDIDATE-TITLE-25 + S7-P1-EXPLICIT-TITLE-SECTION-SIGN-26 + S7-P1-PUNCTUATED-CFR-TITLE-27 + S7-P1-CITATION-TOKEN-INTEGRITY-28 + S7-P1-HYPHEN-TAIL-INTEGRITY-29 + S7-P1-MALFORMED-LIST-RECOVERY-30 + S7-P1-INDEX-SOURCE-COVERAGE-31 + S7-P1-REQUIRED-SECTIONS-32 + S7-P1-RULEMAKING-SOURCE-AVAILABILITY-33 + S7-P1-DEPENDENCY-VERIFICATION-34 + S7-P1-UNVERIFIED-SOURCE-DIAGNOSTICS-35 + S7-P1-LOWERCASE-PARAGRAPH-CLAUSE-36 + S7-P1-PARAGRAPH-EVIDENCE-INTEGRITY-37 + S7-P1-RELATIVE-ACTION-PARAGRAPHS-38 + S7-P1-ENUMERATED-RELATIVE-PARAGRAPHS-39",
  "note": "Deterministic regression checks over the acquired corpus for amendment-target integrity and retrieval scope filtering. Kept separate from questions.json so the 37-item baseline stays frozen. A pass means the contract holds, not that any rule applies to a bank.",
  "delta": [
   {
@@ -2611,6 +2611,118 @@
   {
    "id": "RA02",
    "kind": "stored"
+  }
+ ],
+ "enumerated_relative_paragraphs": [
+  {
+   "id": "ER01",
+   "kind": "grammar",
+   "texts": [
+    {
+     "text": "Amend § 265.7(d) by: a. In paragraph (7), removing “x”; b. In paragraph (8), removing “y”.",
+     "paths": []
+    },
+    {
+     "text": "In § 265.7(d): a. Revise paragraph (7); b. Remove paragraph (8).",
+     "paths": []
+    },
+    {
+     "text": "In § 265.7(d), revise paragraph (7); remove paragraph (8); add paragraph (9) to read as follows:",
+     "paths": []
+    },
+    {
+     "text": "Amend § 265.7(d) by: 1. In paragraph (7), removing “x”. 2. In paragraph (8), removing “y”.",
+     "paths": []
+    },
+    {
+     "text": "Amend § 265.7(d)(7) by: i. In paragraph (ii), removing “x”; ii. In paragraph (iii), removing “y”.",
+     "paths": []
+    },
+    {
+     "text": "Amend § 265.7(d) by:\n a. In paragraph ( 7 ),\n removing “x”;\n b. In paragraph (8), removing “y”.",
+     "paths": []
+    },
+    {
+     "text": "Amend § 265.7(d) by: a. In paragraph (7), removing “x” and adding in its place “for purposes of § 3.10(a)(5)”; b. In paragraph (8), removing “y”.",
+     "paths": []
+    },
+    {
+     "text": "In § 265.7(d), revise paragraph (7) as described in § 3.22; revise paragraph (8).",
+     "paths": []
+    },
+    {
+     "text": "Amend § 265.7 by: a. In paragraph (d)(7), removing “x”; b. In paragraph (e)(1), removing “y”.",
+     "paths": [
+      "(d)(7)",
+      "(e)(1)"
+     ]
+    },
+    {
+     "text": "In § 265.7: a. Revise paragraphs (a)(1) and (a)(4); b. Remove paragraph (a)(6).",
+     "paths": [
+      "(a)(1)",
+      "(a)(4)",
+      "(a)(6)"
+     ]
+    },
+    {
+     "text": "In § 265.7, revise paragraph (a) for purposes of § 3.10(a)(5); revise paragraph (c)(2).",
+     "paths": [
+      "(a)",
+      "(c)(2)"
+     ]
+    },
+    {
+     "text": "Amend § 265.7(d) by: a. In paragraph (7), removing “x”. b. In § 265.8, in paragraph (c), removing “y”.",
+     "paths": [
+      "(c)"
+     ]
+    },
+    {
+     "text": "Amend § 265.7(d) by: a. In paragraph (7), removing “x”. b. In § 265.8, revise paragraph (a)(2).",
+     "paths": [
+      "(a)(2)"
+     ]
+    },
+    {
+     "text": "In § 265.7(d), revise the heading; b. In § 265.9, revise paragraph (b)(3).",
+     "paths": [
+      "(b)(3)"
+     ]
+    },
+    {
+     "text": "Amend § 265.7 by revising the text to read “a. In paragraph (7), x; b. In paragraph (8), y”.",
+     "paths": []
+    },
+    {
+     "text": "Amend § 265.7(d) by: a. Revising the text to read “In § 265.8, in paragraph (c), remove x.”",
+     "paths": []
+    }
+   ]
+  },
+  {
+   "id": "ER02",
+   "kind": "acquired",
+   "doc_key": "fr:2026-16454",
+   "sha256": "521f93de594fec6be97e915afbb340ab28b9a190473a9dac18ac55380706180f",
+   "locator": "2026-16454:reg:1:35.4:61",
+   "instruction_prefix": "9. Amend § 35.4(a)(2) by: a. In paragraph (i),",
+   "operand_regex": "In paragraph \\(([ivx]+)\\)",
+   "operands": [
+    "(i)",
+    "(ii)",
+    "(iii)",
+    "(iv)",
+    "(v)",
+    "(vi)",
+    "(vii)"
+   ],
+   "expected_paths": [],
+   "citations": [
+    "12 CFR 35.4(a)(2){op}",
+    "12 CFR 35.4{op}"
+   ],
+   "excluded_part": "12:3"
   }
  ]
 }
