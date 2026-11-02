@@ -7,6 +7,7 @@ A retrieved provision is a hit when it matches any gold matcher:
 Gold matchers are validated against the index first; a matcher that matches nothing is reported as invalid
 rather than silently counted as a miss.
 """
+import hashlib
 import json
 import re
 from pathlib import Path
@@ -2146,8 +2147,9 @@ REGRESSION_GROUPS = ("delta", "relationship_integrity", "citation_scope", "statu
 def overall(report):
     """One explicit pass/fail for the whole evaluation.
 
-    It fails when any frozen delta or status check fails, a gold matcher is invalid, a part filter is violated, or any
-    regression group has a failing check. Retrieval hit rates and MRR are measurements only: no ranking threshold is
+    It fails when any frozen delta or status check fails, a gold matcher is invalid, a part filter is violated, the versioned questions
+    record does not match the frozen record it supersedes, or any regression group has a failing check. A status item whose expectation a
+    recorded decision superseded is reported under `superseded` (with its old and new result) and is judged by its current expectation. Retrieval hit rates and MRR are measurements only: no ranking threshold is
     invented here, so a low rate never fails the evaluation by itself. Nothing is waived: a failing check stays a
     failure whatever its history.
     """
@@ -2156,6 +2158,7 @@ def overall(report):
         "status_checks": [s["id"] for s in report["status"] if not s["passed"]],
         "invalid_gold": [i["id"] for i in report["retrieval_items"] if i["invalid_gold"]],
         "part_filter_violations": [f"{c['id']}/{c['retriever']}" for c in report["filter_checks"] if not c["respected"]],
+        "record_integrity": list(report.get("record_integrity", [])),
         "regression_groups": {},
     }
     reg = report.get("regressions")
@@ -2170,12 +2173,95 @@ def overall(report):
             failures["regression_groups"]["regression_summary"] = ["regressions.passed is false"]
     counts = {k: (sum(len(v) for v in val.values()) if isinstance(val, dict) else len(val)) for k, val in failures.items()}
     return {"passed": not any(counts.values()), "failure_counts": counts, "failures": failures,
+            "superseded": [x["id"] for x in report.get("superseded", [])],
             "regressions_run": bool(reg),
             "retrieval": "reported as measurements only; no ranking threshold is applied"}
 
 
+def _expect_core(expect):
+    """An expectation without the fields a superseding decision may change."""
+    return {k: v for k, v in expect.items() if k not in ("status", "gap_topic")}
+
+
+def record_integrity(questions_path, spec):
+    """Check a versioned questions record against the frozen record it supersedes, read-only.
+
+    A record may declare `supersedes`: the frozen file (relative to the record), its pinned sha256 and the status items whose expectation a
+    recorded decision changed. The frozen file is never edited. This returns (baseline spec or None, problems): the pinned hash must match
+    the bytes on disk, and the new record may differ from the frozen one only in its version, the `supersedes` block, the changelog and the
+    `status`/`gap_topic` of the listed items (ids, queries, scopes, guards and notes must be unchanged; every other item must be identical).
+    """
+    sup = spec.get("supersedes")
+    if not sup:
+        return None, []
+    problems = []
+    base_path = Path(questions_path).parent / sup["file"]
+    if not base_path.exists():
+        return None, [f"superseded record {sup['file']} not found"]
+    raw = base_path.read_bytes()
+    digest = hashlib.sha256(raw).hexdigest()
+    if digest != sup["sha256"]:
+        problems.append(f"{sup['file']} sha256 {digest} is not the pinned {sup['sha256']}")
+    base = json.loads(raw)
+    if base.get("version") != sup["version"]:
+        problems.append(f"{sup['file']} version {base.get('version')} is not the declared {sup['version']}")
+    for key in ("retrieval", "delta", "frozen_before_first_run", "note"):
+        if spec.get(key) != base.get(key):
+            problems.append(f"{key} differs from the superseded record")
+    new_status = {x["id"]: x for x in spec["status"]}
+    old_status = {x["id"]: x for x in base["status"]}
+    if [x["id"] for x in spec["status"]] != [x["id"] for x in base["status"]]:
+        problems.append("status item ids or order differ from the superseded record")
+    items = sup.get("items", {})
+    for sid in old_status:
+        if sid not in new_status:
+            continue
+        old, cur = old_status[sid], new_status[sid]
+        if sid not in items:
+            if old != cur:
+                problems.append(f"{sid} differs from the superseded record but is not declared as superseded")
+            continue
+        entry = items[sid]
+        if (old["query"], old.get("scope")) != (cur["query"], cur.get("scope")):
+            problems.append(f"{sid} query or scope changed")
+        if _expect_core(old["expect"]) != _expect_core(cur["expect"]):
+            problems.append(f"{sid} guards or notes changed")
+        if entry.get("v0_2_expect") != old["expect"]:
+            problems.append(f"{sid} recorded v0.2 expectation does not match the superseded record")
+        if not entry.get("decision", {}).get("file") or not entry.get("decision", {}).get("sha256"):
+            problems.append(f"{sid} does not cite its decision file and hash")
+    for sid in items:
+        if sid not in old_status:
+            problems.append(f"{sid} is declared superseded but does not exist in the superseded record")
+    return base, problems
+
+
+def superseded_results(index, spec, base):
+    """Run the superseded record's expectation of each declared item next to the new one and report both, never as a silent waiver."""
+    out = []
+    if not base:
+        return out
+    old_status = {x["id"]: x for x in base["status"]}
+    new_status = {x["id"]: x for x in spec["status"]}
+    for sid, entry in spec["supersedes"]["items"].items():
+        if sid not in old_status or sid not in new_status:
+            continue
+        old = check_status(index, old_status[sid])
+        cur = check_status(index, new_status[sid])
+        out.append({"id": sid, "query": new_status[sid]["query"], "scope": new_status[sid].get("scope"),
+                    "superseded_by": entry["decision"], "change": entry.get("change"),
+                    "superseded_record": {"file": spec["supersedes"]["file"], "version": spec["supersedes"]["version"],
+                                          "sha256": spec["supersedes"]["sha256"], "expect": old_status[sid]["expect"],
+                                          "result": {"passed": old["passed"], "status": old["status"], "failures": old["failures"]}},
+                    "current_record": {"version": spec["version"], "expect": new_status[sid]["expect"],
+                                       "result": {"passed": cur["passed"], "status": cur["status"], "failures": cur["failures"]}}})
+    return out
+
+
 def run(index, questions_path, regressions_path=None):
-    spec = json.loads(Path(questions_path).read_text())
+    raw = Path(questions_path).read_bytes()
+    spec = json.loads(raw)
+    base, problems = record_integrity(questions_path, spec)
     per_item, summary = run_retrieval(index, spec["retrieval"])
     deltas = [check_delta(index, d) for d in spec["delta"]]
     statuses = [check_status(index, s) for s in spec["status"]]
@@ -2183,6 +2269,9 @@ def run(index, questions_path, regressions_path=None):
                if "filter_respected" in r["retrievers"][n]]
     regressions = run_regressions(index, regressions_path) if regressions_path else None
     report = {"questions_version": spec["version"], "as_of": index.as_of, "index": index.meta, "regressions": regressions,
+              "questions_record": {"file": Path(questions_path).name, "version": spec["version"], "sha256": hashlib.sha256(raw).hexdigest(),
+                                   "supersedes": ({k: spec["supersedes"][k] for k in ("file", "version", "sha256")} if spec.get("supersedes") else None)},
+              "record_integrity": problems, "superseded": superseded_results(index, spec, base),
               "retrieval_summary": summary, "retrieval_items": per_item, "delta": deltas, "status": statuses,
               "filter_checks": [{"id": i, "retriever": n, "respected": ok} for i, ok, n in filters]}
     report["overall"] = overall(report)
@@ -2214,6 +2303,19 @@ def render(report):
     lines.append("Status / refusal checks")
     for s in report["status"]:
         lines.append(f"  {s['id']} {'PASS' if s['passed'] else 'FAIL'} status={s['status']} results={s['results']} {'; '.join(s['failures'])}")
+    rec = report.get("questions_record")
+    if rec and rec.get("supersedes"):
+        sup = rec["supersedes"]
+        lines.append(f"Questions record {rec['file']} ({rec['version']}, sha256 {rec['sha256'][:16]}…) supersedes {sup['file']} ({sup['version']}, pinned sha256 {sup['sha256'][:16]}…)")
+        for p in report.get("record_integrity", []):
+            lines.append(f"  RECORD INTEGRITY FAIL: {p}")
+        for x in report.get("superseded", []):
+            old, cur = x["superseded_record"], x["current_record"]
+            lines.append(f"  {x['id']} SUPERSEDED by {x['superseded_by']['file']} (sha256 {x['superseded_by']['sha256'][:16]}…): "
+                         f"{old['version']} expected {old['expect']['status']} -> result {'PASS' if old['result']['passed'] else 'FAIL'} "
+                         f"({'; '.join(old['result']['failures']) or 'no failure'}); {cur['version']} expects {cur['expect']['status']}"
+                         f"{' / gap ' + cur['expect']['gap_topic'] if cur['expect'].get('gap_topic') else ''} -> result {'PASS' if cur['result']['passed'] else 'FAIL'}"
+                         f" [old outcome recorded, not waived]")
     reg = report.get("regressions")
     if reg:
         lines.append(f"Boundary regressions ({reg['task']}, {reg['version']}): {'PASS' if reg['passed'] else 'FAIL'}")

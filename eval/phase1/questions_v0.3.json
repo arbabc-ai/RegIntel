@@ -1,0 +1,587 @@
+{
+ "version": "p1-eval-0.3",
+ "frozen_before_first_run": true,
+ "note": "Hand-written development questions over the 2026-10-29 acquired corpus. Gold locators were chosen by reading the acquired text, not by looking at retriever output. Small N: results are a smoke test and a regression baseline, not a retrieval-quality claim. A hit means the retrieved provision equals a gold locator, sits beneath it, or lies in the named section/document; it never means the rule applies to any bank.",
+ "supersedes": {
+  "file": "questions.json",
+  "version": "p1-eval-0.2",
+  "sha256": "ce470ba63eb97407af10477fdbf397d51a16a9f97383643f40e010570c90dc62",
+  "rule": "v0.2 stays pinned and is never edited. v0.3 differs from v0.2 only in the version, this block, the changelog and the expect.status/expect.gap_topic of the items listed here; the evaluator runs the v0.2 expectation of each listed item alongside the v0.3 one and reports it as superseded by the decision, not as a failure.",
+  "items": {
+   "S05": {
+    "decision": {
+     "file": "2026-11-02_S7_P1_S05_S06_FOUNDER_DECISION.md",
+     "sha256": "a3c1d0c971de8f40fe2f51556f57e4d48759b7236a6e7498e08d9665e488251c",
+     "location": "AI-OS/projects/velodyn/Velodyn_BankOS/claude/s7-regintel-rag/",
+     "decided_by": "operator/founder",
+     "date": "2026-11-02"
+    },
+    "v0_2_expect": {
+     "status": "evidence_found",
+     "no_proposal_state_prefix_in": [
+      "final",
+      "current"
+     ]
+    },
+    "change": "expect.status evidence_found -> partial_evidence; add gap_topic none_matched; no_proposal_state_prefix_in preserved"
+   },
+   "S06": {
+    "decision": {
+     "file": "2026-11-02_S7_P1_S05_S06_FOUNDER_DECISION.md",
+     "sha256": "a3c1d0c971de8f40fe2f51556f57e4d48759b7236a6e7498e08d9665e488251c",
+     "location": "AI-OS/projects/velodyn/Velodyn_BankOS/claude/s7-regintel-rag/",
+     "decided_by": "operator/founder",
+     "date": "2026-11-02"
+    },
+    "v0_2_expect": {
+     "status": "evidence_found",
+     "note": "no stablecoin text exists in acquired eCFR baseline parts; results must be current-baseline provisions labelled as such, never future-rule text"
+    },
+    "change": "expect.status evidence_found -> partial_evidence; add gap_topic stablecoin_genius; current-baseline-only note preserved"
+   }
+  }
+ },
+ "retrieval": [
+  {
+   "id": "R01",
+   "category": "exact_citation",
+   "query": "What does 12 CFR 217.11 say about the capital conservation buffer?",
+   "scope": "current",
+   "gold": [
+    {
+     "doc_key": "ecfr:12:217",
+     "section_no": "217.11"
+    }
+   ]
+  },
+  {
+   "id": "R02",
+   "category": "exact_citation",
+   "query": "§ 3.12(c)(1) grace period for a bank that ceases to be a qualifying community banking organization",
+   "scope": "current",
+   "gold": [
+    {
+     "doc_key": "ecfr:12:3",
+     "locator": "3.12(c)(1)"
+    }
+   ]
+  },
+  {
+   "id": "R03",
+   "category": "exact_citation",
+   "query": "31 CFR 1020.320 report of suspicious transactions",
+   "scope": "current",
+   "gold": [
+    {
+     "doc_key": "ecfr:31:1020",
+     "section_no": "1020.320"
+    }
+   ]
+  },
+  {
+   "id": "R04",
+   "category": "concept",
+   "query": "minimum common equity tier 1 capital ratio",
+   "scope": "current",
+   "gold": [
+    {
+     "doc_key": "ecfr:12:3",
+     "locator": "3.10(a)(1)(i)"
+    },
+    {
+     "doc_key": "ecfr:12:217",
+     "locator": "217.10(a)(1)(i)"
+    },
+    {
+     "doc_key": "ecfr:12:324",
+     "locator": "324.10(a)(1)(i)"
+    }
+   ]
+  },
+  {
+   "id": "R05",
+   "category": "concept",
+   "query": "minimum liquidity coverage ratio requirement calculate and maintain",
+   "scope": "current",
+   "gold": [
+    {
+     "doc_key": "ecfr:12:249",
+     "locator": "249.10(a)"
+    }
+   ]
+  },
+  {
+   "id": "R06",
+   "category": "concept",
+   "query": "customer identification program minimum requirements for banks",
+   "scope": "current",
+   "gold": [
+    {
+     "doc_key": "ecfr:31:1020",
+     "section_no": "1020.220"
+    }
+   ]
+  },
+  {
+   "id": "R07",
+   "category": "concept",
+   "query": "banks required to report a suspicious transaction relevant to a possible violation of law to the Treasury Department",
+   "scope": "current",
+   "gold": [
+    {
+     "doc_key": "ecfr:31:1020",
+     "locator": "1020.320(a)(1)"
+    }
+   ]
+  },
+  {
+   "id": "R08",
+   "category": "concept",
+   "query": "how a bank holding company determines its category for enhanced prudential standards",
+   "scope": "current",
+   "gold": [
+    {
+     "doc_key": "ecfr:12:252",
+     "section_no": "252.5"
+    }
+   ]
+  },
+  {
+   "id": "R09",
+   "category": "concept",
+   "query": "limits on distributions and discretionary bonus payments when the capital conservation buffer is below its minimum",
+   "scope": "current",
+   "gold": [
+    {
+     "doc_key": "ecfr:12:3",
+     "section_no": "3.11"
+    },
+    {
+     "doc_key": "ecfr:12:217",
+     "section_no": "217.11"
+    },
+    {
+     "doc_key": "ecfr:12:324",
+     "section_no": "324.11"
+    }
+   ]
+  },
+  {
+   "id": "R10",
+   "category": "definition",
+   "query": "definition of tier 1 capital",
+   "scope": "current",
+   "gold": [
+    {
+     "doc_key": "ecfr:12:3",
+     "locator": "3.2(Tier 1 capital)"
+    },
+    {
+     "doc_key": "ecfr:12:217",
+     "locator": "217.2(Tier 1 capital)"
+    },
+    {
+     "doc_key": "ecfr:12:324",
+     "locator": "324.2(Tier 1 capital)"
+    }
+   ]
+  },
+  {
+   "id": "R11",
+   "category": "definition",
+   "query": "what elements make up common equity tier 1 capital",
+   "scope": "current",
+   "gold": [
+    {
+     "doc_key": "ecfr:12:3",
+     "locator": "3.20(b)"
+    },
+    {
+     "doc_key": "ecfr:12:217",
+     "locator": "217.20(b)"
+    },
+    {
+     "doc_key": "ecfr:12:324",
+     "locator": "324.20(b)"
+    }
+   ]
+  },
+  {
+   "id": "R12",
+   "category": "definition",
+   "query": "criteria that define a qualifying community banking organization",
+   "scope": "current",
+   "gold": [
+    {
+     "doc_key": "ecfr:12:3",
+     "locator": "3.12(a)(2)"
+    },
+    {
+     "doc_key": "ecfr:12:217",
+     "locator": "217.12(a)(2)"
+    },
+    {
+     "doc_key": "ecfr:12:324",
+     "locator": "324.12(a)(2)"
+    }
+   ]
+  },
+  {
+   "id": "R13",
+   "category": "definition",
+   "query": "definition of advanced approaches national bank or Federal savings association",
+   "scope": "current",
+   "gold": [
+    {
+     "doc_key": "ecfr:12:3",
+     "locator": "3.2(Advanced approaches national bank or Federal savings association)"
+    }
+   ]
+  },
+  {
+   "id": "R14",
+   "category": "threshold",
+   "query": "community bank leverage ratio must be greater than 8 percent",
+   "scope": "current",
+   "gold": [
+    {
+     "doc_key": "ecfr:12:3",
+     "locator": "3.12(a)(1)"
+    },
+    {
+     "doc_key": "ecfr:12:3",
+     "locator": "3.12(a)(2)(i)"
+    },
+    {
+     "doc_key": "ecfr:12:217",
+     "locator": "217.12(a)(1)"
+    },
+    {
+     "doc_key": "ecfr:12:217",
+     "locator": "217.12(a)(2)(i)"
+    },
+    {
+     "doc_key": "ecfr:12:324",
+     "locator": "324.12(a)(1)"
+    },
+    {
+     "doc_key": "ecfr:12:324",
+     "locator": "324.12(a)(2)(i)"
+    }
+   ]
+  },
+  {
+   "id": "R15",
+   "category": "threshold",
+   "query": "four reporting periods grace period after ceasing to meet the community bank leverage ratio criteria",
+   "scope": "current",
+   "gold": [
+    {
+     "doc_key": "ecfr:12:3",
+     "locator": "3.12(c)(1)"
+    },
+    {
+     "doc_key": "ecfr:12:217",
+     "locator": "217.12(c)(1)"
+    },
+    {
+     "doc_key": "ecfr:12:324",
+     "locator": "324.12(c)(1)"
+    }
+   ]
+  },
+  {
+   "id": "R16",
+   "category": "threshold",
+   "query": "leverage ratio of 7 percent or less means no grace period",
+   "scope": "current",
+   "gold": [
+    {
+     "doc_key": "ecfr:12:3",
+     "locator": "3.12(c)(6)"
+    },
+    {
+     "doc_key": "ecfr:12:217",
+     "locator": "217.12(c)(6)"
+    },
+    {
+     "doc_key": "ecfr:12:324",
+     "locator": "324.12(c)(6)"
+    }
+   ]
+  },
+  {
+   "id": "R17",
+   "category": "threshold",
+   "query": "average total consolidated assets of $100 billion or more must determine its category",
+   "scope": "current",
+   "gold": [
+    {
+     "doc_key": "ecfr:12:252",
+     "locator": "252.5(a)(1)"
+    },
+    {
+     "doc_key": "ecfr:12:252",
+     "locator": "252.5(a)(2)"
+    },
+    {
+     "doc_key": "ecfr:12:252",
+     "locator": "252.5(a)(3)"
+    }
+   ]
+  },
+  {
+   "id": "R18",
+   "category": "agency_scope",
+   "query": "an FDIC-supervised institution must maintain the following minimum capital ratios",
+   "scope": "current",
+   "gold": [
+    {
+     "doc_key": "ecfr:12:324",
+     "locator": "324.10(a)(1)"
+    }
+   ]
+  },
+  {
+   "id": "R19",
+   "category": "agency_scope",
+   "query": "a national bank or Federal savings association must maintain the following minimum capital ratios",
+   "scope": "current",
+   "gold": [
+    {
+     "doc_key": "ecfr:12:3",
+     "locator": "3.10(a)(1)"
+    }
+   ]
+  },
+  {
+   "id": "R20",
+   "category": "agency_scope",
+   "query": "community bank leverage ratio framework election",
+   "scope": "current",
+   "parts": [
+    "12:324"
+   ],
+   "gold": [
+    {
+     "doc_key": "ecfr:12:324",
+     "section_no": "324.12"
+    }
+   ],
+   "all_results_in_parts": [
+    "12:324"
+   ]
+  },
+  {
+   "id": "R21",
+   "category": "future_change",
+   "query": "deduct retained earnings of a permitted payment stablecoin issuer from common equity tier 1 capital of the national bank",
+   "scope": "future",
+   "gold": [
+    {
+     "doc_key": "fr:2026-21706",
+     "section_no": "3.22",
+     "kind": "amendment"
+    }
+   ]
+  },
+  {
+   "id": "R22",
+   "category": "future_change",
+   "query": "capital treatment for subsidiaries of FDIC-supervised institutions that are permitted payment stablecoin issuers",
+   "scope": "future",
+   "gold": [
+    {
+     "doc_key": "fr:2026-06974"
+    }
+   ]
+  },
+  {
+   "id": "R23",
+   "category": "future_change",
+   "query": "modifications to the capital plan rule and stress capital buffer requirement",
+   "scope": "future",
+   "gold": [
+    {
+     "doc_key": "fr:2026-20246"
+    }
+   ]
+  },
+  {
+   "id": "R24",
+   "category": "future_change",
+   "query": "proposal revising risk-based capital surcharges for global systemically important bank holding companies",
+   "scope": "future",
+   "gold": [
+    {
+     "doc_key": "fr:2026-05961"
+    }
+   ]
+  },
+  {
+   "id": "R25",
+   "category": "future_change",
+   "query": "Community Reinvestment Act regulations rulemaking",
+   "scope": "future",
+   "gold": [
+    {
+     "doc_key": "fr:2026-16454"
+    }
+   ]
+  },
+  {
+   "id": "R26",
+   "category": "future_change",
+   "query": "extension of the comment period for the disclosure of information proposal",
+   "scope": "future",
+   "gold": [
+    {
+     "doc_key": "fr:2026-17649"
+    }
+   ]
+  }
+ ],
+ "delta": [
+  {
+   "id": "D01",
+   "citation": "12 CFR 3.22",
+   "expect": {
+    "baseline_doc": "ecfr:12:3",
+    "instruments": {
+     "fr:2026-21706": {
+      "state": "final_effective_date_pending",
+      "baseline_relation": "effective_after_baseline_issue_date_not_in_baseline"
+     },
+     "fr:2026-04089": {
+      "state": "proposed_comment_period_ended_disposition_unreviewed",
+      "baseline_relation": "proposal_not_in_baseline"
+     }
+    },
+    "min_instruments": 4,
+    "no_proposal_labelled_final_or_effective": true
+   }
+  },
+  {
+   "id": "D02",
+   "citation": "12 CFR 3.12",
+   "expect": {
+    "baseline_doc": "ecfr:12:3",
+    "instruments": {
+     "fr:2026-08298": {
+      "state": "final_effective_date_passed_operative_effect_unreviewed",
+      "baseline_relation": "effective_on_or_before_baseline_issue_date_baseline_may_already_reflect"
+     }
+    },
+    "baseline_contains": {
+     "doc_key": "ecfr:12:3",
+     "locator": "3.12(a)(2)(i)",
+     "text": "8 percent"
+    },
+    "instruction_contains": {
+     "doc_key": "fr:2026-08298",
+     "text": "8 percent"
+    }
+   }
+  },
+  {
+   "id": "D03",
+   "citation": "12 CFR Part 252",
+   "expect": {
+    "baseline_doc": "ecfr:12:252",
+    "instruments": {
+     "fr:2026-20246": {
+      "state": "final_effective_date_pending"
+     },
+     "fr:2026-20247": {
+      "state": "final_effective_date_pending"
+     }
+    },
+    "no_proposal_labelled_final_or_effective": true
+   }
+  },
+  {
+   "id": "D04",
+   "citation": "12 CFR 249.10",
+   "expect": {
+    "baseline_doc": "ecfr:12:249",
+    "max_instruments": 0
+   },
+   "note": "negative case: no acquired instrument amends this section; the system must not invent a future change"
+  },
+  {
+   "id": "D05",
+   "citation": "12 CFR 3.22",
+   "as_of": "2027-02-01",
+   "expect": {
+    "instruments": {
+     "fr:2026-21706": {
+      "state": "final_effective_date_passed_operative_effect_unreviewed"
+     }
+    }
+   },
+   "note": "lifecycle labels move with the as-of date, not with stored state"
+  }
+ ],
+ "status": [
+  {
+   "id": "S01",
+   "query": "CECL allowance for credit losses measurement under ASC 326",
+   "expect": {
+    "status": "missing_evidence",
+    "gap_topic": "gaap_asc"
+   }
+  },
+  {
+   "id": "S02",
+   "query": "state banking law requirements for Texas chartered banks",
+   "expect": {
+    "status": "missing_evidence",
+    "gap_topic": "state_law"
+   }
+  },
+  {
+   "id": "S03",
+   "query": "Call Report schedule RC-R instructions for risk-weighted assets",
+   "expect": {
+    "status": "partial_evidence",
+    "gap_topic": "call_report"
+   }
+  },
+  {
+   "id": "S04",
+   "query": "Does the community bank leverage ratio apply to a $9 billion national bank?",
+   "scope": "current",
+   "expect": {
+    "status": "evidence_found",
+    "applicability_status": "not_assessed"
+   }
+  },
+  {
+   "id": "S05",
+   "query": "proposed rule comment period capital requirements",
+   "scope": "future",
+   "expect": {
+    "status": "partial_evidence",
+    "gap_topic": "none_matched",
+    "no_proposal_state_prefix_in": [
+     "final",
+     "current"
+    ]
+   }
+  },
+  {
+   "id": "S06",
+   "query": "stablecoin issuer capital requirements",
+   "scope": "current",
+   "expect": {
+    "status": "partial_evidence",
+    "gap_topic": "stablecoin_genius",
+    "note": "no stablecoin text exists in acquired eCFR baseline parts; results must be current-baseline provisions labelled as such, never future-rule text"
+   }
+  }
+ ],
+ "changelog": [
+  "v0.2: S03 expectation changed from missing_evidence to partial_evidence after run 1. The query names an unacquired source (Call Report instructions) together with an acquired topic (risk-weighted assets); refusing outright would also refuse legitimate mixed questions, so the system now returns acquired-source results flagged partial_evidence with the gap reported. Retrieval questions and gold were not changed after run 1.",
+  "v0.3 (2026-11-02): S05 and S06 expectations superseded by the operator/founder decision recorded in 2026-11-02_S7_P1_S05_S06_FOUNDER_DECISION.md (sha256 a3c1d0c971de8f40fe2f51556f57e4d48759b7236a6e7498e08d9665e488251c). S05: expect.status evidence_found -> partial_evidence with gap_topic none_matched (no catalog topic matches the query, so source coverage is unassessed by design), no_proposal_state_prefix_in unchanged. S06: expect.status evidence_found -> partial_evidence with gap_topic stablecoin_genius (the topic is partial and the acquired eCFR baseline holds no stablecoin text), current-baseline-only note unchanged. IDs, queries and scopes are unchanged. questions.json v0.2 is unmodified and stays pinned at its sha256; the evaluator reports the v0.2 outcome of S05 and S06 as superseded, not waived. No producer implementation, topic catalog or source-coverage change; S05 retrieval-relevance work is not commissioned (it would need an operator-supplied gold list)."
+ ]
+}
