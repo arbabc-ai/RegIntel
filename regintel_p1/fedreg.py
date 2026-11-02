@@ -320,25 +320,38 @@ PASSIVE_LOCATION_CITE = re.compile(
     rf"(?=(?:\s*{LIST_SEPARATOR}\s*(?:\u00a7+\s*)?{SEC_ITEM})*\s+(?:is|are)\s+{DONE})", re.I)
 
 
-def _relative_to_enclosing_location(stripped, match, locations):
-    """True when `match` (an action or location clause naming paragraphs) sits inside a location that already carries a paragraph.
+CAPITAL_IN_LOCATION = re.compile(r"(?:[.;:,]\s+|[a-z0-9]{1,3}\.\s+)?In\s")  # the clause-initial capital "In paragraph …" form of PARA_ACTION
+CLAUSE_BREAK = re.compile(r"[.;:]\s")  # a sentence or enumerator boundary ends the scope of a paragraph location clause
 
-    The governing location is the last section *location* citation (`In § …`, `Amend § …`, or the passive `§ 265.7(d) is amended`; not a reference such as `for purposes of § 3.10(a)(5)`)
-    before the match anywhere in the instruction: colons, semicolons, sentence
-    ends and enumerators (`Amend § 35.4(a)(2) by: a. In paragraph (i), removing …; b. In paragraph (ii), …`) do not end it; only a new
-    section citation does. If that citation carries a paragraph designator, the named paragraph is relative to it and is not a complete
-    path. If an earlier lowercase location clause after that citation (`In § 265.7, in paragraph (d), revise paragraph (7)`) has already
-    fixed a paragraph, the action is relative to that path too. Neither is established as a top-level path or inferred by joining
-    designators: the unit stays section context.
+
+def _relative_to_enclosing_location(stripped, match, own_locations=()):
+    """True when `match` (an action or location clause naming paragraphs) sits inside a section location that already carries a paragraph.
+
+    The governing location is the last section *location* citation (`In § …`, `Amend § …`, or the passive `§ 265.7(d) is amended`; not a
+    reference such as `for purposes of § 3.10(a)(5)`) before the match anywhere in the instruction: colons, semicolons, sentence ends and
+    enumerators (`Amend § 35.4(a)(2) by: a. In paragraph (i), removing …; b. In paragraph (ii), …`) do not end it; only a new section
+    citation does. If that citation carries a paragraph designator, the named paragraph is relative to it and is not a complete path: the
+    unit stays section context and nothing is inferred by joining designators.
     """
-    if match in locations:
+    if match in own_locations:
         return False  # a lowercase location clause carries its own bare section citation, which governs it
     cites = sorted([*LOCATION_CITE.finditer(stripped, 0, match.start()), *PASSIVE_LOCATION_CITE.finditer(stripped, 0, match.start())],
                    key=lambda c: c.start())
+    return bool(cites and cites[-1].group(1).strip())
+
+
+def _within_paragraph_location(stripped, match, locations):
+    """True when `match` follows, in the same enumerator clause, a paragraph location clause that already fixed a paragraph.
+
+    Both `In § 265.7, in paragraph (d), revise paragraph (7)` (lowercase) and `a. In paragraph (d), revise paragraph (7)` (capitalized) fix
+    (d); the action after it names a child relative to (d), so a single-designator or non-letter-led operand is not a path (a child written
+    out as a complete path still is). A `;`, `:` or sentence/enumerator boundary ends the scope; so does a new section location.
+    """
+    cites = sorted([*LOCATION_CITE.finditer(stripped, 0, match.start()), *PASSIVE_LOCATION_CITE.finditer(stripped, 0, match.start())],
+                   key=lambda c: c.start())
     start = cites[-1].start() if cites else 0
-    if cites and cites[-1].group(1).strip():
-        return True
-    return any(loc is not match and loc.end() <= match.start() and loc.end() > start for loc in locations)
+    return any(loc is not match and loc.end() <= match.start() and loc.end() > start and not CLAUSE_BREAK.search(stripped, loc.end(), match.start())
+               for loc in locations)
 
 
 NESTED_BY_GAP = re.compile(r"(?:[^.;:]|(?<=\d)\.(?=\d))*\b(?:by|to)\s*", re.I)  # periods inside citation numbers (3.22) are not breaks
@@ -356,6 +369,20 @@ def _nested_by_child(stripped, previous, match):
     return bool(NESTED_BY_GAP.fullmatch(gap)) and not (LOCATION_CITE.search(gap) or PASSIVE_LOCATION_CITE.search(gap))
 
 
+COORDINATION_GAP = re.compile(r"\s*(?:,\s*(?:(?:and|or)\s+)?|(?:and|or)\s+)(?:(?:by|to)\s+)?")
+
+
+def _coordinated_with_child(stripped, previous, match):
+    """True when `match` is coordinated (`, `, `and`, `, and`, `or`, optionally repeating `by`/`to`) with a nested child action before it.
+
+    `revise paragraph (d) by adding paragraph (7) and revising paragraph (8)` and `revise paragraph (d) to add paragraph (7) and remove
+    paragraph (8)` share one governing `by`/`to`, so every coordinated child is nested under the parent. A coordination after the parent
+    itself (`revise paragraph (d) and add paragraph (e)`) is an independent sibling and is not nested.
+    """
+    gap = stripped[previous.end():match.start()]
+    return bool(COORDINATION_GAP.fullmatch(gap)) and not (LOCATION_CITE.search(gap) or PASSIVE_LOCATION_CITE.search(gap))
+
+
 def named_paragraph_paths(text):
     """Complete paragraph paths an instruction names as objects of an action, e.g. `(c)(1)`, `(a)(2)(i)`, `(i)`.
 
@@ -366,19 +393,26 @@ def named_paragraph_paths(text):
     """
     stripped = parsing_view(QUOTED.sub(" \u2039q\u203a ", text))
     paths = []
-    locations = list(PARA_LOCATION.finditer(stripped))
-    matches = sorted([*PARA_ACTION.finditer(stripped), *locations], key=lambda m: m.start())
+    lowercase = list(PARA_LOCATION.finditer(stripped))
+    actions = list(PARA_ACTION.finditer(stripped))
+    capitalized = [m for m in actions if CAPITAL_IN_LOCATION.match(m.group(0))]  # "a. In paragraph (d), …" is itself a paragraph location clause
+    matches = sorted([*actions, *lowercase], key=lambda m: m.start())
+    nested_flags = []
     for index, m in enumerate(matches):
-        if _relative_to_enclosing_location(stripped, m, locations):
+        nested = index > 0 and (_nested_by_child(stripped, matches[index - 1], m) or
+                                (nested_flags[index - 1] and _coordinated_with_child(stripped, matches[index - 1], m)))
+        nested_flags.append(nested)
+        if _relative_to_enclosing_location(stripped, m, lowercase):
             continue  # a paragraph named inside a paragraph-qualified location is relative to it: not a path, not an inferred one
-        nested = index > 0 and _nested_by_child(stripped, matches[index - 1], m)
+        nested = nested or _within_paragraph_location(stripped, m, [*lowercase, *capitalized])
         previous = None  # list of designators of the previous path; "unknown" once shorthand could not be settled
         for token in re.finditer(PARA_TOKEN, m.group(1)):
             if incomplete_after(stripped, m.start(1) + token.end()):
                 break  # a valid prefix of an unread designator sequence is never a named parent; drop the rest of the list
             parts = PARA_PART.findall(token.group(0))
             if nested and (len(parts) == 1 or designator_classes(parts[0]) != {"letter"}):
-                # A child introduced by "by" under a named parent is relative to it unless it is written out as a complete path, which
+                # A child under a named parent (introduced by "by"/"to", coordinated with such a child, or following a paragraph location clause)
+                # is relative to it unless it is written out as a complete path, which
                 # needs a first designator that can only be a top-level letter: (7), (ii), (B)(3) are relative; (d)(7) is complete.
                 previous = "unknown"
                 continue
