@@ -321,7 +321,40 @@ PASSIVE_LOCATION_CITE = re.compile(
 
 
 CAPITAL_IN_LOCATION = re.compile(r"(?:[.;:,]\s+|[a-z0-9]{1,3}\.\s+)?In\s")  # the clause-initial capital "In paragraph …" form of PARA_ACTION
-CLAUSE_BREAK = re.compile(r"[.;:]\s")  # a sentence or enumerator boundary ends the scope of a paragraph location clause
+ENUM_BOUNDARY = re.compile(r"([.;:])\s+(?:(\d{1,2}|[A-Za-z]{1,4})\.\s+)?")  # a boundary and the enumerator that follows it (`; 2. `, `: i. `)
+
+
+def _enum_class(token):
+    """The enumerator class of a list token: digit, roman (a list opened by `i`), letter or upper."""
+    classes = designator_classes(f"({token})")
+    if "digit" in classes:
+        return "digit"
+    if token == "i" or ("roman" in classes and "letter" not in classes):
+        return "roman"
+    return "letter" if "letter" in classes else ("upper" if "upper" in classes else "other")
+
+
+def _scope_continues(stripped, loc, match):
+    """Whether a paragraph location clause `loc` still scopes `match`, given the boundaries between them.
+
+    Any `;`, `:` or sentence/enumerator boundary ends the scope (`a. In paragraph (d), revise paragraph (7); b. Revise paragraph (e)` names (e)),
+    with one exception: a subordinate enumerated list that the location clause itself introduces with a colon before any action
+    (`in paragraph (d), amend as follows: 1. Revise paragraph (7); 2. Remove paragraph (8).`, `a. In paragraph (d): i. Revise paragraph (7);
+    ii. Remove paragraph (8).`). The first enumerator after that colon fixes the subordinate class, and the scope lasts through boundaries
+    whose next enumerator is of the same class; an enumerator of another class (`b.` after `i., ii.`), no enumerator, or a new section
+    location ends it.
+    """
+    region = stripped[loc.end():match.start()]
+    boundaries = list(ENUM_BOUNDARY.finditer(region))
+    if not boundaries:
+        return True
+    first = boundaries[0]
+    if first.group(1) != ":" or PARA_ACTION.search(region, 0, first.start()):
+        return False
+    if first.group(2) is None:
+        return len(boundaries) == 1  # an unenumerated colon clause: nothing may follow it before the action
+    sub = _enum_class(first.group(2))
+    return all(b.group(2) is not None and sub == _enum_class(b.group(2)) for b in boundaries[1:])
 
 
 def _relative_to_enclosing_location(stripped, match, own_locations=()):
@@ -350,7 +383,7 @@ def _within_paragraph_location(stripped, match, locations):
     cites = sorted([*LOCATION_CITE.finditer(stripped, 0, match.start()), *PASSIVE_LOCATION_CITE.finditer(stripped, 0, match.start())],
                    key=lambda c: c.start())
     start = cites[-1].start() if cites else 0
-    return any(loc is not match and loc.end() <= match.start() and loc.end() > start and not CLAUSE_BREAK.search(stripped, loc.end(), match.start())
+    return any(loc is not match and loc.end() <= match.start() and loc.end() > start and _scope_continues(stripped, loc, match)
                for loc in locations)
 
 
