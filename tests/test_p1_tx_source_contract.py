@@ -71,7 +71,8 @@ class ValidationTests(unittest.TestCase):
 
     def test_classes_are_limited_per_host(self):
         self.assertEqual(self.check("tcss.legis.texas.gov", "state_statute"), [])
-        self.assertEqual(self.check("www.sos.texas.gov", "state_register_notice"), [])
+        # www.sos.texas.gov declares endpoint_basis index_page_only, so it approves no class (S7-P1-60)
+        self.assertTrue(any("not supported by valid evidence" in p for p in self.check("www.sos.texas.gov", "state_register_notice")))
         self.assertEqual(self.check("www.dob.texas.gov", "state_regulator_issuance"), [])
         self.assertTrue(any("is not served by" in p for p in self.check("www.dob.texas.gov", "state_statute")))
         self.assertTrue(any("is not served by" in p for p in self.check("tcss.legis.texas.gov", "state_administrative_rule")))

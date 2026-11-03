@@ -9,7 +9,9 @@ evidence registry (`state_source_evidence.json`) by `evidence_id`, and the recor
 level, not on an unconfirmed vendor or legacy host, and fresh under the registry's versioned validity policy. From
 contract v0.4 (S7-P1-59) a source-class record is not honoured when another host-level record on the same host has the same sha256 and
 byte count (a response indistinguishable from the entry page establishes no source class), and a redirect chain relied on for a
-non-https requested_url must start at requested_url and be contiguous. The registry grants no right:
+non-https requested_url must start at requested_url and be contiguous. From v0.5 (S7-P1-60) a host whose metadata declares
+`endpoint_basis: index_page_only` approves none of its source classes (its evidence is an entry page only); the host itself stays
+approved, and an endpoint_basis outside the contract's `endpoint_bases` enum fails the host. The registry grants no right:
 public access is not reuse permission, so `usage_status: permitted` still needs a named operator permission reference.
 """
 import json
@@ -52,8 +54,8 @@ def evidence_problems(evidence_id, reg, host, jur, reference, source_class=None)
         return ["no evidence_id is cited"]
     if rec is None:
         return [f"evidence {evidence_id} is not in the registry"]
-    problems = [f"evidence {evidence_id} lacks {f}" for f in EVIDENCE_FIELDS if f not in rec or rec[f] in (None, "")
-                and f != "redirect_chain"]
+    problems = [f"evidence {evidence_id} lacks {f}" for f in EVIDENCE_FIELDS
+                if f != "redirect_chain" and (f not in rec or rec[f] in (None, ""))]
     if problems:
         return problems
     if rec["evidence_id"] != evidence_id:
@@ -69,7 +71,7 @@ def evidence_problems(evidence_id, reg, host, jur, reference, source_class=None)
     final, requested = urlparse(rec["final_url"]), urlparse(rec["requested_url"])
     if final.scheme != policy["required_final_scheme"]:
         problems.append(f"evidence {evidence_id} final_url is not https")
-    chain = rec["redirect_chain"] or []
+    chain = rec.get("redirect_chain") or []
     if requested.scheme != "https":
         if not (chain and chain[-1].get("to") == rec["final_url"]):
             problems.append(f"evidence {evidence_id} requested_url is not https and no redirect chain ends at final_url")
@@ -116,6 +118,9 @@ def approvals(jurisdiction, reference, spec=None, reg=None):
         meta = (jur.get("hosts") or {}).get(host) or {}
         bind = meta.get("evidence") if isinstance(meta.get("evidence"), dict) else {}
         problems = [f"host {host}: {p}" for p in evidence_problems(bind.get("host"), reg, host, jur, reference)]
+        basis = meta.get("endpoint_basis")
+        if basis is not None and basis not in (spec.get("endpoint_bases") or []):
+            problems.append(f"host {host}: unknown endpoint_basis {basis!r} (allowed: {', '.join(spec.get('endpoint_bases') or [])})")
         classes = []
         listed = meta.get("source_classes") or []
         for cls in sorted(set(listed) | set((bind.get("source_classes") or {}))):
@@ -123,6 +128,8 @@ def approvals(jurisdiction, reference, spec=None, reg=None):
                 problems.append(f"host {host}: evidence is bound for {cls}, which the host does not list")
                 continue
             p = evidence_problems((bind.get("source_classes") or {}).get(cls), reg, host, jur, reference, cls)
+            if basis == "index_page_only":
+                p.append(f"host {host} declares endpoint_basis index_page_only: entry-page evidence does not establish source class {cls}")
             if p:
                 problems += [f"host {host} / {cls}: {x}" for x in p]
             else:

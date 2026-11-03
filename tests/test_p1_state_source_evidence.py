@@ -59,7 +59,10 @@ class RegistryTests(unittest.TestCase):
                 rec = self.reg["evidence"][bind["source_classes"][cls]]
                 self.assertEqual((rec["host"], rec["level"]), (host, "source_class"), (host, cls))
                 self.assertIn(cls, rec["source_classes"])
-                if host != "statutes.capitol.texas.gov":  # its class evidence is indistinguishable from the entry page (S7-P1-59)
+                if host in ("statutes.capitol.texas.gov",  # class evidence indistinguishable from the entry page (S7-P1-59)
+                            "www.sos.state.tx.us", "www.sos.texas.gov"):  # endpoint_basis index_page_only (S7-P1-60)
+                    self.assertNotIn(cls, result[host]["source_classes"])
+                else:
                     self.assertIn(cls, result[host]["source_classes"])
         for host in ("texas-sos.appianportalsgov.com", "texreg.sos.state.tx.us"):
             self.assertNotIn(host, tx["official_hosts"])
@@ -123,7 +126,9 @@ class RegistryTests(unittest.TestCase):
         self.assertTrue(any("host-level observation and cannot establish source class" in p for p in out["problems"]))
         reg = copy.deepcopy(self.reg)
         reg["evidence"]["EV-TX-SOS-TEXREG-001"]["source_classes"] = ["state_register_notice"]
-        out = state_sources.approvals("TX", REF, self.spec, reg)["www.sos.texas.gov"]
+        spec = copy.deepcopy(self.spec)
+        del spec["jurisdictions"]["TX"]["hosts"]["www.sos.texas.gov"]["endpoint_basis"]  # isolate the class-narrowing rule (S7-P1-60)
+        out = state_sources.approvals("TX", REF, spec, reg)["www.sos.texas.gov"]
         self.assertEqual(out["source_classes"], ["state_register_notice"])
         self.assertTrue(any("does not establish source class state_administrative_rule" in p for p in out["problems"]))
         spec = copy.deepcopy(self.spec)
@@ -213,7 +218,7 @@ class EvidenceDistinctnessTests(unittest.TestCase):
 
     def test_a_statute_class_evidence_identical_to_the_entry_page_is_not_honoured(self):
         tx = self.spec["jurisdictions"]["TX"]
-        self.assertEqual(self.spec["version"], "p1-state-sources-0.4")
+        self.assertTrue(self.spec["version"] in ("p1-state-sources-0.4", "p1-state-sources-0.5"))
         self.assertEqual(tx["hosts"]["statutes.capitol.texas.gov"]["source_classes"], ["state_statute"])  # fails on evidence, not configuration
         self.assertEqual(tx["hosts"]["statutes.capitol.texas.gov"]["evidence"]["source_classes"], {"state_statute": "EV-TX-STAT-CITE-001"})
         self.assertEqual({h: m.get("endpoint_basis") for h, m in tx["hosts"].items() if m.get("endpoint_basis")},
@@ -228,11 +233,12 @@ class EvidenceDistinctnessTests(unittest.TestCase):
 
     def test_b_the_other_five_hosts_keep_their_approvals(self):
         out = state_sources.approvals("TX", REF)
-        expected = {"tcss.legis.texas.gov": ["state_statute"], "www.sos.state.tx.us": ["state_administrative_rule"],
-                    "www.sos.texas.gov": ["state_administrative_rule", "state_register_notice"],
-                    "www.dob.texas.gov": ["state_regulator_issuance"], "comptroller.texas.gov": ["state_regulator_issuance"]}
+        expected = {"tcss.legis.texas.gov": ["state_statute"], "www.dob.texas.gov": ["state_regulator_issuance"],
+                    "comptroller.texas.gov": ["state_regulator_issuance"]}
         for host, classes in expected.items():
             self.assertEqual((out[host]["approved"], sorted(out[host]["source_classes"]), out[host]["problems"]), (True, classes, []), host)
+        for host in ("www.sos.state.tx.us", "www.sos.texas.gov"):  # from v0.5 their index-page-only classes are withheld (S7-P1-60)
+            self.assertEqual((out[host]["approved"], out[host]["source_classes"]), (True, []), host)
 
     def test_c_statute_entries_validate_only_on_the_document_server(self):
         bad = entry(self.tmp, "statutes.capitol.texas.gov", "state_statute", source_url="https://statutes.capitol.texas.gov/Docs/FI/htm/FI.31.htm")
@@ -279,6 +285,85 @@ class EvidenceDistinctnessTests(unittest.TestCase):
         reg["evidence"]["EV-TX-STAT-CITE-001"]["redirect_chain"] = [{"status": 301, "from": req, "to": mid}, {"status": 301, "from": mid, "to": final}]
         found = state_sources.evidence_problems("EV-TX-STAT-CITE-001", reg, "statutes.capitol.texas.gov", self.spec["jurisdictions"]["TX"], REF)
         self.assertFalse([p for p in found if "redirect chain" in p], found)
+
+
+class EndpointBasisTests(unittest.TestCase):
+    """S7-P1-60: a host declaring endpoint_basis index_page_only has entry-page evidence only, which establishes no source class."""
+    SOS = {"www.sos.state.tx.us": ["state_administrative_rule"], "www.sos.texas.gov": ["state_administrative_rule", "state_register_notice"]}
+
+    def setUp(self):
+        self.spec, self.reg = state_sources.contract(), state_sources.registry()
+        self.tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+
+    def test_a_contract_version_and_declaring_hosts(self):
+        self.assertEqual(self.spec["version"], "p1-state-sources-0.5")
+        self.assertEqual(self.spec["endpoint_bases"], ["index_page_only"])
+        hosts = self.spec["jurisdictions"]["TX"]["hosts"]
+        self.assertEqual({h for h, m in hosts.items() if m.get("endpoint_basis") == "index_page_only"}, set(self.SOS))
+        self.assertEqual({h for h, m in hosts.items() if "endpoint_basis" in m}, set(self.SOS))
+
+    def test_b_index_page_only_hosts_stay_approved_without_classes(self):
+        out = state_sources.approvals("TX", REF)
+        for host, classes in self.SOS.items():
+            self.assertEqual((out[host]["approved"], out[host]["source_classes"]), (True, []), host)
+            for cls in classes:
+                self.assertEqual(out[host]["problems"].count(f"host {host} / {cls}: host {host} declares endpoint_basis index_page_only: "
+                                                             f"entry-page evidence does not establish source class {cls}"), 1, (host, cls))
+            self.assertEqual(len(out[host]["problems"]), len(classes), out[host]["problems"])
+            self.assertTrue(all(p.startswith(f"host {host} / ") and "endpoint_basis index_page_only" in p for p in out[host]["problems"]))
+
+    def test_c_the_other_hosts_are_unchanged(self):
+        out = state_sources.approvals("TX", REF)
+        for host, classes in {"tcss.legis.texas.gov": ["state_statute"], "www.dob.texas.gov": ["state_regulator_issuance"],
+                              "comptroller.texas.gov": ["state_regulator_issuance"]}.items():
+            self.assertEqual(out[host], {"approved": True, "source_classes": classes, "problems": []}, host)
+        cap = out["statutes.capitol.texas.gov"]
+        self.assertEqual((cap["approved"], cap["source_classes"], len(cap["problems"])), (True, [], 1))
+        self.assertIn("same sha256 and byte count as host-level record EV-TX-STAT-HOST-001", cap["problems"][0])
+        self.assertEqual(self.spec["jurisdictions"]["TX"]["hosts"]["statutes.capitol.texas.gov"]["evidence"]["source_classes"],
+                         {"state_statute": "EV-TX-STAT-CITE-001"})
+
+    def test_d_synthetic_flag_on_a_class_approved_host(self):
+        host = "www.dob.texas.gov"
+        spec = copy.deepcopy(self.spec)
+        meta = spec["jurisdictions"]["TX"]["hosts"][host]
+        meta["endpoint_basis"] = "index_page_only"
+        out = state_sources.approvals("TX", REF, spec, self.reg)[host]
+        self.assertEqual((out["approved"], out["source_classes"]), (True, []))
+        self.assertEqual(out["problems"], [f"host {host} / state_regulator_issuance: host {host} declares endpoint_basis index_page_only: "
+                                           "entry-page evidence does not establish source class state_regulator_issuance"])
+        del meta["endpoint_basis"]
+        self.assertEqual(state_sources.approvals("TX", REF, spec, self.reg)[host],
+                         {"approved": True, "source_classes": ["state_regulator_issuance"], "problems": []})
+        meta["endpoint_basis"] = "bogus"
+        out = state_sources.approvals("TX", REF, spec, self.reg)[host]
+        self.assertFalse(out["approved"])
+        self.assertEqual(out["source_classes"], [])
+        self.assertTrue(any(p.startswith(f"host {host}: ") and "bogus" in p for p in out["problems"]), out["problems"])
+
+    def test_d2_both_problems_appear_when_both_apply(self):
+        spec = copy.deepcopy(self.spec)
+        spec["jurisdictions"]["TX"]["hosts"]["statutes.capitol.texas.gov"]["endpoint_basis"] = "index_page_only"
+        found = state_sources.approvals("TX", REF, spec, self.reg)["statutes.capitol.texas.gov"]["problems"]
+        self.assertTrue(any("endpoint_basis index_page_only" in p for p in found), found)
+        self.assertTrue(any("same sha256" in p for p in found), found)
+
+    def test_e_validation_of_entries(self):
+        bad = entry(self.tmp, "www.sos.state.tx.us", "state_administrative_rule")
+        found = state_sources.validate("state:TX:state_administrative_rule:t", bad)
+        self.assertTrue(any("not supported by valid evidence" in p for p in found), found)
+        self.assertEqual(state_sources.validate("state:TX:state_statute:t", entry(self.tmp, "tcss.legis.texas.gov", "state_statute")), [])
+
+    def test_f_redirect_chain_is_optional_whether_absent_or_null(self):
+        for absent in (True, False):
+            reg = copy.deepcopy(self.reg)
+            if absent:
+                del reg["evidence"]["EV-TX-TCSS-FI31-001"]["redirect_chain"]
+            else:
+                reg["evidence"]["EV-TX-TCSS-FI31-001"]["redirect_chain"] = None
+            out = state_sources.approvals("TX", REF, self.spec, reg)["tcss.legis.texas.gov"]
+            self.assertEqual((out["approved"], out["source_classes"], out["problems"]), (True, ["state_statute"], []), absent)
 
 
 if __name__ == "__main__":

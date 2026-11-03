@@ -106,7 +106,7 @@ Public-domain U.S. federal regulation, pulled live from the **eCFR API**:
 
 ~1.8 MB of regulatory text. The BIS Basel framework PDFs are also listed in [`scripts/download_corpus.py`](scripts/download_corpus.py), but bis.org answers scripted downloads with a bot-challenge page — the downloader detects that and skips them rather than indexing HTML as a "PDF". To include them (or FFIEC handbooks, Fed SR letters), drop the files into `data/raw/` and re-run `python -m src.ingest`.
 
-**Evidence distinctness (S7-P1-59).** Texas host approvals in `regintel_p1/state_sources.json` (contract `p1-state-sources-0.4`) are honoured only through records in the offline evidence registry `state_source_evidence.json`. Two further rules apply. First, a source-class record is not honoured when a host-level record on the same host has the same sha256 and byte count: a response indistinguishable from the entry page does not establish a source class. Under this rule `statutes.capitol.texas.gov` stays an approved host but no longer approves `state_statute`, whose documents are served by `tcss.legis.texas.gov`. Second, a redirect chain relied on for a non-https `requested_url` must start at that URL and be contiguous. Approvals weaken only when evidence is indistinguishable or malformed. Nothing is acquired, no state text is parsed or indexed, and topic `state_law` stays `not_acquired`.
+**State-source evidence rules.** Texas state-source host approvals, evidence distinctness (S7-P1-59) and endpoint basis (S7-P1-60) are documented in [`regintel_p1/README.md`](regintel_p1/README.md); no state text is acquired or indexed.
 
 ---
 
