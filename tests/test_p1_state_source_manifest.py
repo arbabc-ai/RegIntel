@@ -118,7 +118,7 @@ class BuildTests(unittest.TestCase):
         ix.conn.close()
 
     def test_unconfirmed_host_invalid_metadata_and_bad_bytes_are_skipped_with_reasons(self):
-        ix, counts = self.build_with({})  # the shipped contract has no confirmed Texas host
+        ix, counts = self.build_with({})  # the synthetic host is not among the confirmed Texas hosts in the shipped contract
         st = self.status(ix)
         self.assertEqual(st["status"], "skipped_invalid_state_metadata")
         self.assertIn("not a confirmed official host", st["reason"])

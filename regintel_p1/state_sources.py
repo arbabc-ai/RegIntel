@@ -6,7 +6,10 @@ never enters the provision index, so no state-law requirement, coverage or appli
 
 Host approvals are honoured only when backed by evidence: every approved host and every host/source-class pair cites a record in the
 evidence registry (`state_source_evidence.json`) by `evidence_id`, and the record must be well formed, on the same host, at the right
-level, not on an unconfirmed vendor or legacy host, and fresh under the registry's versioned validity policy. The registry grants no right:
+level, not on an unconfirmed vendor or legacy host, and fresh under the registry's versioned validity policy. From
+contract v0.4 (S7-P1-59) a source-class record is not honoured when another host-level record on the same host has the same sha256 and
+byte count (a response indistinguishable from the entry page establishes no source class), and a redirect chain relied on for a
+non-https requested_url must start at requested_url and be contiguous. The registry grants no right:
 public access is not reuse permission, so `usage_status: permitted` still needs a named operator permission reference.
 """
 import json
@@ -67,8 +70,11 @@ def evidence_problems(evidence_id, reg, host, jur, reference, source_class=None)
     if final.scheme != policy["required_final_scheme"]:
         problems.append(f"evidence {evidence_id} final_url is not https")
     chain = rec["redirect_chain"] or []
-    if requested.scheme != "https" and not (chain and chain[-1].get("to") == rec["final_url"]):
-        problems.append(f"evidence {evidence_id} requested_url is not https and no redirect chain ends at final_url")
+    if requested.scheme != "https":
+        if not (chain and chain[-1].get("to") == rec["final_url"]):
+            problems.append(f"evidence {evidence_id} requested_url is not https and no redirect chain ends at final_url")
+        elif chain[0].get("from") != rec["requested_url"] or any(a.get("to") != b.get("from") for a, b in zip(chain, chain[1:])):
+            problems.append(f"evidence {evidence_id} redirect chain does not start at requested_url or is not contiguous")
     if rec["publisher_basis"] not in policy["publisher_bases"]:
         problems.append(f"evidence {evidence_id} publisher_basis {rec['publisher_basis']} is not an accepted basis")
     if final.hostname != rec["host"]:
@@ -80,8 +86,15 @@ def evidence_problems(evidence_id, reg, host, jur, reference, source_class=None)
     if source_class is not None:
         if rec["level"] != "source_class":
             problems.append(f"evidence {evidence_id} is a host-level observation and cannot establish source class {source_class}")
-        elif source_class not in (rec.get("source_classes") or []):
-            problems.append(f"evidence {evidence_id} does not establish source class {source_class}")
+        else:
+            if source_class not in (rec.get("source_classes") or []):
+                problems.append(f"evidence {evidence_id} does not establish source class {source_class}")
+            for other_id, other in sorted((reg.get("evidence") or {}).items()):
+                if other_id != evidence_id and other.get("host") == rec["host"] and other.get("level") == "host" \
+                        and other.get("sha256") == rec["sha256"] and other.get("bytes") == rec["bytes"]:
+                    problems.append(f"evidence {evidence_id} has the same sha256 and byte count as host-level record {other_id} on "
+                                    f"{rec['host']}: a response indistinguishable from the entry page does not establish source class "
+                                    f"{source_class}")
     seen, ref = _when(rec["access_time"]), _when(reference)
     if seen is None:
         problems.append(f"evidence {evidence_id} has a malformed access_time")

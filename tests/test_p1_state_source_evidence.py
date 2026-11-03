@@ -1,6 +1,7 @@
 """Tests for S7-P1-49: Texas host approvals in state_sources.json are honoured only through specific, valid, host-matching records in the
 versioned evidence registry (state_source_evidence.json), cited by evidence_id. Broken or misbound evidence is a validation problem, never an
 acceptance. Offline: network access is blocked for the whole module."""
+import contextlib
 import copy
 import hashlib
 import json
@@ -58,7 +59,8 @@ class RegistryTests(unittest.TestCase):
                 rec = self.reg["evidence"][bind["source_classes"][cls]]
                 self.assertEqual((rec["host"], rec["level"]), (host, "source_class"), (host, cls))
                 self.assertIn(cls, rec["source_classes"])
-                self.assertIn(cls, result[host]["source_classes"])
+                if host != "statutes.capitol.texas.gov":  # its class evidence is indistinguishable from the entry page (S7-P1-59)
+                    self.assertIn(cls, result[host]["source_classes"])
         for host in ("texas-sos.appianportalsgov.com", "texreg.sos.state.tx.us"):
             self.assertNotIn(host, tx["official_hosts"])
             self.assertIn(host, tx["unconfirmed_candidates"])
@@ -171,8 +173,7 @@ class BuildBoundaryTests(unittest.TestCase):
         manifest = json.loads((root / "manifest.json").read_text())
         manifest["documents"]["state:TX:state_statute:synthetic"] = entry(root, "tcss.legis.texas.gov", "state_statute")
         (root / "manifest.json").write_text(json.dumps(manifest))
-        patch = mock.patch.object(state_sources, "registry", lambda spec_=None: reg) if reg else mock.patch.object(state_sources, "_when", state_sources._when)
-        with patch:
+        with mock.patch.object(state_sources, "registry", lambda spec_=None: reg) if reg else contextlib.nullcontext():
             conn, _ = build.build(root, str(Path(tmp) / "x.sqlite"), "2026-10-29", log=lambda *_: None)
         conn.close()
         ix = search.Index(str(Path(tmp) / "x.sqlite"))
@@ -200,6 +201,84 @@ class BuildBoundaryTests(unittest.TestCase):
                          "ce470ba63eb97407af10477fdbf397d51a16a9f97383643f40e010570c90dc62")
         self.assertEqual(hashlib.sha256((ROOT / "eval/phase1/questions_v0.3.json").read_bytes()).hexdigest(),
                          "f28dff0a63ded40ded6c7530310aa44c088536366ce9fd9eff24d830e5aa83f8")
+
+
+class EvidenceDistinctnessTests(unittest.TestCase):
+    """S7-P1-59: class-level evidence must be distinguishable from the host entry page, and a relied-on redirect chain must be contiguous."""
+
+    def setUp(self):
+        self.spec, self.reg = state_sources.contract(), state_sources.registry()
+        self.tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+
+    def test_a_statute_class_evidence_identical_to_the_entry_page_is_not_honoured(self):
+        tx = self.spec["jurisdictions"]["TX"]
+        self.assertEqual(self.spec["version"], "p1-state-sources-0.4")
+        self.assertEqual(tx["hosts"]["statutes.capitol.texas.gov"]["source_classes"], ["state_statute"])  # fails on evidence, not configuration
+        self.assertEqual(tx["hosts"]["statutes.capitol.texas.gov"]["evidence"]["source_classes"], {"state_statute": "EV-TX-STAT-CITE-001"})
+        self.assertEqual({h: m.get("endpoint_basis") for h, m in tx["hosts"].items() if m.get("endpoint_basis")},
+                         {"www.sos.state.tx.us": "index_page_only", "www.sos.texas.gov": "index_page_only"})
+        self.assertEqual(hashlib.sha256((ROOT / "regintel_p1/state_source_evidence.json").read_bytes()).hexdigest(),
+                         "e758f717da8ebdc9584c4c63ccaa120fec31e706f6455f136c740521c8076ad5")
+        out = state_sources.approvals("TX", REF)["statutes.capitol.texas.gov"]
+        self.assertTrue(out["approved"])  # the host itself stays evidenced
+        self.assertEqual(out["source_classes"], [])
+        self.assertTrue(any("EV-TX-STAT-HOST-001" in p and "same sha256" in p and p.startswith("host statutes.capitol.texas.gov / state_statute: ")
+                            for p in out["problems"]), out["problems"])
+
+    def test_b_the_other_five_hosts_keep_their_approvals(self):
+        out = state_sources.approvals("TX", REF)
+        expected = {"tcss.legis.texas.gov": ["state_statute"], "www.sos.state.tx.us": ["state_administrative_rule"],
+                    "www.sos.texas.gov": ["state_administrative_rule", "state_register_notice"],
+                    "www.dob.texas.gov": ["state_regulator_issuance"], "comptroller.texas.gov": ["state_regulator_issuance"]}
+        for host, classes in expected.items():
+            self.assertEqual((out[host]["approved"], sorted(out[host]["source_classes"]), out[host]["problems"]), (True, classes, []), host)
+
+    def test_c_statute_entries_validate_only_on_the_document_server(self):
+        bad = entry(self.tmp, "statutes.capitol.texas.gov", "state_statute", source_url="https://statutes.capitol.texas.gov/Docs/FI/htm/FI.31.htm")
+        found = state_sources.validate("state:TX:state_statute:t", bad)
+        self.assertTrue(any("not supported by valid evidence" in p for p in found), found)
+        good = entry(self.tmp, "tcss.legis.texas.gov", "state_statute", source_url="https://tcss.legis.texas.gov/resources/FI/htm/FI.31.htm")
+        self.assertEqual(state_sources.validate("state:TX:state_statute:t", good), [])
+
+    def synthetic(self, same):
+        host = "www.dob.texas.gov"
+        reg = {k: v for k, v in copy.deepcopy(self.reg).items() if k != "evidence"}
+        h, c = copy.deepcopy(self.reg["evidence"]["EV-TX-DOB-HOST-001"]), copy.deepcopy(self.reg["evidence"]["EV-TX-DOB-LAWS-001"])
+        h["evidence_id"], c["evidence_id"] = "EV-SYN-HOST", "EV-SYN-CLASS"
+        h["sha256"], h["bytes"], c["sha256"], c["bytes"] = "a" * 64, 1000, "b" * 64, 2000
+        if same:
+            c["sha256"], c["bytes"] = h["sha256"], h["bytes"]
+        reg["evidence"] = {"EV-SYN-HOST": h, "EV-SYN-CLASS": c}
+        spec = copy.deepcopy(self.spec)
+        spec["jurisdictions"]["TX"]["hosts"][host]["evidence"] = {"host": "EV-SYN-HOST", "source_classes": {"state_regulator_issuance": "EV-SYN-CLASS"}}
+        return state_sources.approvals("TX", REF, spec, reg)[host]
+
+    def test_d_a_class_record_is_honoured_only_while_its_bytes_differ_from_the_host_record(self):
+        distinct = self.synthetic(False)
+        self.assertEqual((distinct["approved"], distinct["source_classes"], distinct["problems"]), (True, ["state_regulator_issuance"], []))
+        same = self.synthetic(True)
+        self.assertTrue(same["approved"])
+        self.assertEqual(same["source_classes"], [])
+        self.assertTrue(any("EV-SYN-HOST" in p and "same sha256" in p for p in same["problems"]), same["problems"])
+
+    def test_e_a_relied_on_redirect_chain_must_start_at_requested_url_and_be_contiguous(self):
+        cite = self.reg["evidence"]["EV-TX-STAT-CITE-001"]
+        self.assertFalse([p for p in state_sources.evidence_problems("EV-TX-STAT-CITE-001", self.reg, "statutes.capitol.texas.gov",
+                                                                     self.spec["jurisdictions"]["TX"], REF) if "redirect chain" in p])
+        req, final = cite["requested_url"], cite["final_url"]
+        mid = "http://www.statutes.legis.texas.gov/redirect"
+        bad = {"start": [{"status": 301, "from": "http://elsewhere.invalid/x", "to": final}],
+               "gap": [{"status": 301, "from": req, "to": mid}, {"status": 301, "from": "http://other.invalid/y", "to": final}]}
+        for name, chain in bad.items():
+            reg = copy.deepcopy(self.reg)
+            reg["evidence"]["EV-TX-STAT-CITE-001"]["redirect_chain"] = chain
+            found = state_sources.evidence_problems("EV-TX-STAT-CITE-001", reg, "statutes.capitol.texas.gov", self.spec["jurisdictions"]["TX"], REF)
+            self.assertTrue(any("redirect chain does not start at requested_url or is not contiguous" in p for p in found), (name, found))
+        reg = copy.deepcopy(self.reg)
+        reg["evidence"]["EV-TX-STAT-CITE-001"]["redirect_chain"] = [{"status": 301, "from": req, "to": mid}, {"status": 301, "from": mid, "to": final}]
+        found = state_sources.evidence_problems("EV-TX-STAT-CITE-001", reg, "statutes.capitol.texas.gov", self.spec["jurisdictions"]["TX"], REF)
+        self.assertFalse([p for p in found if "redirect chain" in p], found)
 
 
 if __name__ == "__main__":
