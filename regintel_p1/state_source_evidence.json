@@ -1,0 +1,243 @@
+{
+ "version": "p1-state-source-evidence-0.1",
+ "note": "Offline-verifiable host and endpoint evidence for official state sources, migrated from the S7-P1-48 public-page observations (2026-11-03). Metadata only: no page text. A record is either a host-level observation (shows the host is the publisher's) or a source_class observation (shows a specific endpoint serves the listed source classes). The registry approves nothing by itself: approvals live in state_sources.json and must cite records here by evidence_id. Public access is not reuse permission; nothing here grants any right.",
+ "validity_policy": {
+  "policy_version": "p1-state-evidence-validity-1",
+  "max_age_days": 180,
+  "reference": "for a manifest entry, its asset.retrieved_at; for contract checks, an explicit reference date",
+  "evidence_after_reference": "accepted",
+  "required_status": 200,
+  "required_final_scheme": "https",
+  "requested_url": "https, or http/https with a redirect chain that ends at final_url",
+  "publisher_bases": [
+   "title",
+   "linked_from_publisher",
+   "redirect_from_publisher_link",
+   "app_configuration"
+  ],
+  "source_class_approval_requires": "a source_class-level record on the same host whose source_classes include the class",
+  "host_approval_requires": "a host- or source_class-level record on the same host"
+ },
+ "evidence": {
+  "EV-TX-STAT-HOST-001": {
+   "evidence_id": "EV-TX-STAT-HOST-001",
+   "level": "host",
+   "host": "statutes.capitol.texas.gov",
+   "requested_url": "https://statutes.capitol.texas.gov/",
+   "final_url": "https://statutes.capitol.texas.gov/",
+   "redirect_chain": [],
+   "status": 200,
+   "access_time": "2026-11-03T01:36:11+00:00",
+   "sha256": "dbfba8a96dc3cd584157ca66aaafdf67e0ed15dd5a0c8a58f3d4bd0f109fc646",
+   "bytes": 250874,
+   "title": "Texas Constitution and Statutes",
+   "publisher": "Texas Legislature: Texas Constitution and Statutes",
+   "publisher_basis": "linked_from_publisher",
+   "publisher_basis_detail": "Texas Legislature Online https://capitol.texas.gov/ (observed 2026-11-03T01:42:47Z) links https://statutes.capitol.texas.gov",
+   "role": "statutes application entry page"
+  },
+  "EV-TX-STAT-CITE-001": {
+   "evidence_id": "EV-TX-STAT-CITE-001",
+   "level": "source_class",
+   "host": "statutes.capitol.texas.gov",
+   "requested_url": "http://www.statutes.legis.texas.gov/Docs/GV/htm/GV.323.htm#323.007",
+   "final_url": "https://statutes.capitol.texas.gov/Docs/GV/htm/GV.323.htm",
+   "redirect_chain": [
+    {
+     "status": 301,
+     "from": "http://www.statutes.legis.texas.gov/Docs/GV/htm/GV.323.htm#323.007",
+     "to": "https://statutes.capitol.texas.gov/Docs/GV/htm/GV.323.htm"
+    }
+   ],
+   "status": 200,
+   "access_time": "2026-11-03T01:40:08+00:00",
+   "sha256": "dbfba8a96dc3cd584157ca66aaafdf67e0ed15dd5a0c8a58f3d4bd0f109fc646",
+   "bytes": 250874,
+   "title": "Texas Constitution and Statutes",
+   "publisher": "Texas Legislature: Texas Constitution and Statutes",
+   "publisher_basis": "redirect_from_publisher_link",
+   "publisher_basis_detail": "Texas Legislative Council page https://tlc.texas.gov/code-projects (observed 2026-11-03T01:42:45Z) links this statute URL; it returns 301 to this host's /Docs citation path",
+   "role": "statute citation links (/Docs/<CODE>/htm/<CODE>.<chapter>.htm)",
+   "source_classes": [
+    "state_statute"
+   ]
+  },
+  "EV-TX-TCSS-FI31-001": {
+   "evidence_id": "EV-TX-TCSS-FI31-001",
+   "level": "source_class",
+   "host": "tcss.legis.texas.gov",
+   "requested_url": "https://tcss.legis.texas.gov/resources/FI/htm/FI.31.htm",
+   "final_url": "https://tcss.legis.texas.gov/resources/FI/htm/FI.31.htm",
+   "redirect_chain": [],
+   "status": 200,
+   "access_time": "2026-11-03T01:42:44+00:00",
+   "sha256": "fe2db5fa3589b5442f64cce7c60a24333fdb8e9833fcc073a3ab06553a42635f",
+   "bytes": 82116,
+   "title": "FINANCE CODE CHAPTER 31. GENERAL PROVISIONS",
+   "publisher": "Texas Legislature: Texas Constitution and Statutes document server",
+   "publisher_basis": "app_configuration",
+   "publisher_basis_detail": "the official statutes application bundle https://statutes.capitol.texas.gov/chunk-7GRZWKYH.js sets FileServerPath https://tcss.legis.texas.gov/resources; the page is Finance Code ch. 31 with 27 per-section anchors",
+   "role": "statute documents by chapter with per-section anchors",
+   "source_classes": [
+    "state_statute"
+   ]
+  },
+  "EV-TX-SOS-TAC-001": {
+   "evidence_id": "EV-TX-SOS-TAC-001",
+   "level": "source_class",
+   "host": "www.sos.state.tx.us",
+   "requested_url": "https://www.sos.state.tx.us/tac/index.shtml",
+   "final_url": "https://www.sos.state.tx.us/tac/index.shtml",
+   "redirect_chain": [],
+   "status": 200,
+   "access_time": "2026-11-03T01:40:31+00:00",
+   "sha256": "1af0df5ee5ad76ab776097111a44a22ee6ca8690746694f84fd4cbaedd5e0514",
+   "bytes": 21001,
+   "title": "Welcome to the Texas Administrative Code",
+   "publisher": "Texas Secretary of State: Texas Administrative Code",
+   "publisher_basis": "title",
+   "publisher_basis_detail": "page title 'Welcome to the Texas Administrative Code' on the Secretary of State domain",
+   "role": "Texas Administrative Code entry page",
+   "source_classes": [
+    "state_administrative_rule"
+   ]
+  },
+  "EV-TX-SOS-TEXREG-001": {
+   "evidence_id": "EV-TX-SOS-TEXREG-001",
+   "level": "source_class",
+   "host": "www.sos.texas.gov",
+   "requested_url": "https://www.sos.texas.gov/texreg/index.shtml",
+   "final_url": "https://www.sos.texas.gov/texreg/index.shtml",
+   "redirect_chain": [],
+   "status": 200,
+   "access_time": "2026-11-03T01:40:33+00:00",
+   "sha256": "b921f3d106030bcf0a09e8da33ba17e90665ad8b6650363ee50f3eab94a4d046",
+   "bytes": 21112,
+   "title": "State Rules and Open Meetings",
+   "publisher": "Texas Secretary of State: State Rules and Open Meetings (Texas Register)",
+   "publisher_basis": "title",
+   "publisher_basis_detail": "page title 'State Rules and Open Meetings' on the Secretary of State domain; the Department of Banking links Texas Register archive pages on this host",
+   "role": "Texas Register archive of proposed and adopted rules",
+   "source_classes": [
+    "state_register_notice",
+    "state_administrative_rule"
+   ]
+  },
+  "EV-TX-DOB-HOST-001": {
+   "evidence_id": "EV-TX-DOB-HOST-001",
+   "level": "host",
+   "host": "www.dob.texas.gov",
+   "requested_url": "https://www.dob.texas.gov/",
+   "final_url": "https://www.dob.texas.gov/",
+   "redirect_chain": [],
+   "status": 200,
+   "access_time": "2026-11-03T01:40:36+00:00",
+   "sha256": "07246fa3e40403729a9514abb0dbd3bf27f64c60817191288afccaf7659b75d0",
+   "bytes": 36618,
+   "title": "Home | Texas Department of Banking",
+   "publisher": "Texas Department of Banking",
+   "publisher_basis": "title",
+   "publisher_basis_detail": "page title 'Home | Texas Department of Banking'",
+   "role": "agency home page"
+  },
+  "EV-TX-DOB-LAWS-001": {
+   "evidence_id": "EV-TX-DOB-LAWS-001",
+   "level": "source_class",
+   "host": "www.dob.texas.gov",
+   "requested_url": "https://www.dob.texas.gov/laws-regulations",
+   "final_url": "https://www.dob.texas.gov/laws-regulations",
+   "redirect_chain": [],
+   "status": 200,
+   "access_time": "2026-11-03T01:40:56+00:00",
+   "sha256": "bb06efd7b27fa3edbd660214a35dc6920663a9071f87357fd30de55c108fe4ab",
+   "bytes": 30535,
+   "title": "Laws & Regulations | Texas Department of Banking",
+   "publisher": "Texas Department of Banking",
+   "publisher_basis": "title",
+   "publisher_basis_detail": "page title 'Laws & Regulations | Texas Department of Banking'; links proposed and adopted rule listings",
+   "role": "laws and regulations listing (regulator issuances)",
+   "source_classes": [
+    "state_regulator_issuance"
+   ]
+  },
+  "EV-TX-CPA-HOST-001": {
+   "evidence_id": "EV-TX-CPA-HOST-001",
+   "level": "host",
+   "host": "comptroller.texas.gov",
+   "requested_url": "https://comptroller.texas.gov/",
+   "final_url": "https://comptroller.texas.gov/",
+   "redirect_chain": [],
+   "status": 200,
+   "access_time": "2026-11-03T01:40:37+00:00",
+   "sha256": "86b744ba9d0f40e7066e3ac4bf1cc3b2d42124f8ec2e7e16ca3aca43b60ee803",
+   "bytes": 85962,
+   "title": "Texas Comptroller of Public Accounts",
+   "publisher": "Texas Comptroller of Public Accounts",
+   "publisher_basis": "title",
+   "publisher_basis_detail": "page title 'Texas Comptroller of Public Accounts'",
+   "role": "agency home page"
+  },
+  "EV-TX-CPA-RULES-001": {
+   "evidence_id": "EV-TX-CPA-RULES-001",
+   "level": "source_class",
+   "host": "comptroller.texas.gov",
+   "requested_url": "https://comptroller.texas.gov/taxes/resources/rule-index.php",
+   "final_url": "https://comptroller.texas.gov/taxes/resources/rule-index.php",
+   "redirect_chain": [],
+   "status": 200,
+   "access_time": "2026-11-03T01:42:02+00:00",
+   "sha256": "ed98ed18cfae5e12aa7161e869b7346b8087e3369047c8a006e1ec6b1774874f",
+   "bytes": 86302,
+   "title": "Index to Rules by Subject Matter",
+   "publisher": "Texas Comptroller of Public Accounts",
+   "publisher_basis": "title",
+   "publisher_basis_detail": "page title 'Index to Rules by Subject Matter' on the Comptroller domain",
+   "role": "rule index by subject matter (regulator issuances)",
+   "source_classes": [
+    "state_regulator_issuance"
+   ]
+  },
+  "EV-TX-APPIAN-VIEWER-001": {
+   "evidence_id": "EV-TX-APPIAN-VIEWER-001",
+   "level": "source_class",
+   "host": "texas-sos.appianportalsgov.com",
+   "requested_url": "https://texas-sos.appianportalsgov.com/rules-and-meetings?interface=VIEW_TAC",
+   "final_url": "https://texas-sos.appianportalsgov.com/rules-and-meetings?interface=VIEW_TAC",
+   "redirect_chain": [],
+   "status": 200,
+   "access_time": "2026-11-03T01:40:55+00:00",
+   "sha256": "a05d4e2c4ea85c312ee17c47835bd15e24a2188e3c42f50ee51ea3427cb6314c",
+   "bytes": 2502,
+   "title": "Rules & Meetings",
+   "publisher": "vendor-hosted viewer linked by the Texas Secretary of State",
+   "publisher_basis": "linked_from_publisher",
+   "publisher_basis_detail": "linked from https://www.sos.state.tx.us/tac/index.shtml; not a texas.gov domain",
+   "role": "Texas Administrative Code viewer (vendor-hosted, unconfirmed)",
+   "source_classes": [
+    "state_administrative_rule"
+   ]
+  },
+  "EV-TX-TEXREG-LEGACY-001": {
+   "evidence_id": "EV-TX-TEXREG-LEGACY-001",
+   "level": "host",
+   "host": "texreg.sos.state.tx.us",
+   "requested_url": "https://texreg.sos.state.tx.us/public/readtac$ext.viewtac",
+   "final_url": "https://texreg.sos.state.tx.us/public/readtac$ext.viewtac",
+   "redirect_chain": [],
+   "status": 200,
+   "access_time": "2026-11-03T01:40:34+00:00",
+   "sha256": "6c6f1c86bb3cb8fa9732b1d178ece196b285f65604c2a4841e09e12070e22c1c",
+   "bytes": 2878,
+   "title": "Site Has Moved",
+   "publisher": "Texas Secretary of State (legacy viewer)",
+   "publisher_basis": "title",
+   "publisher_basis_detail": "page title 'Site Has Moved'",
+   "role": "legacy TAC viewer (unconfirmed)"
+  }
+ },
+ "provenance": {
+  "source_file": "2026-11-02_S7_P1_TX_SOURCE_VERIFICATION_48_EVIDENCE.json (S7 outbox)",
+  "source_sha256": "eb606c6f551dbe25498b91b3204734534ab688dbcc45106d9340bfae5aa9bd18",
+  "method": "Python urllib, metadata and sha256 only"
+ }
+}

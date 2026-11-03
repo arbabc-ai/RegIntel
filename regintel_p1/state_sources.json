@@ -1,6 +1,6 @@
 {
- "version": "p1-state-sources-0.2",
- "note": "Manifest ingestion contract for official state and territorial sources. A state entry is hash-verified and its metadata validated, then recorded in source_status as registered_not_indexed: no state parser exists, so no state text enters the provision index and no state-law coverage is claimed (topic state_law stays not_acquired). An entry from a host that is not listed as a confirmed official host for its jurisdiction is rejected. Hosts are added here only after the publisher's own site has been confirmed under an operator-authorised acquisition task; the list starts empty. A host is listed only with documented publisher identity and endpoint evidence (S7-P1-48 evidence file); each host is limited to the source classes it serves. No publisher page reviewed grants or denies bulk reuse, so no reuse permission is inferred: an entry may claim usage_status permitted only with rights.permission_reference naming an operator decision.",
+ "version": "p1-state-sources-0.3",
+ "note": "Manifest ingestion contract for official state and territorial sources. A state entry is hash-verified and its metadata validated, then recorded in source_status as registered_not_indexed: no state parser exists, so no state text enters the provision index and no state-law coverage is claimed (topic state_law stays not_acquired). An entry from a host that is not listed as a confirmed official host for its jurisdiction is rejected. Hosts are added here only after the publisher's own site has been confirmed under an operator-authorised acquisition task; the list starts empty. A host is listed only with documented publisher identity and endpoint evidence (S7-P1-48 evidence file); each host is limited to the source classes it serves. No publisher page reviewed grants or denies bulk reuse, so no reuse permission is inferred: an entry may claim usage_status permitted only with rights.permission_reference naming an operator decision. From v0.3 every approved host and every host/source-class pair must cite a valid, host-matching record in state_source_evidence.json by evidence_id (see its validity_policy); an approval whose evidence is missing, malformed, stale, on another or an unapproved host, or at the wrong level is not honoured.",
  "source_classes": [
   "state_statute",
   "state_administrative_rule",
@@ -48,7 +48,12 @@
      "role": "statutes application and canonical citation links (/Docs/<CODE>/htm/<CODE>.<chapter>.htm)",
      "locator_form": "/Docs/<CODE>/htm/<CODE>.<chapter>.htm#<section>",
      "verified_at": "2026-11-03T01:42:47Z",
-     "evidence": "2026-11-02_S7_P1_TX_SOURCE_VERIFICATION_48_EVIDENCE.json"
+     "evidence": {
+      "host": "EV-TX-STAT-HOST-001",
+      "source_classes": {
+       "state_statute": "EV-TX-STAT-CITE-001"
+      }
+     }
     },
     "tcss.legis.texas.gov": {
      "publisher": "Texas Legislature: document server configured by the Texas Constitution and Statutes application (FileServerPath)",
@@ -58,7 +63,12 @@
      "role": "statute documents by chapter with per-section anchors",
      "locator_form": "/resources/<CODE>/htm/<CODE>.<chapter>.htm#<section> (e.g. FI.31.htm#31.002)",
      "verified_at": "2026-11-03T01:42:44Z",
-     "evidence": "2026-11-02_S7_P1_TX_SOURCE_VERIFICATION_48_EVIDENCE.json"
+     "evidence": {
+      "host": "EV-TX-TCSS-FI31-001",
+      "source_classes": {
+       "state_statute": "EV-TX-TCSS-FI31-001"
+      }
+     }
     },
     "www.sos.state.tx.us": {
      "publisher": "Texas Secretary of State: Texas Administrative Code",
@@ -68,7 +78,12 @@
      "role": "TAC entry page; the TAC viewer it links is on a vendor domain that is not listed",
      "locator_form": "none observed on this host (entry page only)",
      "verified_at": "2026-11-03T01:40Z",
-     "evidence": "2026-11-02_S7_P1_TX_SOURCE_VERIFICATION_48_EVIDENCE.json"
+     "evidence": {
+      "host": "EV-TX-SOS-TAC-001",
+      "source_classes": {
+       "state_administrative_rule": "EV-TX-SOS-TAC-001"
+      }
+     }
     },
     "www.sos.texas.gov": {
      "publisher": "Texas Secretary of State: State Rules and Open Meetings / Texas Register",
@@ -79,7 +94,13 @@
      "role": "Texas Register archive pages for proposed and adopted rules",
      "locator_form": "/texreg/archive/<Date>/<Proposed|Adopted> Rules/<title>.<TITLE NAME>.html#<n>",
      "verified_at": "2026-11-03T01:40Z",
-     "evidence": "2026-11-02_S7_P1_TX_SOURCE_VERIFICATION_48_EVIDENCE.json"
+     "evidence": {
+      "host": "EV-TX-SOS-TEXREG-001",
+      "source_classes": {
+       "state_register_notice": "EV-TX-SOS-TEXREG-001",
+       "state_administrative_rule": "EV-TX-SOS-TEXREG-001"
+      }
+     }
     },
     "www.dob.texas.gov": {
      "publisher": "Texas Department of Banking",
@@ -89,7 +110,12 @@
      "role": "laws and regulations, proposed and adopted rule listings",
      "locator_form": "listing pages; rule text is published in the TAC and Texas Register",
      "verified_at": "2026-11-03T01:41Z",
-     "evidence": "2026-11-02_S7_P1_TX_SOURCE_VERIFICATION_48_EVIDENCE.json"
+     "evidence": {
+      "host": "EV-TX-DOB-HOST-001",
+      "source_classes": {
+       "state_regulator_issuance": "EV-TX-DOB-LAWS-001"
+      }
+     }
     },
     "comptroller.texas.gov": {
      "publisher": "Texas Comptroller of Public Accounts",
@@ -99,7 +125,12 @@
      "role": "rule index by subject matter and proposed rule summaries",
      "locator_form": "listing pages; rule text is published in the TAC (Title 34)",
      "verified_at": "2026-11-03T01:42Z",
-     "evidence": "2026-11-02_S7_P1_TX_SOURCE_VERIFICATION_48_EVIDENCE.json"
+     "evidence": {
+      "host": "EV-TX-CPA-HOST-001",
+      "source_classes": {
+       "state_regulator_issuance": "EV-TX-CPA-RULES-001"
+      }
+     }
     }
    },
    "unconfirmed_candidates": {
@@ -110,5 +141,6 @@
    "rights_observation": "No reviewed page grants or denies bulk reuse or automated retrieval (TAC Rules of Use concern portal monitoring). usage_status stays pending_review unless an operator decision is cited.",
    "status": "official hosts documented 2026-11-03 (S7-P1-48); register row in C3 unchanged; acquisition not authorised"
   }
- }
+ },
+ "evidence_registry": "state_source_evidence.json"
 }

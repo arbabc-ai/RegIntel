@@ -31,9 +31,24 @@ def entry(root, **over):
 
 
 def confirmed(hosts):
+    """The shipped contract with synthetic hosts approved through synthetic evidence (task 49: approvals must cite evidence)."""
     spec = state_sources.contract()
-    spec["jurisdictions"]["TX"]["official_hosts"] = list(hosts)
+    tx = spec["jurisdictions"]["TX"]
+    tx["official_hosts"] = list(hosts)
+    for h in hosts:
+        tx.setdefault("hosts", {})[h] = {"publisher": "synthetic", "source_classes": ["state_statute"],
+                                          "evidence": {"host": "EV-SYN-" + h, "source_classes": {"state_statute": "EV-SYN-" + h}}}
     return spec
+
+
+def synthetic_registry(hosts):
+    reg = state_sources.registry()
+    for h in hosts:
+        reg["evidence"]["EV-SYN-" + h] = {"evidence_id": "EV-SYN-" + h, "level": "source_class", "host": h, "requested_url": f"https://{h}/",
+                                          "final_url": f"https://{h}/", "redirect_chain": [], "status": 200, "access_time": "2026-11-02T00:00:00Z",
+                                          "sha256": "0" * 64, "bytes": 1, "title": "synthetic", "publisher": "synthetic", "publisher_basis": "title",
+                                          "publisher_basis_detail": "synthetic test evidence", "role": "synthetic", "source_classes": ["state_statute"]}
+    return reg
 
 
 class ContractTests(unittest.TestCase):
@@ -46,12 +61,12 @@ class ContractTests(unittest.TestCase):
     def test_valid_entry_passes_only_with_a_confirmed_host(self):
         with tempfile.TemporaryDirectory() as tmp:
             rec = entry(Path(tmp))
-            self.assertEqual(state_sources.validate(KEY, rec, confirmed([HOST])), [])
+            self.assertEqual(state_sources.validate(KEY, rec, confirmed([HOST]), synthetic_registry([HOST])), [])
             self.assertTrue(any("not a confirmed official host" in p for p in state_sources.validate(KEY, rec)))
 
     def test_missing_or_bad_metadata_is_reported_field_by_field(self):
         with tempfile.TemporaryDirectory() as tmp:
-            spec = confirmed([HOST])
+            spec, reg = confirmed([HOST]), synthetic_registry([HOST])
             cases = {"rights": ({"rights": {"terms_url": "x"}}, "missing rights field terms_checked_at"),
                      "class": ({"source_class": "state_blog"}, "unknown source_class"),
                      "scheme": ({"source_url": f"http://{HOST}/x"}, "must be https"),
@@ -60,9 +75,9 @@ class ContractTests(unittest.TestCase):
                      "locator": ({"locator": ""}, "missing field locator"),
                      "usage": ({"rights": {"terms_url": "x", "terms_checked_at": "y", "usage_status": "free"}}, "unknown rights usage_status")}
             for name, (over, needle) in cases.items():
-                problems = state_sources.validate(KEY, entry(Path(tmp), **over), spec)
+                problems = state_sources.validate(KEY, entry(Path(tmp), **over), spec, reg)
                 self.assertTrue(any(needle in p for p in problems), (name, problems))
-            self.assertTrue(any("manifest key" in p for p in state_sources.validate("tx:statute", entry(Path(tmp)), spec)))
+            self.assertTrue(any("manifest key" in p for p in state_sources.validate("tx:statute", entry(Path(tmp)), spec, reg)))
 
 
 class BuildTests(unittest.TestCase):
@@ -79,7 +94,10 @@ class BuildTests(unittest.TestCase):
         (root / "manifest.json").write_text(json.dumps(manifest))
         ix.conn.close()
         db = str(Path(tmp) / "with_state.sqlite")
-        with mock.patch.object(state_sources, "contract", lambda: spec or state_sources.json.loads(state_sources.CONTRACT_PATH.read_text())):
+        shipped = state_sources.json.loads(state_sources.CONTRACT_PATH.read_text())
+        reg = synthetic_registry([HOST]) if spec else state_sources.registry()
+        with mock.patch.object(state_sources, "contract", lambda: spec or shipped), \
+                mock.patch.object(state_sources, "registry", lambda spec_=None: reg):
             conn, counts = build.build(root, db, "2026-10-29", log=lambda *_: None)
         conn.close()
         return search.Index(db), counts
