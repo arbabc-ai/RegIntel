@@ -1,0 +1,43 @@
+{
+  "version": "p1-applicability-conditions-0.1",
+  "note": "Scope conditions taken from the acquired current eCFR text. Each condition quotes the scope provision it rests on; the engine verifies every quote against the index before using the condition. A condition routes a profile's entity category into or out of a part's stated scope only. It is not a legal determination: the listed qualifiers are never evaluated, applicability to a specific institution is not concluded, and a part outside one profile's stated scope does not mean no counterpart rule applies.",
+  "conditions": [
+    {
+      "condition_id": "AC-12-3-SCOPE",
+      "title": "12", "part": "3",
+      "in_scope_entity_categories": ["national_bank", "federal_savings_association"],
+      "sources": [
+        {"doc_key": "ecfr:12:3", "locator": "3.1(c)(1)", "quote": "Each national bank or Federal savings association must calculate its minimum capital requirements"},
+        {"doc_key": "ecfr:12:3", "locator": "3.1(c)(2)", "quote": "Each national bank or Federal savings association must calculate its regulatory capital"}
+      ],
+      "unevaluated_qualifiers": ["applicability is 'subject to the requirements in paragraphs (d) and (f)' of 12 CFR 3.1 (not evaluated)",
+                                 "reservations of authority and transition provisions (not evaluated)"]
+    },
+    {
+      "condition_id": "AC-12-217-SCOPE",
+      "title": "12", "part": "217",
+      "in_scope_entity_categories": ["state_member_bank", "bank_holding_company", "savings_and_loan_holding_company"],
+      "sources": [
+        {"doc_key": "ecfr:12:217", "locator": "217.1(c)(1)(i)", "quote": "This part applies on a consolidated basis to every Board-regulated institution that is"},
+        {"doc_key": "ecfr:12:217", "locator": "217.1(c)(1)(i)(A)", "quote": "A state member bank"},
+        {"doc_key": "ecfr:12:217", "locator": "217.1(c)(1)(i)(B)", "quote": "A bank holding company domiciled in the United States that is not subject to 12 CFR part 225, appendix C"},
+        {"doc_key": "ecfr:12:217", "locator": "217.1(c)(1)(i)(C)", "quote": "A covered savings and loan holding company domiciled in the United States"}
+      ],
+      "requires_domestic_holding_company": true,
+      "unevaluated_qualifiers": ["for holding companies: 'not subject to 12 CFR part 225, appendix C' and the covered savings and loan holding company criteria (not evaluated)",
+                                 "consolidated-basis application and Board orders (not evaluated)"]
+    },
+    {
+      "condition_id": "AC-12-324-SCOPE",
+      "title": "12", "part": "324",
+      "in_scope_entity_categories": ["state_nonmember_insured_bank", "state_savings_association"],
+      "sources": [
+        {"doc_key": "ecfr:12:324", "locator": "324.1(c)(1)", "quote": "Each FDIC-supervised institution must calculate its minimum capital requirements"},
+        {"doc_key": "ecfr:12:324", "locator": "324.2(FDIC-supervised institution)", "quote": "FDIC-supervised institution means any bank or state savings association"},
+        {"doc_key": "ecfr:12:324", "locator": "324.2(Bank)", "quote": "state-chartered commercial or savings bank that is not a member of the Federal Reserve System"}
+      ],
+      "unevaluated_qualifiers": ["applicability is 'subject to the requirements in paragraphs (d) and (f)' of 12 CFR 324.1 (not evaluated)",
+                                 "whether the FDIC is the appropriate Federal banking agency under 12 U.S.C. 1813(q) (stated in the definition of Bank; not evaluated)"]
+    }
+  ]
+}

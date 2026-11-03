@@ -1,0 +1,41 @@
+{
+ "schema_version": "p1-bank-profile-0.1",
+ "profile_id": "syn-state-nonmember-bank-01",
+ "synthetic": true,
+ "description": "Synthetic insured state nonmember bank for routing tests. Fictional; corresponds to no real institution.",
+ "charter": {
+  "charter_type": "state",
+  "chartering_authority": "state of <synthetic state>",
+  "federal_reserve_member": "no",
+  "fdic_insured": "yes"
+ },
+ "legal_entity": {
+  "entity_type": "bank",
+  "domiciled_in_united_states": "yes",
+  "top_tier_holding_company": null
+ },
+ "business_model": {
+  "activities": [
+   "agricultural lending",
+   "retail deposits"
+  ],
+  "notes": "synthetic"
+ },
+ "regulator": {
+  "primary_federal_regulator": "FDIC",
+  "basis": "stated by the synthetic profile author"
+ },
+ "size_risk_category": {
+  "total_consolidated_assets_usd": 1200000000,
+  "as_of_date": "2026-09-30",
+  "prudential_category": "not_categorized"
+ },
+ "capital_regime": {
+  "approach": "standardized",
+  "cblr_election": "elected"
+ },
+ "form_eligibility": {
+  "call_report_form": "FFIEC 051",
+  "holding_company_forms": []
+ }
+}

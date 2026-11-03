@@ -2,7 +2,8 @@
 current-to-future delta view.
 
 Similarity here discovers evidence. Nothing in this module decides whether a rule applies to a bank:
-every answer carries `applicability_status = "not_assessed"` and the missing profile facts a reviewer needs.
+every answer carries `applicability_status = "not_assessed"` and the missing profile facts a reviewer needs, unless a synthetic
+bank profile is supplied, in which case results carry conditional routing by stated scope (see regintel_p1.applicability).
 """
 import json
 import re
@@ -391,6 +392,9 @@ def parse_query_citations(query):
     return out
 
 
+DELTA_CONTRACT = "p1-delta-provision-classification-1"
+CLASSIFICATIONS = ("matched_provision", "matched_section_context", "matched_part_context", "unresolved_candidate",
+                   "reference_only", "no_acquired_instrument")
 CONTENT_KINDS = ("paragraph", "definition", "table", "section", "appendix")
 FUTURE_KINDS = ("amendment", "fr_preamble", "fr_table")
 RRF_K = 60
@@ -1101,7 +1105,42 @@ class Index:
         return out
 
     # ---------- answer bundle ----------
-    def answer(self, query, mode="hybrid", scope="both", parts=None, k=8):
+    @property
+    def applicability(self):
+        """The conditional applicability engine (scope conditions verified against this index), created on first use."""
+        if getattr(self, "_applicability", None) is None:
+            from .applicability import ApplicabilityEngine
+            self._applicability = ApplicabilityEngine(self.conn)
+        return self._applicability
+
+    def answer(self, query, mode="hybrid", scope="both", parts=None, k=8, bank_profile=None):
+        """Evidence bundle; see `_answer`. Without `bank_profile` the output is unchanged (`applicability_status: not_assessed`).
+
+        With a synthetic `bank_profile` (regintel_p1.bank_profile.BankProfile), each result carries conditional
+        `applicability` from the stated scope of its part, and the top-level status aggregates them. Routing only: legal
+        validity stays not_determined and no compliance conclusion is drawn.
+        """
+        out = self._answer(query, mode, scope, parts, k)
+        if bank_profile is None:
+            return out
+        from .applicability import ENGINE_VERSION, aggregate
+        eng = self.applicability
+        for ev in out["results"]:
+            ev["applicability"] = eng.assess_provision(self.conn, bank_profile, ev["provision_id"])
+        statuses = [ev["applicability"]["applicability_status"] for ev in out["results"]]
+        out["applicability_status"] = aggregate(statuses) if statuses else "not_assessed"
+        out["applicability_note"] = ("Conditional routing of each result by the scope stated in cited acquired provisions for the supplied "
+                                     "synthetic profile; not a legal determination. See each result's `applicability`.")
+        out["bank_profile"] = bank_profile.summary()
+        out["applicability_summary"] = {"by_status": {st: statuses.count(st) for st in sorted(set(statuses))},
+                                        "by_part": {f"{ev['applicability']['title']}:{ev['applicability']['part']}": ev["applicability"]["applicability_status"]
+                                                    for ev in out["results"] if ev["applicability"]["part"]},
+                                        "engine_version": ENGINE_VERSION,
+                                        "conditions_version": eng.version, "conditions_sha256": eng.conditions_sha256}
+        out["legal_validity"] = "not_determined"
+        return out
+
+    def _answer(self, query, mode="hybrid", scope="both", parts=None, k=8):
         """Evidence bundle. `status` is evidence_found | partial_evidence | missing_evidence.
 
         missing_evidence: the query names only topics whose sources are not acquired (no results returned).
@@ -1209,6 +1248,7 @@ class Index:
                       "reason": record["reason"], "note": record["note"]}
         return {"citation": citation, "requested_citation": parsed["requested"], "canonical_citation": None,
                 "as_of": self.as_of, "requested_precision": record["requested_precision"], "requested_path": None,
+                **self._unclassified("malformed_citation"),
                 "baseline": None, "section_context": None, "instruments": [],
                 "current_precision": {**unresolved, "scope": "current"}, "future_precision": {**unresolved, "scope": "future"},
                 "evidence_status": "unavailable",
@@ -1229,6 +1269,7 @@ class Index:
                       "reason": "ambiguous_title", "note": record["note"]}
         return {"citation": citation, "requested_citation": parsed["requested"], "canonical_citation": parsed["canonical"],
                 "as_of": self.as_of, "requested_precision": record["requested_precision"], "requested_path": parsed["paras"] or None,
+                **self._unclassified("ambiguous_title"),
                 "baseline": None, "section_context": None, "instruments": [],
                 "current_precision": {**unresolved, "scope": "current"}, "future_precision": {**unresolved, "scope": "future"},
                 "evidence_status": "ambiguous_title",
@@ -1252,7 +1293,8 @@ class Index:
         unresolved = {"scope": None, "requested": None, "resolved": False, "achieved": None, "reason": "multiple_citations_not_supported",
                       "note": "delta() supports one citation per request."}
         return {"citation": citation, "requested_citation": citation, "canonical_citation": None, "as_of": self.as_of,
-                "requested_precision": None, "requested_path": None, "baseline": None, "section_context": None, "instruments": [],
+                "requested_precision": None, "requested_path": None, **self._unclassified("multiple_citations_not_supported"),
+                "baseline": None, "section_context": None, "instruments": [],
                 "current_precision": {**unresolved, "scope": "current"}, "future_precision": {**unresolved, "scope": "future"},
                 "evidence_status": "unsupported_multi_citation",
                 "unavailable": {"reason": "multiple_citations_not_supported", "legal_validity": "not_determined",
@@ -1262,7 +1304,116 @@ class Index:
                 "notes": ["The request names %d distinct citations; none was selected. Ask for each one: %s." % (
                     len(members), "; ".join(m["canonical"] or m["label"] for m in members))]}
 
-    def delta(self, citation):
+    @staticmethod
+    def _unclassified(reason):
+        """Contract fields for a delta that cannot be classified; no instrument is promoted to provision-level support."""
+        return {"delta_contract": DELTA_CONTRACT, "classification_status": f"not_classified:{reason}",
+                "instrument_classification": [], "provision_level_supported_instruments": []}
+
+    def _classify_instruments(self, title, part, section, wanted, precision, instruments, candidates, baseline, section_context):
+        """One record per future instrument (Rule or Proposed Rule) related to the requested citation, by evidence level.
+
+        matched_provision: the instrument explicitly targets the requested provision at its own precision (a paragraph
+        path its own attributed instruction names; for a section request an explicit or numeric-range section target).
+        matched_section_context: it explicitly amends the enclosing section but does not name the requested paragraph.
+        matched_part_context: only a part-level instruction (or a part request) relates it. unresolved_candidate: only
+        an unpaired amendment candidate or ambiguous range. reference_only: only a citation quoted in an instruction.
+        no_acquired_instrument: no acquired instrument relates to the citation (a visible gap, not proof none exists).
+        Only matched_provision is provision-level support; context classes never are, and none is a legal conclusion.
+        """
+        cur_ok = baseline is not None and (precision != "paragraph" or baseline.get("precision") == "paragraph")
+        current = {"scope": "current_baseline", "resolved_at_requested_precision": cur_ok,
+                   "doc_key": (baseline or section_context or {}).get("doc_key"),
+                   "locator": (baseline or section_context or {}).get("locator"),
+                   "role": "baseline" if baseline else ("section_context" if section_context else None),
+                   "precision": (baseline or {}).get("precision", "section_or_part" if baseline else None)}
+        future_types = ("Rule", "Proposed Rule")
+        out = {}
+
+        def put(doc_key, cls, reason, evidence):
+            if doc_key in out:
+                out[doc_key]["other_evidence"].append(cls)
+                return
+            rm = self._rulemaking.get(doc_key)
+            if not rm or rm["document_type"] not in future_types:
+                return
+            out[doc_key] = {"doc_key": doc_key, "document_number": rm["document_number"], "document_type": rm["document_type"],
+                            "lifecycle_state": lifecycle(rm, self.as_of)["state"], "classification": cls, "reason": reason,
+                            "provision_level_support": cls == "matched_provision",
+                            "provision_level_delta_match": cls == "matched_provision" and cur_ok,
+                            "future": {"scope": "future_instrument", "evidence": sorted(evidence)}, "current": dict(current),
+                            "other_evidence": [], "applicability_status": "not_assessed", "legal_validity": "not_determined"}
+
+        for g in instruments:
+            locs = [u["locator"] for u in g["units"]]
+            if precision == "part":
+                put(g["doc_key"], "matched_part_context", "part-level request: part evidence is never provision-level support", locs)
+            elif precision == "paragraph":
+                if (g.get("paragraph_precision") or {}).get("resolved"):
+                    put(g["doc_key"], "matched_provision", "its own attributed instruction names the complete requested paragraph path",
+                        g["paragraph_precision"]["supported_by"])
+                else:
+                    put(g["doc_key"], "matched_section_context",
+                        "explicitly amends the enclosing section but does not name the requested paragraph", locs)
+            else:
+                put(g["doc_key"], "matched_provision", "explicit section target or numeric range membership of the requested section", locs)
+        if precision != "part":
+            for r in self.conn.execute("""SELECT DISTINCT d.doc_key, p.locator FROM relationship rel JOIN provision p ON p.id=rel.src_provision_id
+                                          JOIN source_document d ON d.id=p.doc_id WHERE rel.rel_type='amends' AND rel.dst_citation=?""",
+                                       (f"{title} CFR Part {part}",)):
+                put(r["doc_key"], "matched_part_context", "only a part-level instruction relates it (for example an authority citation)", [r["locator"]])
+        for c in candidates:
+            put(c["doc_key"], "unresolved_candidate", f"unpaired amendment candidate ({c['pairing_status']}); not a confirmed amendment", [c["locator"]])
+        target = f"{title} CFR {section}" if section else None
+        q = ("""SELECT DISTINCT d.doc_key, p.locator FROM relationship rel JOIN provision p ON p.id=rel.src_provision_id
+                JOIN source_document d ON d.id=p.doc_id WHERE rel.rel_type='references' AND """
+             + ("(rel.dst_citation=? OR rel.dst_citation LIKE ?)" if target else "rel.dst_citation LIKE ?"))
+        params = (target, target + "(%") if target else (f"{title} CFR {part}.%",)
+        for r in self.conn.execute(q, params):
+            if r["doc_key"].startswith("fr:"):
+                put(r["doc_key"], "reference_only", "cited inside an amendatory instruction, not an amendment target", [r["locator"]])
+        if not out:
+            return [{"doc_key": None, "document_number": None, "document_type": None, "lifecycle_state": None,
+                     "classification": "no_acquired_instrument",
+                     "reason": "no acquired Rule or Proposed Rule relates to the citation; this is a visible gap, not proof that none exists",
+                     "provision_level_support": False, "provision_level_delta_match": False,
+                     "future": {"scope": "future_instrument", "evidence": []}, "current": current, "other_evidence": [],
+                     "applicability_status": "not_assessed", "legal_validity": "not_determined"}]
+        return [out[k] for k in sorted(out)]
+
+    def delta(self, citation, bank_profile=None):
+        """Current-to-future delta; see `_delta`. Without `bank_profile` the output is unchanged (`not_assessed` throughout).
+
+        With a synthetic profile: the current baseline part is assessed (`applicability`), and each record in
+        `instrument_classification` gets its own conditional `applicability` (the requested part's stated scope plus the
+        instrument's proposal/effective-date qualifier). Instruments stay separate; legal validity stays not_determined.
+        """
+        out = self._delta(citation)
+        if bank_profile is None:
+            return out
+        out["bank_profile"] = bank_profile.summary()
+        eng = self.applicability
+        cites = parse_query_citations(citation)
+        if out.get("classification_status") != "classified" or not cites:
+            base = eng.assess_part(bank_profile, None, None)
+            out["applicability"] = {**base, "applicability_status": "not_assessed",
+                                    "reason": f"the delta was not classified ({out.get('classification_status')})"}
+            return out
+        title = (out.get("title_resolution") or {}).get("title") or cites[0].get("title")
+        part = cites[0]["part"]
+        cur = eng.assess_part(bank_profile, title, part)
+        out["applicability"] = cur
+        out["applicability_status"] = cur["applicability_status"]
+        for r in out["instrument_classification"]:
+            if r["doc_key"] is None:
+                r["applicability"] = {**cur, "applicability_status": "not_assessed", "reason": "no acquired instrument to assess"}
+            else:
+                r["applicability"] = eng.assess_part(bank_profile, title, part,
+                                                     {"document_type": r["document_type"], "lifecycle_state": r["lifecycle_state"]})
+            r["applicability_status"] = r["applicability"]["applicability_status"]
+        return out
+
+    def _delta(self, citation):
         """Current baseline versus each acquired future instrument for one section or part.
 
         Instruments are listed independently and are never merged: competing or cumulative proposals do not form
@@ -1429,8 +1580,12 @@ class Index:
             unavailable = {"reason": reason, "legal_validity": "not_determined",
                            "note": CITATION_REASONS[reason] + " This reports unavailable evidence only; it is not a "
                                    "determination that the citation is invalid or does not exist."}
+        classification = self._classify_instruments(title, part, section, wanted, precision, instruments, candidates,
+                                                    baseline, section_context)
         return {"citation": citation, "requested_citation": parsed["requested"], "canonical_citation": parsed["canonical"],
                 "as_of": self.as_of, "requested_precision": precision, "requested_path": wanted or None,
+                "delta_contract": DELTA_CONTRACT, "classification_status": "classified", "instrument_classification": classification,
+                "provision_level_supported_instruments": [r["doc_key"] for r in classification if r["provision_level_support"]],
                 "baseline": baseline, "section_context": section_context, "instruments": instruments,
                 "current_precision": current_precision, "future_precision": future_precision,
                 "evidence_status": evidence_status, "unavailable": unavailable, "legal_validity": "not_determined",

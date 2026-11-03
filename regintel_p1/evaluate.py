@@ -87,10 +87,131 @@ def run_retrieval(index, items, k=10):
     return per_item, summary
 
 
+def delta_classification_failures(out):
+    """Contract p1-delta-provision-classification-1, checked on every evaluated delta (not a frozen expectation).
+
+    Only matched_provision may be provision-level support; section and part context, unresolved candidates and
+    references never are. Every listed instrument is classified exactly once, no proposal is labelled final or current,
+    and every record keeps applicability not_assessed and legal validity not_determined.
+    """
+    from .search import CLASSIFICATIONS, DELTA_CONTRACT
+    failures = []
+    if out.get("delta_contract") != DELTA_CONTRACT:
+        return [f"delta_contract {out.get('delta_contract')!r} != {DELTA_CONTRACT!r}"]
+    recs = out.get("instrument_classification") or []
+    if out.get("classification_status") != "classified":
+        return [] if not recs and not out.get("provision_level_supported_instruments") else ["unclassified delta lists instruments"]
+    keys = [r["doc_key"] for r in recs]
+    if len(keys) != len(set(keys)):
+        failures.append("an instrument is classified more than once")
+    for r in recs:
+        if r["classification"] not in CLASSIFICATIONS:
+            failures.append(f"unknown classification {r['classification']}")
+        if r["provision_level_support"] != (r["classification"] == "matched_provision"):
+            failures.append(f"{r['doc_key']}: provision-level support from {r['classification']}")
+        if r["provision_level_delta_match"] and not r["provision_level_support"]:
+            failures.append(f"{r['doc_key']}: provision-level delta match without provision-level support")
+        if r["document_type"] == "Proposed Rule" and (r["lifecycle_state"] or "").startswith(("final", "current")):
+            failures.append(f"proposal {r['doc_key']} labelled {r['lifecycle_state']}")
+        if r["legal_validity"] != "not_determined":
+            failures.append(f"{r['doc_key']}: legal validity asserted")
+        failures += [f"{r['doc_key']}: {x}" for x in _applicability_record_failures(r, "bank_profile" in out)]
+        if r["future"]["scope"] != "future_instrument" or r["current"]["scope"] != "current_baseline":
+            failures.append(f"{r['doc_key']}: current and future scopes merged")
+    if not set(g["doc_key"] for g in out["instruments"]) <= set(keys):
+        failures.append("a listed instrument has no classification")
+    if out["provision_level_supported_instruments"] != [r["doc_key"] for r in recs if r["provision_level_support"]]:
+        failures.append("provision_level_supported_instruments disagrees with the classification")
+    if not recs:
+        failures.append("no classification record (no_acquired_instrument must be explicit)")
+    return failures
+
+
+def _applicability_record_failures(rec, profiled):
+    """Without a profile every record stays not_assessed; with one, an assessed status needs a verified, cited scope condition."""
+    from .applicability import STATUSES
+    st = rec["applicability_status"]
+    if not profiled:
+        return [] if st == "not_assessed" else [f"applicability {st} without a bank profile"]
+    if st not in STATUSES:
+        return [f"unknown applicability status {st}"]
+    a = rec.get("applicability") or {}
+    out = []
+    if a.get("applicability_status") != st:
+        out.append("applicability detail disagrees with the record status")
+    if a.get("legal_validity") != "not_determined":
+        out.append("applicability detail asserts legal validity")
+    if st != "not_assessed" and not (a.get("condition_id") and a.get("basis") and all(b["verified"] for b in a["basis"])):
+        out.append(f"{st} without a verified, cited scope condition")
+    return out
+
+
+# S7-P1-56: literal routing expectations for the synthetic profiles in eval/phase1/bank_profiles (not frozen expectations)
+APPLICABILITY_EXPECT = {
+    "syn-national-bank-01": {"12:3": "assessed_conditional", "12:217": "assessed_not_applicable", "12:324": "assessed_not_applicable"},
+    "syn-state-member-bank-01": {"12:3": "assessed_not_applicable", "12:217": "assessed_conditional", "12:324": "assessed_not_applicable"},
+    "syn-state-nonmember-bank-01": {"12:3": "assessed_not_applicable", "12:217": "assessed_not_applicable", "12:324": "assessed_conditional"},
+}
+APPLICABILITY_QUERY = "minimum common equity tier 1 capital ratio"
+
+
+def check_applicability(index, profiles_dir):
+    """Conditional applicability routing for each synthetic profile: CET1 answer results and delta() per capital part.
+
+    Expectations are literal per profile and part. Also checks that without a profile nothing is assessed, that every assessed
+    status cites verified scope sources, that legal validity stays not_determined, that each instrument record carries its own
+    applicability, and that proposals carry the not-operative qualifier.
+    """
+    from .bank_profile import load_profile
+    results = []
+    base = index.answer(APPLICABILITY_QUERY, k=8)
+    nd = index.delta("12 CFR 3.10")
+    f0 = [] if base["applicability_status"] == "not_assessed" and "bank_profile" not in base else ["answer without profile is assessed"]
+    f0 += _delta_applicability_failures(nd)
+    results.append({"id": "AP00-no-profile", "passed": not f0, "failures": f0})
+    for path in sorted(Path(profiles_dir).glob("*.json")):
+        prof = load_profile(path)
+        exp = APPLICABILITY_EXPECT.get(prof.profile_id)
+        failures = [] if exp else [f"no literal expectation for profile {prof.profile_id}"]
+        a = index.answer(APPLICABILITY_QUERY, k=8, bank_profile=prof)
+        if a["applicability_status"] == "not_assessed":
+            failures.append("CET1 answer stayed not_assessed with a profile")
+        for ev in a["results"]:
+            ap = ev["applicability"]
+            key = f"{ap['title']}:{ap['part']}"
+            if exp and key in exp and ap["applicability_status"] != exp[key]:
+                failures.append(f"answer {ev['citation']}: {ap['applicability_status']} != {exp[key]}")
+            failures += [f"answer {ev['citation']}: {x}" for x in
+                         _applicability_record_failures({"applicability_status": ap["applicability_status"], "applicability": ap}, True)]
+        for key, want in (exp or {}).items():
+            t, p = key.split(":")
+            d = index.delta(f"{t} CFR {p}.10", bank_profile=prof)
+            if d["applicability_status"] != want:
+                failures.append(f"delta {t} CFR {p}.10 current: {d['applicability_status']} != {want}")
+            failures += [f"delta {t} CFR {p}.10: {x}" for x in _delta_applicability_failures(d)]
+        results.append({"id": f"AP-{prof.profile_id}", "profile": prof.summary(), "passed": not failures, "failures": failures})
+    return results
+
+
+def _delta_applicability_failures(d):
+    out = list(delta_classification_failures(d))
+    profiled = "bank_profile" in d
+    for r in d.get("instrument_classification", []):
+        if profiled and r["doc_key"] and "applicability" not in r:
+            out.append(f"{r['doc_key']}: no per-instrument applicability")
+        if profiled and r["document_type"] == "Proposed Rule" and r["applicability_status"] != "not_assessed" \
+                and not any("proposal" in q for q in r["applicability"]["unevaluated_qualifiers"]):
+            out.append(f"{r['doc_key']}: proposal assessed without the not-operative qualifier")
+    if d.get("legal_validity") != "not_determined":
+        out.append("delta asserts legal validity")
+    return out
+
+
 def check_delta(index, item):
     ix = index if "as_of" not in item else Index(index.db_path, item["as_of"])
     out = ix.delta(item["citation"])
     exp, failures = item["expect"], []
+    failures += delta_classification_failures(out)
     got = {g["doc_key"]: g for g in out["instruments"]}
     if "baseline_doc" in exp and (not out["baseline"] or out["baseline"]["doc_key"] != exp["baseline_doc"]):
         failures.append(f"baseline doc {out['baseline'] and out['baseline']['doc_key']} != {exp['baseline_doc']}")
@@ -123,7 +244,8 @@ def check_delta(index, item):
         if not g or not any(b["text"] in (u["instruction"] or "") for u in g["units"]):
             failures.append(f"instruction of {b['doc_key']} lacks '{b['text']}'")
     return {"id": item["id"], "citation": item["citation"], "as_of": ix.as_of, "passed": not failures,
-            "failures": failures, "instruments_found": sorted(got)}
+            "failures": failures, "instruments_found": sorted(got),
+            "provision_classification": {r["doc_key"] or "none": r["classification"] for r in out.get("instrument_classification", [])}}
 
 
 def check_status(index, item):
@@ -2159,6 +2281,7 @@ def overall(report):
         "invalid_gold": [i["id"] for i in report["retrieval_items"] if i["invalid_gold"]],
         "part_filter_violations": [f"{c['id']}/{c['retriever']}" for c in report["filter_checks"] if not c["respected"]],
         "record_integrity": list(report.get("record_integrity", [])),
+        "applicability_checks": [a["id"] for a in report.get("applicability", []) if not a["passed"]],
         "regression_groups": {},
     }
     reg = report.get("regressions")
@@ -2268,11 +2391,14 @@ def run(index, questions_path, regressions_path=None):
     filters = [(r["id"], r["retrievers"][n]["filter_respected"], n) for r in per_item for n in RETRIEVERS
                if "filter_respected" in r["retrievers"][n]]
     regressions = run_regressions(index, regressions_path) if regressions_path else None
+    profiles_dir = Path(questions_path).parent / "bank_profiles"
+    applicability = check_applicability(index, profiles_dir) if profiles_dir.is_dir() else []
     report = {"questions_version": spec["version"], "as_of": index.as_of, "index": index.meta, "regressions": regressions,
               "questions_record": {"file": Path(questions_path).name, "version": spec["version"], "sha256": hashlib.sha256(raw).hexdigest(),
                                    "supersedes": ({k: spec["supersedes"][k] for k in ("file", "version", "sha256")} if spec.get("supersedes") else None)},
               "record_integrity": problems, "superseded": superseded_results(index, spec, base),
               "retrieval_summary": summary, "retrieval_items": per_item, "delta": deltas, "status": statuses,
+              "applicability": applicability,
               "filter_checks": [{"id": i, "retriever": n, "respected": ok} for i, ok, n in filters]}
     report["overall"] = overall(report)
     return report
@@ -2404,6 +2530,8 @@ def render(report):
         for x in reg.get("status", []):
             lines.append(f"  {x['id']} {'PASS' if x['passed'] else 'FAIL'} status={x['status']} results={x['results']} '{x['query']}' {'; '.join(x['failures'])}")
     lines.append("Filter checks: " + ", ".join(f"{c['id']}/{c['retriever']}={'ok' if c['respected'] else 'VIOLATED'}" for c in report["filter_checks"]))
+    for a in report.get("applicability", []):
+        lines.append(f"Applicability {a['id']}: {'PASS' if a['passed'] else 'FAIL'} {'; '.join(a['failures'])}")
     ov = report.get("overall") or overall(report)
     lines.append("")
     lines.append(f"Overall evaluation: {'PASS' if ov['passed'] else 'FAIL'}")
@@ -2411,7 +2539,9 @@ def render(report):
     lines.append(f"  failed delta checks: {c['delta_checks']}; failed status checks: {c['status_checks']}; "
                  f"invalid gold matchers: {c['invalid_gold']}; part-filter violations: {c['part_filter_violations']}; "
                  f"failed regression checks: {c['regression_groups']}")
-    for key in ("delta_checks", "status_checks", "invalid_gold", "part_filter_violations"):
+    if c.get("applicability_checks"):
+        lines.append(f"  failed applicability checks: {c['applicability_checks']}")
+    for key in ("delta_checks", "status_checks", "invalid_gold", "part_filter_violations", "applicability_checks"):
         if ov["failures"][key]:
             lines.append(f"  {key}: {', '.join(ov['failures'][key])}")
     for group, ids in ov["failures"]["regression_groups"].items():

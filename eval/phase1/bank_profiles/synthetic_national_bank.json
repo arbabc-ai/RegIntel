@@ -1,0 +1,41 @@
+{
+ "schema_version": "p1-bank-profile-0.1",
+ "profile_id": "syn-national-bank-01",
+ "synthetic": true,
+ "description": "Synthetic national bank for routing tests. Fictional; corresponds to no real institution.",
+ "charter": {
+  "charter_type": "national",
+  "chartering_authority": "OCC (as stated by the synthetic profile)",
+  "federal_reserve_member": "yes",
+  "fdic_insured": "yes"
+ },
+ "legal_entity": {
+  "entity_type": "bank",
+  "domiciled_in_united_states": "yes",
+  "top_tier_holding_company": "syn-holding-01"
+ },
+ "business_model": {
+  "activities": [
+   "commercial lending",
+   "retail deposits"
+  ],
+  "notes": "community bank, synthetic"
+ },
+ "regulator": {
+  "primary_federal_regulator": "OCC",
+  "basis": "stated by the synthetic profile author"
+ },
+ "size_risk_category": {
+  "total_consolidated_assets_usd": 9000000000,
+  "as_of_date": "2026-09-30",
+  "prudential_category": "not_categorized"
+ },
+ "capital_regime": {
+  "approach": "standardized",
+  "cblr_election": "unknown"
+ },
+ "form_eligibility": {
+  "call_report_form": "FFIEC 041",
+  "holding_company_forms": []
+ }
+}
