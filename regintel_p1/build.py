@@ -6,7 +6,7 @@ import sys
 import time
 from pathlib import Path
 
-from . import schema
+from . import schema, state_sources
 from .ecfr import parse_ecfr
 from .fedreg import extract_spans, parse_fr
 
@@ -84,6 +84,17 @@ def build(corpus_dir, db_path, as_of, log=print):
             counts["skipped"].append({"doc_key": key, "reason": "hash_or_size_mismatch"})
             source_status[key] = (d.get("publisher"), "skipped_hash_or_size_mismatch", "bytes do not match the manifest sha256 or size", 0, 0)
             log(f"SKIP {key}: bytes do not match manifest hash")
+            continue
+        if state_sources.is_state_entry(d):
+            # Official state source: hash-verified above, metadata validated, recorded, and never parsed or indexed.
+            problems = state_sources.validate(key, d)
+            if problems:
+                counts["skipped"].append({"doc_key": key, "reason": "invalid_state_metadata"})
+                source_status[key] = (d.get("publisher"), "skipped_invalid_state_metadata", "; ".join(problems), 0, 0)
+            else:
+                source_status[key] = (d.get("publisher"), "registered_not_indexed",
+                                      "official state source registered with verified bytes; no state parser, text not indexed", 0, 0)
+            counts.setdefault("state_sources", []).append({"doc_key": key, "status": source_status[key][1]})
             continue
         fmt = path.suffix.lstrip(".")
         if fmt not in ("html", "xml"):

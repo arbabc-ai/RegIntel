@@ -1,0 +1,11 @@
+{
+ "version": "p1-state-sources-0.1",
+ "note": "Manifest ingestion contract for official state and territorial sources. A state entry is hash-verified and its metadata validated, then recorded in source_status as registered_not_indexed: no state parser exists, so no state text enters the provision index and no state-law coverage is claimed (topic state_law stays not_acquired). An entry from a host that is not listed as a confirmed official host for its jurisdiction is rejected. Hosts are added here only after the publisher's own site has been confirmed under an operator-authorised acquisition task; the list starts empty.",
+ "source_classes": ["state_statute", "state_administrative_rule", "state_regulator_issuance", "state_register_notice"],
+ "required_fields": ["source_class", "jurisdiction", "publisher", "source_url", "legal_entity_scope", "locator", "rights", "acquisition_authorization", "asset"],
+ "required_rights_fields": ["terms_url", "terms_checked_at", "usage_status"],
+ "usage_statuses": ["permitted", "pending_review", "restricted"],
+ "jurisdictions": {
+  "TX": {"name": "Texas", "official_hosts": [], "status": "official endpoints unconfirmed (STATE_JURISDICTION_REGISTER.csv TX row has empty official URLs)"}
+ }
+}
