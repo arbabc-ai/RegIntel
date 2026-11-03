@@ -1,0 +1,218 @@
+{
+ "note": "Public metadata observed 2026-11-03 (S7-P1-48). No page text. Used by offline tests only.",
+ "pages": [
+  {
+   "requested_url": "https://statutes.capitol.texas.gov/",
+   "final_url": "https://statutes.capitol.texas.gov/",
+   "status": 200,
+   "access_time": "2026-11-03T01:36:11+00:00",
+   "title": "Texas Constitution and Statutes",
+   "sha256": "dbfba8a96dc3cd584157ca66aaafdf67e0ed15dd5a0c8a58f3d4bd0f109fc646",
+   "redirect_chain": []
+  },
+  {
+   "requested_url": "https://statutes.capitol.texas.gov/Docs/FI/htm/FI.31.htm",
+   "final_url": "https://statutes.capitol.texas.gov/Docs/FI/htm/FI.31.htm",
+   "status": 200,
+   "access_time": "2026-11-03T01:36:13+00:00",
+   "title": "Texas Constitution and Statutes",
+   "sha256": "dbfba8a96dc3cd584157ca66aaafdf67e0ed15dd5a0c8a58f3d4bd0f109fc646",
+   "redirect_chain": []
+  },
+  {
+   "requested_url": "http://www.statutes.legis.texas.gov/Docs/GV/htm/GV.323.htm#323.007",
+   "final_url": "https://statutes.capitol.texas.gov/Docs/GV/htm/GV.323.htm",
+   "status": 200,
+   "access_time": "2026-11-03T01:40:08+00:00",
+   "title": "Texas Constitution and Statutes",
+   "sha256": "dbfba8a96dc3cd584157ca66aaafdf67e0ed15dd5a0c8a58f3d4bd0f109fc646",
+   "redirect_chain": [
+    {
+     "status": 301,
+     "from": "http://www.statutes.legis.texas.gov/Docs/GV/htm/GV.323.htm#323.007",
+     "to": "https://statutes.capitol.texas.gov/Docs/GV/htm/GV.323.htm"
+    }
+   ]
+  },
+  {
+   "requested_url": "https://statutes.capitol.texas.gov/Docs/GV/htm/GV.323.htm",
+   "final_url": "https://statutes.capitol.texas.gov/Docs/GV/htm/GV.323.htm",
+   "status": 200,
+   "access_time": "2026-11-03T01:40:10+00:00",
+   "title": "Texas Constitution and Statutes",
+   "sha256": "dbfba8a96dc3cd584157ca66aaafdf67e0ed15dd5a0c8a58f3d4bd0f109fc646",
+   "redirect_chain": []
+  },
+  {
+   "requested_url": "https://tcss.legis.texas.gov/resources/FI/htm/FI.32.htm",
+   "final_url": "https://tcss.legis.texas.gov/resources/FI/htm/FI.32.htm",
+   "status": 200,
+   "access_time": "2026-11-03T01:40:29+00:00",
+   "title": "FINANCE CODE CHAPTER 32. POWERS, ORGANIZATION, AND FINANCIAL REQUIREMENTS",
+   "sha256": "8eca55bc9276a5fac7c988696540819e2eecb0eb3e2f7abb9870564960a7a9b5",
+   "redirect_chain": []
+  },
+  {
+   "requested_url": "https://tcss.legis.texas.gov/resources/FI/htm/FI.33.htm",
+   "final_url": "https://tcss.legis.texas.gov/resources/FI/htm/FI.33.htm",
+   "status": 200,
+   "access_time": "2026-11-03T01:40:29+00:00",
+   "title": "FINANCE CODE CHAPTER 33. OWNERSHIP AND MANAGEMENT OF STATE BANK",
+   "sha256": "43b28c5c377d07210895117ece1de39194117fc5b8fc72d247bba0177e660bf4",
+   "redirect_chain": []
+  },
+  {
+   "requested_url": "https://www.sos.state.tx.us/tac/index.shtml",
+   "final_url": "https://www.sos.state.tx.us/tac/index.shtml",
+   "status": 200,
+   "access_time": "2026-11-03T01:40:31+00:00",
+   "title": "Welcome to the Texas Administrative Code",
+   "sha256": "1af0df5ee5ad76ab776097111a44a22ee6ca8690746694f84fd4cbaedd5e0514",
+   "redirect_chain": []
+  },
+  {
+   "requested_url": "https://www.sos.texas.gov/texreg/index.shtml",
+   "final_url": "https://www.sos.texas.gov/texreg/index.shtml",
+   "status": 200,
+   "access_time": "2026-11-03T01:40:33+00:00",
+   "title": "State Rules and Open Meetings",
+   "sha256": "b921f3d106030bcf0a09e8da33ba17e90665ad8b6650363ee50f3eab94a4d046",
+   "redirect_chain": []
+  },
+  {
+   "requested_url": "https://texreg.sos.state.tx.us/public/readtac$ext.viewtac",
+   "final_url": "https://texreg.sos.state.tx.us/public/readtac$ext.viewtac",
+   "status": 200,
+   "access_time": "2026-11-03T01:40:34+00:00",
+   "title": "Site Has Moved",
+   "sha256": "6c6f1c86bb3cb8fa9732b1d178ece196b285f65604c2a4841e09e12070e22c1c",
+   "redirect_chain": []
+  },
+  {
+   "requested_url": "https://www.dob.texas.gov/",
+   "final_url": "https://www.dob.texas.gov/",
+   "status": 200,
+   "access_time": "2026-11-03T01:40:36+00:00",
+   "title": "Home | Texas Department of Banking",
+   "sha256": "07246fa3e40403729a9514abb0dbd3bf27f64c60817191288afccaf7659b75d0",
+   "redirect_chain": []
+  },
+  {
+   "requested_url": "https://comptroller.texas.gov/",
+   "final_url": "https://comptroller.texas.gov/",
+   "status": 200,
+   "access_time": "2026-11-03T01:40:37+00:00",
+   "title": "Texas Comptroller of Public Accounts",
+   "sha256": "86b744ba9d0f40e7066e3ac4bf1cc3b2d42124f8ec2e7e16ca3aca43b60ee803",
+   "redirect_chain": []
+  },
+  {
+   "requested_url": "https://webservices.sos.state.tx.us/termsandconditions/tac.html",
+   "final_url": "https://webservices.sos.state.tx.us/termsandconditions/tac.html",
+   "status": 200,
+   "access_time": "2026-11-03T01:40:53+00:00",
+   "title": "Rules of Use",
+   "sha256": "d367fe41c97d147bf88f85ba9776a65654a964e2f810edc3b65b9400609cc11a",
+   "redirect_chain": []
+  },
+  {
+   "requested_url": "https://texas-sos.appianportalsgov.com/rules-and-meetings?interface=VIEW_TAC",
+   "final_url": "https://texas-sos.appianportalsgov.com/rules-and-meetings?interface=VIEW_TAC",
+   "status": 200,
+   "access_time": "2026-11-03T01:40:55+00:00",
+   "title": "Rules & Meetings",
+   "sha256": "a05d4e2c4ea85c312ee17c47835bd15e24a2188e3c42f50ee51ea3427cb6314c",
+   "redirect_chain": []
+  },
+  {
+   "requested_url": "https://www.dob.texas.gov/laws-regulations",
+   "final_url": "https://www.dob.texas.gov/laws-regulations",
+   "status": 200,
+   "access_time": "2026-11-03T01:40:56+00:00",
+   "title": "Laws & Regulations | Texas Department of Banking",
+   "sha256": "bb06efd7b27fa3edbd660214a35dc6920663a9071f87357fd30de55c108fe4ab",
+   "redirect_chain": []
+  },
+  {
+   "requested_url": "https://www.dob.texas.gov/laws-regulations/proposed-rules",
+   "final_url": "https://www.dob.texas.gov/laws-regulations/proposed-rules",
+   "status": 200,
+   "access_time": "2026-11-03T01:40:57+00:00",
+   "title": "Proposed Rules | Texas Department of Banking",
+   "sha256": "365a8ff4417ec4a7fb83c2dff319d717f36790d173057840365a740688bdd00c",
+   "redirect_chain": []
+  },
+  {
+   "requested_url": "https://www.dob.texas.gov/site-policies",
+   "final_url": "https://www.dob.texas.gov/site-policies",
+   "status": 200,
+   "access_time": "2026-11-03T01:40:59+00:00",
+   "title": "Site Policies | Texas Department of Banking",
+   "sha256": "a087ed3a79a3d1aa5a11ee04206ce770c3c873f34e912541350ea11d190a278d",
+   "redirect_chain": []
+  },
+  {
+   "requested_url": "https://comptroller.texas.gov/about/policies/rules.php",
+   "final_url": "https://comptroller.texas.gov/about/policies/rules.php",
+   "status": 200,
+   "access_time": "2026-11-03T01:40:59+00:00",
+   "title": "Proposed Rule Summaries",
+   "sha256": "ef4751e1cc7bf3d4f1bd7cb7570aa4c5fc193ff0cf42743f65f70e49e0558975",
+   "redirect_chain": []
+  },
+  {
+   "requested_url": "https://comptroller.texas.gov/about/policies/",
+   "final_url": "https://comptroller.texas.gov/about/policies/",
+   "status": 200,
+   "access_time": "2026-11-03T01:41:01+00:00",
+   "title": "Policies and Portals",
+   "sha256": "923a7ed046fc2dc60f626212045349d0e2f27b98f5f99ec89388dafb1771d33f",
+   "redirect_chain": []
+  },
+  {
+   "requested_url": "https://comptroller.texas.gov/taxes/resources/rule-index.php",
+   "final_url": "https://comptroller.texas.gov/taxes/resources/rule-index.php",
+   "status": 200,
+   "access_time": "2026-11-03T01:42:02+00:00",
+   "title": "Index to Rules by Subject Matter",
+   "sha256": "ed98ed18cfae5e12aa7161e869b7346b8087e3369047c8a006e1ec6b1774874f",
+   "redirect_chain": []
+  },
+  {
+   "requested_url": "https://www.dob.texas.gov/laws-regulations/adopted-rules",
+   "final_url": "https://www.dob.texas.gov/laws-regulations/adopted-rules",
+   "status": 200,
+   "access_time": "2026-11-03T01:42:04+00:00",
+   "title": "Adopted Rules | Texas Department of Banking",
+   "sha256": "8acc90be90f83337c19c0845f78facbd147bf44090e8ca16eafdad3474045c8f",
+   "redirect_chain": []
+  },
+  {
+   "requested_url": "https://tcss.legis.texas.gov/resources/FI/htm/FI.31.htm",
+   "final_url": "https://tcss.legis.texas.gov/resources/FI/htm/FI.31.htm",
+   "status": 200,
+   "access_time": "2026-11-03T01:42:44+00:00",
+   "title": "FINANCE CODE CHAPTER 31. GENERAL PROVISIONS",
+   "sha256": "fe2db5fa3589b5442f64cce7c60a24333fdb8e9833fcc073a3ab06553a42635f",
+   "redirect_chain": []
+  },
+  {
+   "requested_url": "https://tlc.texas.gov/code-projects",
+   "final_url": "https://tlc.texas.gov/code-projects",
+   "status": 200,
+   "access_time": "2026-11-03T01:42:45+00:00",
+   "title": "Code Projects",
+   "sha256": "be462be3a5041e12b734e06e8c19ebb84b5111866899908bf3dfecc94a7feb7b",
+   "redirect_chain": []
+  },
+  {
+   "requested_url": "https://capitol.texas.gov/",
+   "final_url": "https://capitol.texas.gov/",
+   "status": 200,
+   "access_time": "2026-11-03T01:42:47+00:00",
+   "title": "Texas Legislature Online",
+   "sha256": "cba3b09a8b90ab2eec1420d9321f0791790c60674bbe3937fba2bf1f677ebe54",
+   "redirect_chain": []
+  }
+ ]
+}

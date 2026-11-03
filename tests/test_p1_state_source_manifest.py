@@ -37,9 +37,10 @@ def confirmed(hosts):
 
 
 class ContractTests(unittest.TestCase):
-    def test_shipped_contract_confirms_no_texas_host_yet(self):
+    def test_shipped_contract_does_not_confirm_the_synthetic_test_host(self):
+        # S7-P1-48 documented real Texas hosts; the synthetic test host must never be among them.
         spec = state_sources.contract()
-        self.assertEqual(spec["jurisdictions"]["TX"]["official_hosts"], [])
+        self.assertNotIn(HOST, spec["jurisdictions"]["TX"]["official_hosts"])
         self.assertIn("state_statute", spec["source_classes"])
 
     def test_valid_entry_passes_only_with_a_confirmed_host(self):

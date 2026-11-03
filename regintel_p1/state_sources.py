@@ -35,10 +35,15 @@ def validate(key, record, spec=None):
         problems.append("source_url must be https")
     if jur is not None and url.hostname not in jur["official_hosts"]:
         problems.append(f"source host {url.hostname} is not a confirmed official host for {record['jurisdiction']}")
+    host = (jur or {}).get("hosts", {}).get(url.hostname)
+    if host and record.get("source_class") and record["source_class"] not in host["source_classes"]:
+        problems.append(f"source_class {record['source_class']} is not served by {url.hostname} ({', '.join(host['source_classes'])})")
     rights = record.get("rights") or {}
     problems += [f"missing rights field {f}" for f in spec["required_rights_fields"] if not rights.get(f)]
     if rights.get("usage_status") and rights["usage_status"] not in spec["usage_statuses"]:
         problems.append(f"unknown rights usage_status {rights['usage_status']}")
+    if rights.get("usage_status") == "permitted" and not rights.get("permission_reference"):
+        problems.append("usage_status permitted needs rights.permission_reference naming an operator decision (no reuse permission is inferred)")
     asset = record.get("asset") or {}
     problems += [f"missing asset field {f}" for f in ("path", "sha256", "bytes", "retrieved_at") if not asset.get(f)]
     return problems
