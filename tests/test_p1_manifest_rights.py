@@ -128,7 +128,8 @@ class ValidatorTests(unittest.TestCase):
             self.assertTrue(any("permission_reference" in p for p in state_sources.validate("state:TX:state_statute:t", st)))
 
 
-@unittest.skipUnless(MANIFEST.exists() and OVERLAY.exists(), "current corpus manifest and overlay not present")
+@unittest.skipUnless(MANIFEST.exists() and OVERLAY.exists() and all(log.exists() for log in TRANCHE_C_RUN_LOGS),
+                     "current corpus manifest, overlay or Tranche C run logs not present")
 class CurrentCorpusTests(unittest.TestCase):
     def test_the_pinned_manifest_plus_overlay_passes_and_a_removed_record_fails(self):
         self.assertEqual(hashlib.sha256(MANIFEST.read_bytes()).hexdigest(), PINNED_MANIFEST_SHA256)
