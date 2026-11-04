@@ -178,14 +178,14 @@ class ComparisonTests(Fixture):
         exact = cov.compare(after, before, {("12", "217", "217.12")}, set())["inventory_54_check"]
         self.assertTrue(exact["inventory_54_matches_before_exact_section"])
 
-    def test_cli_writes_schema_0_4_with_a_computed_status_and_identical_reruns(self):
+    def test_cli_writes_schema_0_5_with_a_computed_status_and_identical_reruns(self):
         out1, out2 = Path(self.tmp) / "c1.json", Path(self.tmp) / "c2.json"
         with mock.patch("builtins.print"):
             self.assertEqual(cov.main(["--index", self.full, "--before-index", self.no217, "--added-parts", "12:217", "--out", str(out1)]), 0)
             cov.main(["--index", self.full, "--before-index", self.no217, "--added-parts", "12:217", "--out", str(out2)])
         self.assertEqual(out1.read_bytes(), out2.read_bytes())
         doc = json.loads(out1.read_text())
-        self.assertEqual(doc["schema"], "p1-delta-coverage-refresh-0.4")
+        self.assertEqual(doc["schema"], "p1-delta-coverage-refresh-0.5")
         self.assertEqual(doc["status"]["reconciles"], True)
         self.assertEqual(doc["status"]["invariant_problem_count"], 0)
         self.assertEqual(doc["before_after"]["added_parts_mismatch"], [])
@@ -436,6 +436,86 @@ class HardeningTests(Fixture):
         self.assertEqual(keys, ["12:30", "12:324", "12:4"])
         self.assertEqual(keys, sorted(keys))
         self.assertIn("lexicographic", cov.__doc__)
+
+
+def allow_null_citations(db):
+    """Recreate relationship without its NOT NULL on dst_citation (fixture copy only), so a NULL citation can be inserted."""
+    conn = sqlite3.connect(db)
+    try:
+        cols = [r[1] for r in conn.execute("PRAGMA table_info(relationship)")]
+        ddl = conn.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='relationship'").fetchone()[0]
+        conn.executescript("ALTER TABLE relationship RENAME TO relationship_old;\n"
+                           + ddl.replace("dst_citation TEXT NOT NULL", "dst_citation TEXT") + ";\n"
+                           f"INSERT INTO relationship ({', '.join(cols)}) SELECT {', '.join(cols)} FROM relationship_old;\n"
+                           "DROP TABLE relationship_old;")
+        assert not [r for r in conn.execute("PRAGMA table_info(relationship)") if r[1] == "dst_citation" and r[3]]
+    finally:
+        conn.close()
+
+
+def insert_null_citation(db, rel_type):
+    conn = sqlite3.connect(db)
+    try:
+        src = conn.execute("SELECT p.id FROM provision p JOIN source_document d ON d.id=p.doc_id WHERE d.doc_key LIKE 'fr:%' LIMIT 1").fetchone()[0]
+        conn.execute("INSERT INTO relationship (src_provision_id, rel_type, dst_citation, basis, source_locator, review_status) "
+                     "VALUES (?, ?, NULL, 'synthetic', 'synthetic', ?)",
+                     (src, rel_type, "parsed_unreviewed" if rel_type == "amends" else "unresolved_candidate"))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+class ProbeAndGuardTests(Fixture):
+    """S7-P1-71: NULL dst_citation rows and malformed ecfr doc_keys are reported, not raised."""
+
+    def copy_of(self, base, name):
+        db = str(Path(self.tmp) / f"{name}.sqlite")
+        shutil.copy(base, db)
+        return db
+
+    def test_1_a_null_candidate_citation_is_tallied_not_raised(self):
+        db = self.copy_of(self.rich, "nullcand")  # rich already has string candidates, so sorting a None would raise
+        allow_null_citations(db)
+        insert_null_citation(db, "amends_candidate")
+        r = cov.coverage(db, AS_OF)
+        self.assertEqual(r["summary"]["amends_candidate_rows_null_citation"], 1)
+        self.assertEqual(r["unresolved_candidates"], ["12 CFR 217.99", "12 CFR 324.12"])
+        self.assertEqual(r["summary"]["amends_candidate_rows"], 3)
+
+    def test_2_a_null_amends_citation_is_unclassified_but_not_listed_as_none(self):
+        db = self.copy_of(self.full, "nullamends")
+        allow_null_citations(db)
+        insert_null_citation(db, "amends")
+        s = cov.coverage(db, AS_OF)["summary"]
+        self.assertEqual((s["amends_rows_unclassified"], s["amends_rows_null_citation"]), (1, 1))
+        self.assertNotIn("None", s["amends_rows_unclassified_citations"])
+        self.assertEqual(s["amends_rows_unclassified_citations"], [])
+        self.assertEqual((s["distinct_targets"], s["sql_distinct_targets"]), (1, 1))
+        self.assertTrue(s["reconciles"])
+        self.assertEqual(ran(["--index", db, "--out", str(Path(self.tmp) / "nullamends.json")]), 1)
+
+    def test_3_a_malformed_ecfr_doc_key_is_listed_not_raised(self):
+        db = self.copy_of(self.full, "badkey")
+        conn = sqlite3.connect(db)
+        conn.execute("INSERT INTO source_document (doc_key, source_class, publisher, asset_path, sha256, bytes, format) VALUES "
+                     "('ecfr:12:217:appendix-A', 'regulation', 'synthetic', 'x', ?, 1, 'html'), ('ecfr:12', 'regulation', 'synthetic', 'y', ?, 1, 'html')",
+                     ("0" * 64, "1" * 64))
+        conn.commit()
+        conn.close()
+        r = cov.coverage(db, AS_OF)
+        self.assertEqual(r["ecfr_doc_keys_unparsed"], ["ecfr:12", "ecfr:12:217:appendix-A"])
+        self.assertNotIn("12:217:appendix-A", r["ecfr_parts"])
+        self.assertIn("12:217", r["ecfr_parts"])
+        out = Path(self.tmp) / "badkey.json"
+        ran(["--index", db, "--before-index", self.full, "--out", str(out)])
+        doc = json.loads(out.read_text())
+        self.assertEqual(doc["index"]["ecfr_doc_keys_unparsed"], ["ecfr:12", "ecfr:12:217:appendix-A"])
+        self.assertEqual(doc["before"]["index"]["ecfr_doc_keys_unparsed"], [])
+
+    def test_4_cli_schema_is_0_5(self):
+        out = Path(self.tmp) / "schema05.json"
+        self.assertEqual(ran(["--index", self.full, "--out", str(out)]), 0)
+        self.assertEqual(json.loads(out.read_text())["schema"], "p1-delta-coverage-refresh-0.5")
 
 
 if __name__ == "__main__":

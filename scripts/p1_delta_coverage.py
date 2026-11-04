@@ -28,6 +28,11 @@ Changelog:
       ^[0-9]+:[0-9]+$ (argparse exit 2). On-disk key order: the writer uses json.dumps(sort_keys=True), so every object's keys
       (for example targets_without_baseline_by_part, still_without_baseline_by_part) are lexicographic on disk ("12:30" <
       "12:324" < "12:4"); natural order (3.2 before 3.10) applies only to list fields such as rows and citation lists.
+  0.5 (S7-P1-71) summary gains amends_rows_null_citation (NULL-citation amends rows; those with review_status parsed_unreviewed
+      also count in amends_rows_unclassified, so the CLI exits 1, but are never listed as "None") and
+      amends_candidate_rows_null_citation (excluded from unresolved_candidates); index and before.index gain
+      ecfr_doc_keys_unparsed (ecfr: doc_keys not of the form ecfr:<title>:<part>, which are excluded from ecfr_parts). The
+      unclassified exit condition now reads the row count (amends_rows_unclassified), so a NULL-citation row still exits 1.
 
 Counting policy (both counters follow it; pinned by tests):
   - `amends` rows count only with review_status 'parsed_unreviewed'; other review statuses are tallied in
@@ -61,7 +66,7 @@ if str(REPO) not in sys.path:
 
 from regintel_p1.search import Index  # noqa: E402
 
-SCHEMA = "p1-delta-coverage-refresh-0.4"
+SCHEMA = "p1-delta-coverage-refresh-0.5"
 # fullmatch + re.ASCII: no trailing-newline match and ASCII digits only, exactly as the GLOB tests in SQL_TARGETS.
 SECTION = re.compile(r"(\d+) CFR (\d+)\.([0-9A-Za-z]+)", re.ASCII)
 PART = re.compile(r"(\d+) CFR Part (\d+)", re.ASCII)
@@ -84,19 +89,25 @@ def sources(conn):
     """Targets with their sources, the part-level, candidate and unclassified rows kept apart, and raw row counts."""
     targets, part_level, candidates, unclassified = defaultdict(set), set(), set(), []
     raw = {"amends_rows_total": 0, "amends_rows_by_review_status": {}, "amends_rows_section": 0, "amends_rows_part_level": 0,
-           "amends_rows_unclassified": 0, "amends_rows_other_review_status": 0}
+           "amends_rows_unclassified": 0, "amends_rows_other_review_status": 0, "amends_rows_null_citation": 0}
     by_review = Counter()
     for cite, review in conn.execute("SELECT dst_citation, review_status FROM relationship WHERE rel_type='amends'"):
         raw["amends_rows_total"] += 1
         by_review[review] += 1
+        if cite is None:
+            raw["amends_rows_null_citation"] += 1
         if review != "parsed_unreviewed":
             raw["amends_rows_other_review_status"] += 1
             continue
-        m = SECTION.fullmatch(cite or "")
+        if cite is None:  # no shape to classify: unclassified (the CLI exits 1), but never listed as the string "None"
+            raw["amends_rows_unclassified"] += 1
+            continue
+        cite = str(cite)
+        m = SECTION.fullmatch(cite)
         if m:
             raw["amends_rows_section"] += 1
             targets[(m[1], m[2], f"{m[2]}.{m[3]}")].add("amends")
-        elif PART.fullmatch(cite or ""):
+        elif PART.fullmatch(cite):
             raw["amends_rows_part_level"] += 1
             part_level.add(cite)
         else:
@@ -115,8 +126,12 @@ def sources(conn):
             targets[(str(title), str(part), f"{part}.{n}")].add("amendment_range")
     raw["amendment_range_rows"], raw["amendment_range_members"], raw["amendment_range_rows_inverted"] = ranges, members, inverted
     raw["amendment_range_rows_non_numeric"] = non_numeric
+    raw["amends_candidate_rows_null_citation"] = 0
     for (cite,) in conn.execute("SELECT dst_citation FROM relationship WHERE rel_type='amends_candidate'"):
-        candidates.add(cite)
+        if cite is None:
+            raw["amends_candidate_rows_null_citation"] += 1
+        else:
+            candidates.add(str(cite))
     raw["amends_candidate_rows"] = conn.execute("SELECT COUNT(*) FROM relationship WHERE rel_type='amends_candidate'").fetchone()[0]
     return targets, sorted(part_level), sorted(candidates), sorted(set(str(c) for c in unclassified)), raw
 
@@ -149,10 +164,19 @@ def sql_distinct_count(conn):
     return conn.execute(SQL_TARGETS).fetchone()[0]
 
 
+ECFR_KEY = re.compile(r"ecfr:([0-9]+:[0-9]+)", re.ASCII)
+
+
 def ecfr_parts(conn):
-    """title:part for every eCFR baseline document in the index."""
-    return sorted({k.split(":", 1)[1] for (k,) in conn.execute("SELECT doc_key FROM source_document WHERE doc_key LIKE 'ecfr:%'")},
-                  key=lambda tp: [int(x) for x in tp.split(":")])
+    """(title:part for every eCFR baseline doc_key of the form ecfr:<title>:<part>, sorted; the other ecfr: doc_keys, sorted)."""
+    parts, unparsed = set(), set()
+    for (k,) in conn.execute("SELECT doc_key FROM source_document WHERE doc_key LIKE 'ecfr:%'"):
+        m = ECFR_KEY.fullmatch(str(k))
+        if m:
+            parts.add(m[1])
+        else:
+            unparsed.add(str(k))
+    return sorted(parts, key=lambda tp: [int(x) for x in tp.split(":")]), sorted(unparsed)
 
 
 def row(ix, key, srcs):
@@ -199,7 +223,7 @@ def coverage(index_path, as_of):
         status = dict(ix.conn.execute("SELECT status, COUNT(*) FROM source_status GROUP BY status").fetchall())
         dep = ix.dependency_verification["status"]
         sql_count = sql_distinct_count(ix.conn)
-        parts = ecfr_parts(ix.conn)
+        parts, parts_unparsed = ecfr_parts(ix.conn)
     finally:
         ix.conn.close()
     held = set(parts)
@@ -227,7 +251,7 @@ def coverage(index_path, as_of):
     summary["reconciles"] = (summary["distinct_targets"] == summary["sql_distinct_targets"]
                              and len({r["citation"] for r in rows}) == summary["distinct_targets"])  # injectivity
     return {"rows": rows, "part_level_targets": part_level, "unresolved_candidates": candidates, "summary": summary,
-            "source_status_counts": status, "dependency_verification": dep, "ecfr_parts": parts}
+            "source_status_counts": status, "dependency_verification": dep, "ecfr_parts": parts, "ecfr_doc_keys_unparsed": parts_unparsed}
 
 
 def inventory_54_sections(path):
@@ -323,7 +347,8 @@ def main(argv=None):
            "as_of": a.as_of, "index": {"name": Path(a.index).name, "path": str(a.index), "sha256": sha256(a.index),
                                         "dependency_verification": after.pop("dependency_verification"),
                                         "source_status_counts": after.pop("source_status_counts"),
-                                        "ecfr_parts": after["ecfr_parts"]},
+                                        "ecfr_parts": after["ecfr_parts"],
+                                        "ecfr_doc_keys_unparsed": after.pop("ecfr_doc_keys_unparsed")},
            **after}
     if a.manifest:
         out["manifest"] = {"path": a.manifest, "sha256": sha256(a.manifest)}
@@ -331,7 +356,8 @@ def main(argv=None):
         before = coverage(a.before_index, a.as_of)
         inv, inv_schema = inventory_54_sections(a.inventory_54) if a.inventory_54 else (None, None)
         added = {p for p in a.added_parts.split(",") if p}
-        out["before"] = {"index": {"name": Path(a.before_index).name, "sha256": sha256(a.before_index), "ecfr_parts": before["ecfr_parts"]},
+        out["before"] = {"index": {"name": Path(a.before_index).name, "sha256": sha256(a.before_index), "ecfr_parts": before["ecfr_parts"],
+                                   "ecfr_doc_keys_unparsed": before["ecfr_doc_keys_unparsed"]},
                          "summary": before["summary"]}
         if a.inventory_54:
             out["inventory_54"] = {"path": a.inventory_54, "sha256": sha256(a.inventory_54), "schema": inv_schema,
@@ -355,7 +381,7 @@ def main(argv=None):
                       "reconciles": s["reconciles"], "invariant_problems": len(s["invariant_problems"]),
                       "amends_rows_unclassified": s["amends_rows_unclassified"],
                       "comparison_clean": out["status"].get("comparison_clean")}, indent=1))
-    ok = s["reconciles"] and not s["invariant_problems"] and not s["amends_rows_unclassified_citations"]
+    ok = s["reconciles"] and not s["invariant_problems"] and not s["amends_rows_unclassified"]  # rows, NULL citations included
     return 0 if ok and out["status"].get("comparison_clean", True) else 1
 
 
