@@ -24,6 +24,10 @@ Changelog:
   0.4 (S7-P1-69) rows gain baseline_gap_kind (null when a baseline exists; else part_held_section_absent when the part's eCFR
       baseline is in the index, part_not_acquired otherwise); summary gains targets_without_baseline_by_gap_kind,
       targets_without_baseline_by_part and amendment_range_rows_non_numeric.
+  0.4 (S7-P1-70, no key change) the range guard covers title_no and part_no too; --added-parts tokens must match
+      ^[0-9]+:[0-9]+$ (argparse exit 2). On-disk key order: the writer uses json.dumps(sort_keys=True), so every object's keys
+      (for example targets_without_baseline_by_part, still_without_baseline_by_part) are lexicographic on disk ("12:30" <
+      "12:324" < "12:4"); natural order (3.2 before 3.10) applies only to list fields such as rows and citation lists.
 
 Counting policy (both counters follow it; pinned by tests):
   - `amends` rows count only with review_status 'parsed_unreviewed'; other review statuses are tallied in
@@ -31,8 +35,9 @@ Counting policy (both counters follow it; pinned by tests):
   - every `amendment_range` row counts, whatever its review_status or status (all rows the producer records are numeric ranges);
     its members are lo_minor..hi_minor inclusive. A row with lo_minor > hi_minor has no members and is tallied in
     amendment_range_rows_inverted. (Before S7-P1-67 the SQL path seeded lo_minor even for such a row while the Python path did not;
-    both now give no members.) A row whose lo_minor or hi_minor is not a non-negative ASCII-digit integer has no members in
-    either counter and is tallied in amendment_range_rows_non_numeric (S7-P1-69); coverage() does not raise on it.
+    both now give no members.) A row whose title_no, part_no, lo_minor or hi_minor is not a non-negative ASCII-digit integer
+    (NULL included) has no members in either counter and is tallied in amendment_range_rows_non_numeric (lo/hi from S7-P1-69,
+    title/part from S7-P1-70); coverage() does not raise on it.
 
 With --before-index the status also reports the comparison (baseline_lost, targets_removed, added_parts_mismatch, unattributed
 new baselines, the S7-P1-54 match) and `comparison_clean`; the CLI exits 1 unless it is clean. --inventory-54 and --added-parts
@@ -40,6 +45,7 @@ need --before-index (argparse exit 2 otherwise).
 
     python3 -I scripts/p1_delta_coverage.py --index AFTER.sqlite [--before-index BEFORE.sqlite] [--inventory-54 INV.json]
         [--added-parts 12:6,12:30,...] [--as-of 2026-10-29] --out OUT.json
+    (--added-parts: comma-separated title:part tokens, each matching ^[0-9]+:[0-9]+$; requires --before-index)
 """
 import argparse
 import hashlib
@@ -66,6 +72,7 @@ def sha256(path):
 
 
 DIGITS = re.compile(r"[0-9]+", re.ASCII)
+ADDED_PART = re.compile(r"[0-9]+:[0-9]+", re.ASCII)
 
 
 def numeric(value):
@@ -99,7 +106,7 @@ def sources(conn):
     ranges = members = inverted = non_numeric = 0
     for title, part, lo, hi in conn.execute("SELECT title_no, part_no, lo_minor, hi_minor FROM amendment_range"):
         ranges += 1
-        if not (numeric(lo) and numeric(hi)):
+        if not (numeric(title) and numeric(part) and numeric(lo) and numeric(hi)):
             non_numeric += 1
             continue
         inverted += int(lo) > int(hi)
@@ -127,7 +134,9 @@ amend_targets(title, part, section) AS (
   WHERE title NOT GLOB '*[^0-9]*' AND part NOT GLOB '*[^0-9]*' AND minor <> '' AND minor NOT GLOB '*[^0-9A-Za-z]*'),
 members(title, part, n, hi) AS (
   SELECT CAST(title_no AS TEXT), CAST(part_no AS TEXT), CAST(lo_minor AS INTEGER), CAST(hi_minor AS INTEGER) FROM amendment_range
-  WHERE CAST(lo_minor AS TEXT) <> '' AND CAST(lo_minor AS TEXT) NOT GLOB '*[^0-9]*'
+  WHERE CAST(title_no AS TEXT) <> '' AND CAST(title_no AS TEXT) NOT GLOB '*[^0-9]*'
+    AND CAST(part_no AS TEXT) <> '' AND CAST(part_no AS TEXT) NOT GLOB '*[^0-9]*'
+    AND CAST(lo_minor AS TEXT) <> '' AND CAST(lo_minor AS TEXT) NOT GLOB '*[^0-9]*'
     AND CAST(hi_minor AS TEXT) <> '' AND CAST(hi_minor AS TEXT) NOT GLOB '*[^0-9]*'
     AND CAST(lo_minor AS INTEGER) <= CAST(hi_minor AS INTEGER)
   UNION ALL SELECT title, part, n + 1, hi FROM members WHERE n < hi)
@@ -210,7 +219,7 @@ def coverage(index_path, as_of):
                "targets_by_source": dict(sorted(Counter(s for r in rows for s in r["target_sources"]).items())),
                "targets_without_baseline_by_gap_kind": dict(sorted(Counter(r["baseline_gap_kind"] for r in rows
                                                                            if r["baseline_gap_kind"]).items())),
-               "targets_without_baseline_by_part": {k: gap_parts[k] for k in sorted(gap_parts, key=lambda tp: [int(x) for x in tp.split(":")])},
+               "targets_without_baseline_by_part": gap_parts,  # an object: keys are lexicographic on disk (sort_keys)
                "part_level_amends_rows_not_counted": len(part_level), "amends_candidates_not_counted": len(candidates),
                "candidates_that_are_also_targets": sum(1 for c in candidates if (m := SECTION.fullmatch(c or "")) and
                                                        (m[1], m[2], f"{m[2]}.{m[3]}") in targets),
@@ -277,8 +286,9 @@ def compare(after, before, inv_sections=None, added_argument=None):
             "inventory_54_check": check54,
             "newly_baseline_resolvable_unattributed": [n["citation"] for n in newly if not n["attributed_to_added_part"]],
             "baseline_lost": lost,
+            # an object: keys are lexicographic on disk (sort_keys); each section list keeps natural order
             "still_without_baseline_by_part": {p: sorted(s, key=lambda x: [int(t) if t.isdigit() else t for t in re.split(r"(\d+)", x)])
-                                               for p, s in sorted(still.items(), key=lambda kv: [int(x) for x in re.findall(r"\d+", kv[0])])},
+                                               for p, s in still.items()},
             "before_targets": len(before["rows"]), "after_targets": len(after["rows"]),
             "before_by_baseline_kind": before["summary"]["targets_by_baseline_kind"],
             "after_by_baseline_kind": after["summary"]["targets_by_baseline_kind"],
@@ -300,6 +310,9 @@ def main(argv=None):
         for flag, value in (("--inventory-54", a.inventory_54), ("--added-parts", a.added_parts)):
             if value:
                 ap.error(f"{flag} is ignored without --before-index; supply --before-index or drop {flag}")
+    bad = [t for t in a.added_parts.split(",") if t and not ADDED_PART.fullmatch(t)]
+    if bad:
+        ap.error(f"--added-parts tokens must be title:part (^[0-9]+:[0-9]+$); rejected: {', '.join(bad)}")
     after = coverage(a.index, a.as_of)
     s = after["summary"]
     out = {"schema": SCHEMA,

@@ -178,7 +178,7 @@ class ComparisonTests(Fixture):
         exact = cov.compare(after, before, {("12", "217", "217.12")}, set())["inventory_54_check"]
         self.assertTrue(exact["inventory_54_matches_before_exact_section"])
 
-    def test_cli_writes_schema_0_3_with_a_computed_status_and_identical_reruns(self):
+    def test_cli_writes_schema_0_4_with_a_computed_status_and_identical_reruns(self):
         out1, out2 = Path(self.tmp) / "c1.json", Path(self.tmp) / "c2.json"
         with mock.patch("builtins.print"):
             self.assertEqual(cov.main(["--index", self.full, "--before-index", self.no217, "--added-parts", "12:217", "--out", str(out1)]), 0)
@@ -390,6 +390,52 @@ class GapKindAndRangePolicyTests(Fixture):
         self.assertEqual(s["targets_without_baseline_by_part"], {"12:324": {"gap_kind": "part_held_section_absent", "count": 2},
                                                                  "12:999": {"gap_kind": "part_not_acquired", "count": 2}})
         self.assertEqual(list(s["targets_without_baseline_by_part"]), ["12:324", "12:999"])
+
+
+class HardeningTests(Fixture):
+    """S7-P1-70: title/part guard on range rows, --added-parts token validation, documented on-disk key order."""
+
+    def copy_of(self, base, name):
+        db = str(Path(self.tmp) / f"{name}.sqlite")
+        shutil.copy(base, db)
+        return db
+
+    def assert_guarded(self, db):
+        s = cov.coverage(db, AS_OF)["summary"]  # must not raise
+        self.assertEqual(s["amendment_range_rows_non_numeric"], 1)
+        self.assertEqual(s["amendment_range_members"], 0)
+        self.assertEqual(s["distinct_targets"], s["sql_distinct_targets"])
+        self.assertTrue(s["reconciles"])
+
+    def test_T1_a_non_numeric_title_is_guarded(self):
+        db = self.copy_of(self.full, "title12a")
+        add_range(db, "12a", "324", 1, 2)
+        self.assert_guarded(db)
+
+    def test_T2_a_null_title_or_non_numeric_part_is_guarded(self):
+        db = self.copy_of(self.full, "titlenull")
+        add_range(db, None, "324", 1, 2)
+        self.assert_guarded(db)
+        db = self.copy_of(self.full, "part3x")
+        add_range(db, "12", "3x", 1, 2)
+        self.assert_guarded(db)
+
+    def test_T3_malformed_added_parts_tokens_exit_2_without_output(self):
+        for token in ("12", "12-217", "12:217a"):
+            out = Path(self.tmp) / f"tok-{token.replace(':', '_')}.json"
+            self.assertEqual(ran(["--index", self.full, "--before-index", self.no217, "--added-parts", token, "--out", str(out)]), 2, token)
+            self.assertFalse(out.exists(), token)
+
+    def test_T4_on_disk_part_keys_are_lexicographic(self):
+        db = self.copy_of(self.rich, "keyorder")
+        add_range(db, "12", "30", 1, 1)  # 12 CFR 30.1: part 30 is not in the fixture
+        add_range(db, "12", "4", 1, 1)   # 12 CFR 4.1: natural order would put 12:4 first
+        out = Path(self.tmp) / "keyorder.json"
+        ran(["--index", db, "--out", str(out)])
+        keys = list(json.loads(out.read_text())["summary"]["targets_without_baseline_by_part"])
+        self.assertEqual(keys, ["12:30", "12:324", "12:4"])
+        self.assertEqual(keys, sorted(keys))
+        self.assertIn("lexicographic", cov.__doc__)
 
 
 if __name__ == "__main__":
