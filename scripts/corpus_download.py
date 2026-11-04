@@ -2,6 +2,17 @@
 
 Downloads are evidence candidates, not an applicability or rule-status decision.
 The manifest is the current acquisition inventory; this does not build an index.
+
+DR-5 post-filter (S7-P1-73; founder record 2026-11-04_s7-regintel-p1-founder-decisions_accepted.md, item DR-5: FinCEN and OFAC
+rulemaking is discovered through the observed `treasury-department` agency slug and filtered afterwards). The federal-register
+subcommand accepts --keep-cfr TITLE:FROM-TO (repeatable; e.g. 31:500-599 for 31 CFR Chapter V/OFAC, 31:1000-1099 for Chapter
+X/FinCEN) and --keep-agency-slug SLUG (repeatable). With neither flag nothing is filtered and the run is unchanged. With either,
+a document is kept when any detail cfr_references entry falls in a kept range OR any detail agency slug is a kept slug. The test
+runs after the detail JSON is fetched and before anything is stored: a filtered-out document costs one metadata request, no
+asset request and no stored metadata asset, is never written to the manifest, and is listed only in the run log under
+filtered_out [{document_number, reason, cfr_references, agency_slugs}] and counted in counts["filtered_out"].
+counts["attempted"] counts every document seen (kept and filtered out); --max-documents bounds that number, so it caps metadata
+requests, not kept documents. Kept documents carry the DR-6 rights record (DR-2/DR-6, same founder record) as before.
 """
 from __future__ import annotations
 
@@ -354,7 +365,48 @@ def download_ecfr(args, client: Client, corpus: Corpus) -> dict:
     return counts
 
 
-def download_fr(args, client: Client, corpus: Corpus) -> dict:
+SLUG = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*", re.ASCII)
+KEEP_CFR = re.compile(r"([0-9]+):([0-9]+)-([0-9]+)", re.ASCII)
+
+
+def keep_cfr_range(value: str) -> tuple[int, int, int]:
+    """argparse type for --keep-cfr TITLE:FROM-TO (title 1-50, numeric parts, FROM <= TO)."""
+    m = KEEP_CFR.fullmatch(value or "")
+    if not m:
+        raise argparse.ArgumentTypeError(f"--keep-cfr must be TITLE:FROM-TO, e.g. 31:1000-1099; got {value!r}")
+    title, lo, hi = (int(x) for x in m.groups())
+    if not 1 <= title <= 50:
+        raise argparse.ArgumentTypeError(f"--keep-cfr title must be 1-50; got {title}")
+    if lo > hi:
+        raise argparse.ArgumentTypeError(f"--keep-cfr range must have FROM <= TO; got {lo}-{hi}")
+    return title, lo, hi
+
+
+def keep_agency_slug(value: str) -> str:
+    if not SLUG.fullmatch(value or ""):
+        raise argparse.ArgumentTypeError(f"--keep-agency-slug must be a lowercase hyphenated slug; got {value!r}")
+    return value
+
+
+def dr5_filter(detail: dict, ranges, slugs) -> tuple[bool, str, list, list]:
+    """(keep, reason, cfr_references, agency_slugs) for a Federal Register detail under the DR-5 post-filter."""
+    refs = [{"title": r.get("title"), "part": r.get("part")} for r in detail.get("cfr_references") or [] if isinstance(r, dict)]
+    agencies = sorted({a.get("slug") for a in detail.get("agencies") or [] if isinstance(a, dict) and a.get("slug")})
+    for ref in refs:
+        try:
+            title, part = int(ref["title"]), int(ref["part"])
+        except (TypeError, ValueError):
+            continue
+        for t, lo, hi in ranges:
+            if title == t and lo <= part <= hi:
+                return True, f"cfr_reference {title} CFR {part} in kept range {t}:{lo}-{hi}", refs, agencies
+    for slug in agencies:
+        if slug in slugs:
+            return True, f"agency slug {slug} kept", refs, agencies
+    return False, "no cfr_reference in a kept range and no kept agency slug", refs, agencies
+
+
+def download_fr(args, client: Client, corpus: Corpus, log: dict | None = None) -> dict:
     since = date.fromisoformat(args.since)
     until = date.fromisoformat(args.until)
     if since > until:
@@ -366,6 +418,11 @@ def download_fr(args, client: Client, corpus: Corpus) -> dict:
     params += [("conditions[type][]", t) for t in (args.document_type or ["RULE", "PRORULE", "NOTICE"])]
     url = f"{FR}/api/v1/documents.json?{urlencode(params)}"
     counts = {"discovered": 0, "attempted": 0, "downloaded": 0, "reused": 0, "failed": 0}
+    ranges, slugs = getattr(args, "keep_cfr", None) or [], set(getattr(args, "keep_agency_slug", None) or [])
+    filtering = bool(ranges or slugs)
+    filtered_out = []
+    if filtering:
+        counts["filtered_out"] = 0
     seen, pages = set(), set()
     while url and counts["attempted"] < args.max_documents:
         if url in pages:
@@ -388,6 +445,13 @@ def download_fr(args, client: Client, corpus: Corpus) -> dict:
                 detail, metadata = client.get_json(f"{FR}/api/v1/documents/{number}.json")
                 if detail.get("document_number") != number:
                     raise ValueError("Federal Register detail/document mismatch")
+                if filtering:
+                    keep, reason, refs, agencies = dr5_filter(detail, ranges, slugs)
+                    if not keep:  # DR-5: nothing stored, no asset request, no manifest entry; run log only
+                        counts["filtered_out"] += 1
+                        filtered_out.append({"document_number": number, "reason": reason, "cfr_references": refs,
+                                             "agency_slugs": agencies})
+                        continue
                 metadata_asset = corpus.store_asset(metadata, "json")
                 if detail.get("full_text_xml_url"):
                     asset_url, extension = detail["full_text_xml_url"], "xml"
@@ -420,6 +484,8 @@ def download_fr(args, client: Client, corpus: Corpus) -> dict:
             raise ValueError("Federal Register repeated its pagination URL")
         url = following
     counts["limited"] = counts["discovered"] > counts["attempted"]
+    if filtering and log is not None:
+        log["filtered_out"] = filtered_out
     return counts
 
 
@@ -440,6 +506,11 @@ def parser() -> argparse.ArgumentParser:
     fr.add_argument("--since", required=True, help="Publication date lower bound, YYYY-MM-DD")
     fr.add_argument("--until", default=date.today().isoformat())
     fr.add_argument("--document-type", action="append", choices=["RULE", "PRORULE", "NOTICE"])
+    # DR-5 post-filter; SUPPRESS keeps the recorded selection unchanged when the flags are absent.
+    fr.add_argument("--keep-cfr", action="append", type=keep_cfr_range, default=argparse.SUPPRESS,
+                    help="DR-5: keep documents citing TITLE:FROM-TO parts; repeatable")
+    fr.add_argument("--keep-agency-slug", action="append", type=keep_agency_slug, default=argparse.SUPPRESS,
+                    help="DR-5: keep documents listing this agency slug; repeatable")
     return ap
 
 
@@ -457,8 +528,10 @@ def main(argv=None) -> int:
             run = {"run_id": uuid.uuid4().hex, "started_at": now(), "command": args.command,
                    "selection": {k: str(v) if isinstance(v, Path) else v for k, v in vars(args).items()}}
             try:
-                function = download_ecfr if args.command == "ecfr" else download_fr
-                run["counts"] = function(args, client, corpus)
+                if args.command == "ecfr":
+                    run["counts"] = download_ecfr(args, client, corpus)
+                else:
+                    run["counts"] = download_fr(args, client, corpus, run)
             except (ValueError, RuntimeError, OSError, KeyError, TypeError) as exc:
                 corpus.failure(f"discovery:{args.command}", exc)
                 run["error"] = str(exc)

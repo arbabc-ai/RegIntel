@@ -16,17 +16,23 @@ usage_status is permitted). No new vocabulary is introduced; the DR-6 concepts m
     terms_source_url      terms_url                 the publisher's site root. NOTE: no publisher terms page has been fetched
     / terms_note                                    or observed (S7-P1-51 recorded none, and this task fetched nothing); the
                                                     rights rest on the DR-2 decision, not on a terms page
-    rights_recorded_on    terms_checked_at          "2026-11-04", the date the rights were recorded under DR-6. NOTE: for
-                                                    federal entries this is the recording date, not a date a terms page was
-                                                    checked
+    rights_recorded_on    terms_checked_at          RECORDED_ON = "2026-11-04", the DR-6 decision date. It is written for
+                                                    every federal entry, including entries downloaded later; it is neither the
+                                                    run date nor a date a terms page was checked (S7-P1-73 choice)
 
 Existing entries are not rewritten: the corpus manifest pinned by indexes 49, 58 and 65 keeps its bytes, and their rights live
 in a sidecar overlay (federal_rights.json beside the manifest) keyed by doc_key. Whether the pinned manifest is later rewritten
 in place is a separate choice that S7-P1-72 does not make. New entries written by scripts/corpus_download.py carry the record
 inline under `rights`, and Corpus.record refuses a federal entry without a complete record.
 
-No rule here determines legal validity or applicability; entries keep legal_validity not_determined and applicability_status
-not_assessed.
+The overlay records the sha256 of the manifest it was built from (`manifest_sha256`, from S7-P1-73). check() compares it with
+the manifest actually read: a different value is a manifest mismatch and fails the check; an overlay without the field (the
+S7-P1-72 overlay) is reported as `manifest_sha256: absent`, which does not fail. An overlay record whose doc_key has no
+federal manifest entry also fails the check.
+
+No rule here determines legal validity or applicability. Corpus.record writes every manifest entry with applicability_status
+"not_assessed" (plus indexed/eligible_for_indexing false); manifest entries carry no legal_validity field, and the check report
+states legal_validity "not_determined" and applicability_status "not_assessed".
 """
 import json
 from pathlib import Path
@@ -75,20 +81,21 @@ def record_problems(rights):
     return problems
 
 
-def build_overlay(manifest):
-    """One DR-2 rights record per existing federal entry, keyed by doc_key."""
+def build_overlay(manifest, manifest_sha256):
+    """One DR-2 rights record per existing federal entry, keyed by doc_key, pinned to the manifest's sha256."""
     records = {}
     for key, entry in sorted(manifest["documents"].items()):
         if is_federal(key, entry):
             records[key] = federal_rights(entry.get("publisher"))
-    return {"schema": OVERLAY_SCHEMA, "decision_record": DECISION_RECORD, "decisions": ["DR-2", "DR-6"],
+    return {"schema": OVERLAY_SCHEMA, "decision_record": DECISION_RECORD, "decisions": ["DR-2", "DR-6"], "manifest_sha256": manifest_sha256,
             "recorded_on": RECORDED_ON, "note": "Sidecar rights records for federal entries of a pinned manifest whose bytes are not "
             "rewritten; field names as in state entries' rights objects (see regintel_p1/federal_rights.py).",
             "records": records}
 
 
-def check(manifest, overlay=None):
-    """Every federal entry's rights status: inline `rights` first, else the overlay record; incomplete entries are listed."""
+def check(manifest, overlay=None, manifest_sha256=None):
+    """Every federal entry's rights status: inline `rights` first, else the overlay record; incomplete entries are listed.
+    Fails on an incomplete entry, an orphan overlay record, or an overlay pinned to a different manifest sha256."""
     records = (overlay or {}).get("records") or {}
     rows, incomplete = [], []
     for key, entry in sorted(manifest["documents"].items()):
@@ -102,9 +109,13 @@ def check(manifest, overlay=None):
         if problems:
             incomplete.append(key)
     orphans = sorted(set(records) - {r["doc_key"] for r in rows})
+    pinned = (overlay or {}).get("manifest_sha256")
+    overlay_pin = None if overlay is None else (pinned or "absent")
+    mismatch = bool(pinned) and manifest_sha256 is not None and pinned != manifest_sha256
     return {"schema": CHECK_SCHEMA, "decision_record": DECISION_RECORD, "rights_fields": list(rights_fields()),
             "federal_entries": len(rows), "complete": len(rows) - len(incomplete), "incomplete": incomplete,
-            "overlay_records_without_federal_entry": orphans, "passed": not incomplete,
+            "overlay_records_without_federal_entry": orphans, "overlay_manifest_sha256": overlay_pin,
+            "manifest_mismatch": mismatch, "passed": not incomplete and not orphans and not mismatch,
             "legal_validity": "not_determined", "applicability_status": "not_assessed", "entries": rows}
 
 

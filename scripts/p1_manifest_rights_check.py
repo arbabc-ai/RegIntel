@@ -2,7 +2,9 @@
 
 Rights come from an entry's inline `rights` object, else from the sidecar overlay (default: federal_rights.json beside the
 manifest). Basis: DR-2 and DR-6 in the founder record 2026-11-04_s7-regintel-p1-founder-decisions_accepted.md. Offline; the
-manifest is only read. Exit 1 when any federal entry is incomplete.
+manifest is only read. Exit 1 when the check fails: an incomplete federal entry, an overlay record with no federal entry, or an
+overlay pinned (manifest_sha256) to a different manifest. An overlay without manifest_sha256 (the S7-P1-72 overlay) is reported
+as absent, which does not fail.
 
     python3 -I scripts/p1_manifest_rights_check.py --manifest PATH [--overlay PATH] --out OUT.json
     python3 -I scripts/p1_manifest_rights_check.py --manifest PATH --write-overlay PATH   # create the overlay; never overwrites
@@ -39,14 +41,14 @@ def main(argv=None):
         path = Path(a.write_overlay)
         if path.exists():
             ap.error(f"{path} exists; the overlay is never overwritten")
-        data = dumps(federal_rights.build_overlay(manifest))
+        data = dumps(federal_rights.build_overlay(manifest, hashlib.sha256(raw).hexdigest()))
         tmp = path.with_suffix(path.suffix + ".tmp")
         tmp.write_bytes(data)
         tmp.replace(path)
         print(json.dumps({"overlay": str(path), "sha256": hashlib.sha256(data).hexdigest()}))
         return 0
     overlay, overlay_path = federal_rights.load_overlay(a.manifest, a.overlay)
-    report = federal_rights.check(manifest, overlay)
+    report = federal_rights.check(manifest, overlay, hashlib.sha256(raw).hexdigest())
     report["inputs"] = {"manifest": {"path": a.manifest, "sha256": hashlib.sha256(raw).hexdigest()},
                         "overlay": {"path": str(overlay_path),
                                     "sha256": hashlib.sha256(overlay_path.read_bytes()).hexdigest() if overlay is not None else None}}

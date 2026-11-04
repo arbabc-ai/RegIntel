@@ -54,7 +54,9 @@ class DownloaderTests(unittest.TestCase):
         self.assertEqual(federal_rights.record_problems(rights), [])
         self.assertEqual(rights["usage_status"], "permitted")
         self.assertIn(federal_rights.DECISION_RECORD, rights["permission_reference"])
-        self.assertEqual(rights["terms_checked_at"], "2026-11-04")
+        # S7-P1-73 choice: terms_checked_at is RECORDED_ON, the DR-6 decision date, for every federal entry (not the run date)
+        self.assertEqual(rights["terms_checked_at"], federal_rights.RECORDED_ON)
+        self.assertEqual(federal_rights.RECORDED_ON, "2026-11-04")
         self.assertEqual(rights, federal_rights.federal_rights("eCFR"))
         self.assertEqual(federal_rights.federal_rights("Federal Register")["terms_url"], "https://www.federalregister.gov/")
 
@@ -86,7 +88,7 @@ class ValidatorTests(unittest.TestCase):
 
     def test_incomplete_entries_are_reported_and_the_cli_exits_1(self):
         m = self.manifest()
-        overlay = federal_rights.build_overlay(m)
+        overlay = federal_rights.build_overlay(m, "0" * 64)
         self.assertEqual(sorted(overlay["records"]), ["ecfr:12:1", "fr:2026-00001"])  # the state entry is not federal
         self.assertTrue(federal_rights.check(m, overlay)["passed"])
         partial = copy.deepcopy(overlay)
@@ -97,6 +99,7 @@ class ValidatorTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             mp, op, out = Path(tmp) / "manifest.json", Path(tmp) / "federal_rights.json", Path(tmp) / "out.json"
             mp.write_text(json.dumps(m))
+            overlay["manifest_sha256"] = hashlib.sha256(mp.read_bytes()).hexdigest()  # pin the overlay to the manifest written
             op.write_text(json.dumps(overlay))
             self.assertEqual(run(["--manifest", str(mp), "--out", str(out)]), 0)
             del overlay["records"]["ecfr:12:1"]
