@@ -12,6 +12,18 @@ The reconciliation is independent: SQL_TARGETS counts distinct targets with SQLi
 amendment_range tables (shape tests in SQL, a recursive CTE for range members), and `reconciles` requires the Python distinct count,
 that SQL count and the evidence-status tally to agree. Added eCFR parts are derived from the two indexes' document sets.
 
+Counting policy (both counters follow it; pinned by tests):
+  - `amends` rows count only with review_status 'parsed_unreviewed'; other review statuses are tallied in
+    amends_rows_other_review_status and are not targets.
+  - every `amendment_range` row counts, whatever its review_status or status (all rows the producer records are numeric ranges);
+    its members are lo_minor..hi_minor inclusive. A row with lo_minor > hi_minor has no members and is tallied in
+    amendment_range_rows_inverted. (Before S7-P1-67 the SQL path seeded lo_minor even for such a row while the Python path did not;
+    both now give no members.)
+
+With --before-index the status also reports the comparison (baseline_lost, targets_removed, added_parts_mismatch, unattributed
+new baselines, the S7-P1-54 match) and `comparison_clean`; the CLI exits 1 unless it is clean. --inventory-54 and --added-parts
+need --before-index (argparse exit 2 otherwise).
+
     python3 -I scripts/p1_delta_coverage.py --index AFTER.sqlite [--before-index BEFORE.sqlite] [--inventory-54 INV.json]
         [--added-parts 12:6,12:30,...] [--as-of 2026-10-29] --out OUT.json
 """
@@ -29,7 +41,7 @@ if str(REPO) not in sys.path:
 
 from regintel_p1.search import Index  # noqa: E402
 
-SCHEMA = "p1-delta-coverage-refresh-0.2"
+SCHEMA = "p1-delta-coverage-refresh-0.3"
 SECTION = re.compile(r"^(\d+) CFR (\d+)\.([0-9A-Za-z]+)$")
 PART = re.compile(r"^(\d+) CFR Part (\d+)$")
 
@@ -61,13 +73,14 @@ def sources(conn):
             raw["amends_rows_unclassified"] += 1
             unclassified.append(cite)
     raw["amends_rows_by_review_status"] = dict(sorted(by_review.items(), key=lambda kv: str(kv[0])))
-    ranges = members = 0
+    ranges = members = inverted = 0
     for title, part, lo, hi in conn.execute("SELECT title_no, part_no, lo_minor, hi_minor FROM amendment_range"):
         ranges += 1
+        inverted += int(lo) > int(hi)
         for n in range(int(lo), int(hi) + 1):
             members += 1
             targets[(str(title), str(part), f"{part}.{n}")].add("amendment_range")
-    raw["amendment_range_rows"], raw["amendment_range_members"] = ranges, members
+    raw["amendment_range_rows"], raw["amendment_range_members"], raw["amendment_range_rows_inverted"] = ranges, members, inverted
     for (cite,) in conn.execute("SELECT dst_citation FROM relationship WHERE rel_type='amends_candidate'"):
         candidates.add(cite)
     raw["amends_candidate_rows"] = conn.execute("SELECT COUNT(*) FROM relationship WHERE rel_type='amends_candidate'").fetchone()[0]
@@ -87,6 +100,7 @@ amend_targets(title, part, section) AS (
   WHERE title NOT GLOB '*[^0-9]*' AND part NOT GLOB '*[^0-9]*' AND minor <> '' AND minor NOT GLOB '*[^0-9A-Za-z]*'),
 members(title, part, n, hi) AS (
   SELECT CAST(title_no AS TEXT), CAST(part_no AS TEXT), CAST(lo_minor AS INTEGER), CAST(hi_minor AS INTEGER) FROM amendment_range
+  WHERE CAST(lo_minor AS INTEGER) <= CAST(hi_minor AS INTEGER)
   UNION ALL SELECT title, part, n + 1, hi FROM members WHERE n < hi)
 SELECT COUNT(*) FROM (SELECT title, part, section FROM amend_targets
                       UNION SELECT title, part, part || '.' || n FROM members)
@@ -143,7 +157,7 @@ def coverage(index_path, as_of):
     ix = Index(str(index_path), as_of)
     try:
         targets, part_level, candidates, unclassified, raw = sources(ix.conn)
-        rows = [row(ix, k, targets[k]) for k in sorted(targets, key=lambda k: (int(k[0]), int(k[1]), k[2]))]
+        rows = [row(ix, k, targets[k]) for k in sorted(targets, key=natural)]
         status = dict(ix.conn.execute("SELECT status, COUNT(*) FROM source_status GROUP BY status").fetchall())
         dep = ix.dependency_verification["status"]
         sql_count = sql_distinct_count(ix.conn)
@@ -175,9 +189,14 @@ def inventory_54_sections(path):
     return out, inv.get("schema")
 
 
+def natural(key):
+    """Sort key for (title, part, section): numeric title and part, then section with digit runs compared as numbers (3.2 < 3.10)."""
+    t, p, sec = key
+    return (int(t), int(p), [int(x) if x.isdigit() else x for x in re.split(r"(\d+)", sec)])
+
+
 def citations(keys):
-    return [f"{t} CFR {s}" for t, _, s in sorted(keys, key=lambda k: (int(k[0]), int(k[1]), [int(x) if x.isdigit() else x
-                                                                                             for x in re.split(r"(\d+)", k[2])]))]
+    return [f"{t} CFR {s}" for t, _, s in sorted(keys, key=natural)]
 
 
 def compare(after, before, inv_sections=None, added_argument=None):
@@ -235,6 +254,10 @@ def main(argv=None):
     ap.add_argument("--as-of", default="2026-10-29")
     ap.add_argument("--out", required=True)
     a = ap.parse_args(argv)
+    if not a.before_index:
+        for flag, value in (("--inventory-54", a.inventory_54), ("--added-parts", a.added_parts)):
+            if value:
+                ap.error(f"{flag} is ignored without --before-index; supply --before-index or drop {flag}")
     after = coverage(a.index, a.as_of)
     s = after["summary"]
     out = {"schema": SCHEMA,
@@ -258,7 +281,16 @@ def main(argv=None):
         if a.inventory_54:
             out["inventory_54"] = {"path": a.inventory_54, "sha256": sha256(a.inventory_54), "schema": inv_schema,
                                    "eligible_pair_sections": len(inv)}
-        out["before_after"] = compare(after, before, inv, added)
+        ba = out["before_after"] = compare(after, before, inv, added)
+        match = (ba["inventory_54_check"] or {}).get("inventory_54_matches_before_exact_section")
+        out["status"].update({"baseline_lost_count": len(ba["baseline_lost"]), "targets_removed_count": len(ba["targets_removed"]),
+                              "added_parts_mismatch_count": len(ba["added_parts_mismatch"]),
+                              "newly_baseline_resolvable_unattributed_count": len(ba["newly_baseline_resolvable_unattributed"]),
+                              "inventory_54_matches_before_exact_section": match})
+        out["status"]["comparison_clean"] = (not any(out["status"][k] for k in ("baseline_lost_count", "targets_removed_count",
+                                                                                 "added_parts_mismatch_count",
+                                                                                 "newly_baseline_resolvable_unattributed_count"))
+                                             and match in (None, True))
     out.pop("ecfr_parts", None)
     raw = (json.dumps(out, indent=1, ensure_ascii=False, sort_keys=True) + "\n").encode()
     Path(a.out).write_bytes(raw)
@@ -266,8 +298,10 @@ def main(argv=None):
     print(json.dumps({"out": a.out, "sha256": hashlib.sha256(raw).hexdigest(), "distinct_targets": s["distinct_targets"],
                       "sql_distinct_targets": s["sql_distinct_targets"], "by_status": s["targets_by_evidence_status"],
                       "reconciles": s["reconciles"], "invariant_problems": len(s["invariant_problems"]),
-                      "amends_rows_unclassified": len(s["amends_rows_unclassified_citations"])}, indent=1))
-    return 0 if s["reconciles"] and not s["invariant_problems"] and not s["amends_rows_unclassified_citations"] else 1
+                      "amends_rows_unclassified": len(s["amends_rows_unclassified_citations"]),
+                      "comparison_clean": out["status"].get("comparison_clean")}, indent=1))
+    ok = s["reconciles"] and not s["invariant_problems"] and not s["amends_rows_unclassified_citations"]
+    return 0 if ok and out["status"].get("comparison_clean", True) else 1
 
 
 if __name__ == "__main__":

@@ -185,10 +185,113 @@ class ComparisonTests(Fixture):
             cov.main(["--index", self.full, "--before-index", self.no217, "--added-parts", "12:217", "--out", str(out2)])
         self.assertEqual(out1.read_bytes(), out2.read_bytes())
         doc = json.loads(out1.read_text())
-        self.assertEqual(doc["schema"], "p1-delta-coverage-refresh-0.2")
+        self.assertEqual(doc["schema"], "p1-delta-coverage-refresh-0.3")
         self.assertEqual(doc["status"]["reconciles"], True)
         self.assertEqual(doc["status"]["invariant_problem_count"], 0)
         self.assertEqual(doc["before_after"]["added_parts_mismatch"], [])
+
+
+def ran(argv):
+    """main() return code, or the SystemExit code argparse raises; output suppressed."""
+    with mock.patch("builtins.print"), mock.patch("sys.stderr"):
+        try:
+            return cov.main(argv)
+        except SystemExit as e:
+            return e.code
+
+
+class StatusAndPolicyTests(Fixture):
+    """S7-P1-67: comparison status and exit code, CLI input handling, counting-policy pins and natural row order."""
+
+    def copy_with(self, name, **rows):
+        db = str(Path(self.tmp) / f"{name}.sqlite")
+        shutil.copy(self.full, db)
+        add_rows(db, **rows)
+        return db
+
+    def test_a_other_review_status_amends_rows_are_excluded_by_both_counters(self):
+        db = self.copy_with("reviewed")
+        conn = sqlite3.connect(db)
+        src = conn.execute("SELECT src_provision_id FROM relationship WHERE rel_type='amends' LIMIT 1").fetchone()[0]
+        conn.execute("INSERT INTO relationship (src_provision_id, rel_type, dst_citation, basis, source_locator, review_status) "
+                     "VALUES (?, 'amends', '12 CFR 324.40', 'synthetic', 'synthetic', 'reviewed_confirmed')", (src,))
+        conn.commit()
+        conn.close()
+        s = cov.coverage(db, AS_OF)["summary"]
+        self.assertEqual(s["amends_rows_other_review_status"], 1)
+        self.assertEqual((s["distinct_targets"], s["sql_distinct_targets"]), (1, 1))
+        self.assertTrue(s["reconciles"])
+
+    def test_b_an_inverted_range_has_no_members_in_either_counter(self):
+        db = self.copy_with("inverted", ranges=[("12", "324", 5, 3)])
+        s = cov.coverage(db, AS_OF)["summary"]
+        self.assertEqual(s["amendment_range_rows"], 1)
+        self.assertEqual(s["amendment_range_rows_inverted"], 1)
+        self.assertEqual(s["amendment_range_members"], 0)
+        self.assertEqual((s["distinct_targets"], s["sql_distinct_targets"]), (1, 1))  # only 217.12; no 324.x target from either side
+        self.assertTrue(s["reconciles"])
+
+    def test_c_a_candidate_that_is_also_a_target_is_counted(self):
+        db = self.copy_with("candtarget", candidates=["12 CFR 217.12"])
+        r = cov.coverage(db, AS_OF)
+        self.assertEqual(r["summary"]["candidates_that_are_also_targets"], 1)
+        self.assertEqual([row["citation"] for row in r["rows"]], ["12 CFR 217.12"])
+
+    def test_d_a_new_baseline_in_a_part_present_in_both_indexes_is_unattributed(self):
+        after = cov.coverage(self.full, AS_OF)
+        before = copy.deepcopy(after)
+        before["rows"][0]["baseline_kind"] = "none"  # same parts in both; only the section's baseline differs
+        ba = cov.compare(after, before, None, set())
+        self.assertEqual(ba["added_parts_derived"], [])
+        self.assertEqual(ba["newly_baseline_resolvable_unattributed"], ["12 CFR 217.12"])
+
+    def test_e_manifest_sha256_is_recorded(self):
+        manifest = Path(self.tmp) / "corpus-full" / "manifest.json"
+        out = Path(self.tmp) / "m.json"
+        self.assertEqual(ran(["--index", self.full, "--manifest", str(manifest), "--out", str(out)]), 0)
+        doc = json.loads(out.read_text())
+        self.assertEqual(doc["manifest"]["sha256"], cov.sha256(manifest))
+
+    def test_f_a_lost_baseline_makes_the_comparison_unclean_and_exits_1(self):
+        out = Path(self.tmp) / "lost.json"
+        self.assertEqual(ran(["--index", self.no217, "--before-index", self.full, "--out", str(out)]), 1)
+        st = json.loads(out.read_text())["status"]
+        self.assertEqual((st["baseline_lost_count"], st["targets_removed_count"], st["added_parts_mismatch_count"],
+                          st["newly_baseline_resolvable_unattributed_count"]), (1, 0, 0, 0))
+        self.assertIsNone(st["inventory_54_matches_before_exact_section"])
+        self.assertFalse(st["comparison_clean"])
+        self.assertTrue(st["reconciles"])
+
+    def test_f2_a_clean_comparison_exits_0(self):
+        out = Path(self.tmp) / "clean.json"
+        self.assertEqual(ran(["--index", self.full, "--before-index", self.no217, "--added-parts", "12:217", "--out", str(out)]), 0)
+        st = json.loads(out.read_text())["status"]
+        self.assertTrue(st["comparison_clean"])
+        self.assertEqual(st["added_parts_mismatch_count"], 0)
+
+    def test_f3_an_inventory_mismatch_or_wrong_added_parts_makes_the_comparison_unclean(self):
+        inv = Path(self.tmp) / "inv_bad.json"
+        inv.write_text(json.dumps({"schema": "x", "eligible_pairs": [{"baseline_doc_key": "ecfr:12:3", "locator": "3.10(a)"}]}))
+        out = Path(self.tmp) / "bad.json"
+        self.assertEqual(ran(["--index", self.full, "--before-index", self.no217, "--added-parts", "12:217", "--inventory-54", str(inv),
+                              "--out", str(out)]), 1)
+        st = json.loads(out.read_text())["status"]
+        self.assertIs(st["inventory_54_matches_before_exact_section"], False)
+        self.assertFalse(st["comparison_clean"])
+        self.assertEqual(ran(["--index", self.full, "--before-index", self.no217, "--added-parts", "12:999", "--out", str(out)]), 1)
+        self.assertEqual(json.loads(out.read_text())["status"]["added_parts_mismatch_count"], 2)
+
+    def test_g_comparison_options_without_a_before_index_exit_2(self):
+        out = Path(self.tmp) / "x.json"
+        self.assertEqual(ran(["--index", self.full, "--inventory-54", str(out), "--out", str(out)]), 2)
+        self.assertEqual(ran(["--index", self.full, "--added-parts", "12:217", "--out", str(out)]), 2)
+        self.assertFalse(out.exists())
+
+    def test_h_rows_are_in_natural_citation_order(self):
+        db = self.copy_with("order", ranges=[("12", "3", 2, 2), ("12", "3", 10, 10)])
+        cites = [row["citation"] for row in cov.coverage(db, AS_OF)["rows"]]
+        self.assertEqual(cites, ["12 CFR 3.2", "12 CFR 3.10", "12 CFR 217.12"])
+        self.assertEqual(cites, cov.citations({(r.split()[0], r.split()[2].split(".")[0], r.split()[2]) for r in cites}))
 
 
 if __name__ == "__main__":
