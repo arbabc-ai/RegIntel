@@ -218,7 +218,6 @@ class EvidenceDistinctnessTests(unittest.TestCase):
 
     def test_a_statute_class_evidence_identical_to_the_entry_page_is_not_honoured(self):
         tx = self.spec["jurisdictions"]["TX"]
-        self.assertEqual(self.spec["version"], "p1-state-sources-0.8")
         self.assertEqual(tx["hosts"]["statutes.capitol.texas.gov"]["source_classes"], ["state_statute"])  # fails on evidence, not configuration
         self.assertEqual(tx["hosts"]["statutes.capitol.texas.gov"]["evidence"]["source_classes"], {"state_statute": "EV-TX-STAT-CITE-001"})
         self.assertEqual({h: m.get("endpoint_basis") for h, m in tx["hosts"].items() if m.get("endpoint_basis")},
@@ -297,7 +296,6 @@ class EndpointBasisTests(unittest.TestCase):
         self.addCleanup(shutil.rmtree, self.tmp, True)
 
     def test_a_contract_version_and_declaring_hosts(self):
-        self.assertEqual(self.spec["version"], "p1-state-sources-0.8")  # v0.5 introduced the rule; later versions keep it
         self.assertEqual(self.spec["endpoint_bases"], ["index_page_only"])
         hosts = self.spec["jurisdictions"]["TX"]["hosts"]
         self.assertEqual({h for h, m in hosts.items() if m.get("endpoint_basis") == "index_page_only"}, set(self.SOS))

@@ -106,7 +106,7 @@ Public-domain U.S. federal regulation, pulled live from the **eCFR API**:
 
 ~1.8 MB of regulatory text. The BIS Basel framework PDFs are also listed in [`scripts/download_corpus.py`](scripts/download_corpus.py), but bis.org answers scripted downloads with a bot-challenge page — the downloader detects that and skips them rather than indexing HTML as a "PDF". To include them (or FFIEC handbooks, Fed SR letters), drop the files into `data/raw/` and re-run `python -m src.ingest`.
 
-**State-source evidence rules.** Texas state-source host approvals, evidence distinctness (S7-P1-59), endpoint basis (S7-P1-60), validator hardening (S7-P1-61), approval diagnostics (S7-P1-62) and URL canonicalization (S7-P1-63) are documented in [`regintel_p1/README.md`](regintel_p1/README.md); no state text is acquired or indexed.
+**State-source evidence rules.** Texas state-source host approvals, evidence distinctness (S7-P1-59), endpoint basis (S7-P1-60), validator hardening (S7-P1-61), approval diagnostics (S7-P1-62), URL canonicalization (S7-P1-63) and parse-failure containment (S7-P1-64) are documented in [`regintel_p1/README.md`](regintel_p1/README.md); no state text is acquired or indexed.
 
 ---
 

@@ -20,15 +20,18 @@ reported as problems rather than raised; only those enumerated values are covere
 rejects a source_url carrying a query string or path parameters (fragments stay allowed), and `approval_diagnostics()` reports which
 record backs each approval and whether the distinctness check was really exercised. From v0.8 (S7-P1-63) every state entry's source_url
 must have a bare lowercase netloc (no userinfo, port or uppercase) and a canonical path (no percent-encoded octet, dot segment,
-backslash, whitespace or control character, and identical to its unquoted form), and an evidence record's requested_url, final_url and
-every relied-on redirect hop must have a bare lowercase netloc; these rules only add problems. The registry grants no right:
+backslash, whitespace or control character), and an evidence record's requested_url, final_url and
+every relied-on redirect hop must have a bare lowercase netloc; these rules only add problems. From v0.9 (S7-P1-64) every untrusted URL
+is parsed through `parse_url()`: a URL that urllib cannot parse is reported (`... cannot be parsed`) and never raised, and a record whose
+final_url or requested_url cannot be parsed supports no approval; canonical paths also reject empty segments and stray percent signs.
+The registry grants no right:
 public access is not reuse permission, so `usage_status: permitted` still needs a named operator permission reference.
 """
 import json
 import re
 from datetime import datetime, timezone
 from pathlib import Path
-from urllib.parse import unquote, urlparse
+from urllib.parse import urlparse
 
 CONTRACT_PATH = Path(__file__).with_name("state_sources.json")
 EVIDENCE_FIELDS = ("evidence_id", "level", "host", "requested_url", "final_url", "redirect_chain", "status", "access_time", "sha256",
@@ -56,14 +59,20 @@ def _when(value):
     return t if t.tzinfo else t.replace(tzinfo=timezone.utc)
 
 
-def netloc_problem(url):
-    """The netloc of `url` if it is not exactly the bare lowercase hostname (userinfo, explicit port or uppercase), else None."""
+def parse_url(value):
+    """(parts, None) for a parseable URL string, or (None, reason) when urlparse raises ValueError (e.g. an unbalanced IPv6 bracket).
+    Every untrusted entry or registry URL goes through here, so a malformed URL is reported as a problem, never raised."""
     try:
-        parts = urlparse(str(url))
-        host = parts.hostname or ""
-    except ValueError:
-        return str(url)
-    return parts.netloc if parts.netloc and parts.netloc != host else None
+        parts = urlparse(str(value))
+        parts.hostname  # noqa: B018 - may raise ValueError on a malformed netloc
+    except ValueError as error:
+        return None, str(error)
+    return parts, None
+
+
+def netloc_problem(parts):
+    """The netloc of parsed `parts` if it is not exactly the bare lowercase hostname (userinfo, explicit port or uppercase), else None."""
+    return parts.netloc if parts.netloc and parts.netloc != (parts.hostname or "") else None
 
 
 def path_problem(raw, path):
@@ -76,8 +85,10 @@ def path_problem(raw, path):
         return "backslash"
     if any(ch.isspace() or ord(ch) < 32 or ord(ch) == 127 for ch in raw):
         return "whitespace or control character"
-    if unquote(path) != path:
-        return "path differs from its unquoted form"
+    if "//" in path:
+        return "empty segment"
+    if "%" in path:
+        return "stray percent sign"  # a % not followed by two hex digits; a %XX octet was reported above
     return None
 
 
@@ -108,7 +119,12 @@ def evidence_problems(evidence_id, reg, host, jur, reference, source_class=None)
         problems.append(f"evidence {evidence_id} has a malformed byte count")
     if rec["status"] != policy["required_status"]:
         problems.append(f"evidence {evidence_id} status {rec['status']} is not {policy['required_status']}")
-    final, requested = urlparse(str(rec["final_url"])), urlparse(str(rec["requested_url"]))
+    final, error = parse_url(rec["final_url"])
+    if error is not None:
+        return problems + [f"evidence {evidence_id} final_url cannot be parsed: {error}"]
+    requested, error = parse_url(rec["requested_url"])
+    if error is not None:
+        return problems + [f"evidence {evidence_id} requested_url cannot be parsed: {error}"]
     if final.scheme != policy["required_final_scheme"]:
         problems.append(f"evidence {evidence_id} final_url is not https")
     chain = rec.get("redirect_chain")
@@ -117,14 +133,20 @@ def evidence_problems(evidence_id, reg, host, jur, reference, source_class=None)
     if not isinstance(chain, list) or not all(isinstance(hop, dict) for hop in chain):
         problems.append(f"evidence {evidence_id} has a malformed redirect_chain")
         chain = None
-    for field in ("requested_url", "final_url"):
-        bad = netloc_problem(rec[field])
+    for field, parts in (("requested_url", requested), ("final_url", final)):
+        bad = netloc_problem(parts)
         if bad is not None:
             problems.append(f"evidence {evidence_id} {field} netloc {bad} must be the bare lowercase host")
     if chain is not None and (requested.scheme != "https" or requested.hostname != final.hostname):
         for i, hop in enumerate(chain, 1):
             for end in ("from", "to"):
-                bad = netloc_problem(hop[end]) if hop.get(end) else None
+                if not hop.get(end):
+                    continue
+                parts, error = parse_url(hop[end])
+                if error is not None:
+                    problems.append(f"evidence {evidence_id} redirect hop {i} {end} cannot be parsed")
+                    continue
+                bad = netloc_problem(parts)
                 if bad is not None:
                     problems.append(f"evidence {evidence_id} redirect hop {i} {end} netloc {bad} must be the bare lowercase host")
     if chain is not None:
@@ -270,17 +292,19 @@ def validate(key, record, spec=None, reg=None):
         problems.append(f"jurisdiction {record['jurisdiction']} is not registered in the state-source contract")
     if not key.startswith(f"state:{record.get('jurisdiction')}:"):
         problems.append("manifest key must start with state:<jurisdiction>:")
-    url = urlparse(record.get("source_url") or "")
-    if record.get("source_url") and url.scheme != "https":
+    url, error = parse_url(record.get("source_url") or "")
+    if error is not None:
+        problems.append(f"source_url cannot be parsed: {error}")  # host, approval and path checks need the parse; they are skipped
+    if url is not None and record.get("source_url") and url.scheme != "https":
         problems.append("source_url must be https")
-    if record.get("source_url"):
-        bad = netloc_problem(record["source_url"])
+    if url is not None and record.get("source_url"):
+        bad = netloc_problem(url)
         if bad is not None:
             problems.append(f"source_url netloc {bad} must be the bare lowercase host")
         reason = path_problem(str(record["source_url"]), url.path)
         if reason is not None:
             problems.append(f"source_url path is not canonical: {reason}")
-    if jur is not None:
+    if jur is not None and url is not None:
         if url.hostname not in jur["official_hosts"]:
             problems.append(f"source host {url.hostname} is not a confirmed official host for {record['jurisdiction']}")
         else:
