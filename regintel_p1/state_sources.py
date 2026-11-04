@@ -11,7 +11,11 @@ contract v0.4 (S7-P1-59) a source-class record is not honoured when another host
 byte count (a response indistinguishable from the entry page establishes no source class), and a redirect chain relied on for a
 non-https requested_url must start at requested_url and be contiguous. From v0.5 (S7-P1-60) a host whose metadata declares
 `endpoint_basis: index_page_only` approves none of its source classes (its evidence is an entry page only); the host itself stays
-approved, and an endpoint_basis outside the contract's `endpoint_bases` enum fails the host. The registry grants no right:
+approved, and an endpoint_basis outside the contract's `endpoint_bases` enum fails the host. From v0.6 (S7-P1-61) a host may declare
+`path_pattern`, a regular expression the whole path of an entry's source_url must match; an https requested_url on a different host than
+final_url needs a redirect chain that starts at requested_url, is contiguous and ends at final_url; and malformed registry or binding
+values (a non-object record or binding, a non-list redirect_chain or source_classes, a non-object hop, a boolean byte count) are
+reported as problems, never raised. None of these rules can turn a problem into an approval. The registry grants no right:
 public access is not reuse permission, so `usage_status: permitted` still needs a named operator permission reference.
 """
 import json
@@ -49,11 +53,16 @@ def _when(value):
 def evidence_problems(evidence_id, reg, host, jur, reference, source_class=None):
     """Why evidence `evidence_id` does not support approving `host` (or `host` for `source_class`); empty when it does."""
     policy = reg["validity_policy"]
-    rec = reg.get("evidence", {}).get(evidence_id) if evidence_id else None
+    records = reg.get("evidence") if isinstance(reg.get("evidence"), dict) else {}
     if not evidence_id:
         return ["no evidence_id is cited"]
+    if not isinstance(evidence_id, str):
+        return [f"evidence id {evidence_id!r} is not a string"]
+    rec = records.get(evidence_id)
     if rec is None:
         return [f"evidence {evidence_id} is not in the registry"]
+    if not isinstance(rec, dict):
+        return [f"evidence {evidence_id} is not a record object"]
     problems = [f"evidence {evidence_id} lacks {f}" for f in EVIDENCE_FIELDS
                 if f != "redirect_chain" and (f not in rec or rec[f] in (None, ""))]
     if problems:
@@ -64,19 +73,31 @@ def evidence_problems(evidence_id, reg, host, jur, reference, source_class=None)
         problems.append(f"evidence {evidence_id} has unknown level {rec['level']}")
     if not re.fullmatch(r"[0-9a-f]{64}", str(rec["sha256"])):
         problems.append(f"evidence {evidence_id} has a malformed sha256")
-    if not isinstance(rec["bytes"], int) or rec["bytes"] <= 0:
+    if isinstance(rec["bytes"], bool) or not isinstance(rec["bytes"], int) or rec["bytes"] <= 0:
         problems.append(f"evidence {evidence_id} has a malformed byte count")
     if rec["status"] != policy["required_status"]:
         problems.append(f"evidence {evidence_id} status {rec['status']} is not {policy['required_status']}")
-    final, requested = urlparse(rec["final_url"]), urlparse(rec["requested_url"])
+    final, requested = urlparse(str(rec["final_url"])), urlparse(str(rec["requested_url"]))
     if final.scheme != policy["required_final_scheme"]:
         problems.append(f"evidence {evidence_id} final_url is not https")
-    chain = rec.get("redirect_chain") or []
-    if requested.scheme != "https":
-        if not (chain and chain[-1].get("to") == rec["final_url"]):
-            problems.append(f"evidence {evidence_id} requested_url is not https and no redirect chain ends at final_url")
-        elif chain[0].get("from") != rec["requested_url"] or any(a.get("to") != b.get("from") for a, b in zip(chain, chain[1:])):
-            problems.append(f"evidence {evidence_id} redirect chain does not start at requested_url or is not contiguous")
+    chain = rec.get("redirect_chain")
+    if chain is None:
+        chain = []
+    if not isinstance(chain, list) or not all(isinstance(hop, dict) for hop in chain):
+        problems.append(f"evidence {evidence_id} has a malformed redirect_chain")
+        chain = None
+    if chain is not None:
+        ends = bool(chain) and chain[-1].get("to") == rec["final_url"]
+        joined = bool(chain) and chain[0].get("from") == rec["requested_url"] and \
+            all(a.get("to") == b.get("from") for a, b in zip(chain, chain[1:]))
+        if requested.scheme != "https":
+            if not ends:
+                problems.append(f"evidence {evidence_id} requested_url is not https and no redirect chain ends at final_url")
+            elif not joined:
+                problems.append(f"evidence {evidence_id} redirect chain does not start at requested_url or is not contiguous")
+        elif requested.hostname != final.hostname and not (ends and joined):
+            problems.append(f"evidence {evidence_id} requested_url host {requested.hostname} differs from final_url host {final.hostname} "
+                            "and no contiguous redirect chain from requested_url to final_url is recorded")
     if rec["publisher_basis"] not in policy["publisher_bases"]:
         problems.append(f"evidence {evidence_id} publisher_basis {rec['publisher_basis']} is not an accepted basis")
     if final.hostname != rec["host"]:
@@ -89,10 +110,13 @@ def evidence_problems(evidence_id, reg, host, jur, reference, source_class=None)
         if rec["level"] != "source_class":
             problems.append(f"evidence {evidence_id} is a host-level observation and cannot establish source class {source_class}")
         else:
-            if source_class not in (rec.get("source_classes") or []):
+            listed = rec.get("source_classes")
+            if listed is not None and not isinstance(listed, list):
+                problems.append(f"evidence {evidence_id} has malformed source_classes (not a list)")
+            elif source_class not in (listed or []):
                 problems.append(f"evidence {evidence_id} does not establish source class {source_class}")
-            for other_id, other in sorted((reg.get("evidence") or {}).items()):
-                if other_id != evidence_id and other.get("host") == rec["host"] and other.get("level") == "host" \
+            for other_id, other in sorted(records.items()):
+                if other_id != evidence_id and isinstance(other, dict) and other.get("host") == rec["host"] and other.get("level") == "host" \
                         and other.get("sha256") == rec["sha256"] and other.get("bytes") == rec["bytes"]:
                     problems.append(f"evidence {evidence_id} has the same sha256 and byte count as host-level record {other_id} on "
                                     f"{rec['host']}: a response indistinguishable from the entry page does not establish source class "
@@ -117,17 +141,22 @@ def approvals(jurisdiction, reference, spec=None, reg=None):
     for host in jur.get("official_hosts", []):
         meta = (jur.get("hosts") or {}).get(host) or {}
         bind = meta.get("evidence") if isinstance(meta.get("evidence"), dict) else {}
-        problems = [f"host {host}: {p}" for p in evidence_problems(bind.get("host"), reg, host, jur, reference)]
+        problems = [] if meta.get("evidence") is None or isinstance(meta["evidence"], dict) else [f"host {host}: evidence binding is not an object"]
+        problems += [f"host {host}: {p}" for p in evidence_problems(bind.get("host"), reg, host, jur, reference)]
+        bound = bind.get("source_classes")
+        bound_ok = bound is None or isinstance(bound, dict)
+        bound = bound if isinstance(bound, dict) else {}
         basis = meta.get("endpoint_basis")
         if basis is not None and basis not in (spec.get("endpoint_bases") or []):
             problems.append(f"host {host}: unknown endpoint_basis {basis!r} (allowed: {', '.join(spec.get('endpoint_bases') or [])})")
         classes = []
         listed = meta.get("source_classes") or []
-        for cls in sorted(set(listed) | set((bind.get("source_classes") or {}))):
+        for cls in sorted(set(listed) | set(bound)):
             if cls not in listed:
                 problems.append(f"host {host}: evidence is bound for {cls}, which the host does not list")
                 continue
-            p = evidence_problems((bind.get("source_classes") or {}).get(cls), reg, host, jur, reference, cls)
+            p = [] if bound_ok else ["evidence source_classes binding is not an object"]
+            p += evidence_problems(bound.get(cls), reg, host, jur, reference, cls)
             if basis == "index_page_only":
                 p.append(f"host {host} declares endpoint_basis index_page_only: entry-page evidence does not establish source class {cls}")
             if p:
@@ -159,6 +188,16 @@ def validate(key, record, spec=None, reg=None):
         else:
             reference = (record.get("asset") or {}).get("retrieved_at")
             approval = approvals(record["jurisdiction"], reference, spec, reg).get(url.hostname, {})
+            pattern = ((jur.get("hosts") or {}).get(url.hostname) or {}).get("path_pattern")
+            if pattern is not None:
+                try:
+                    conforms = re.fullmatch(pattern, url.path) is not None
+                except (re.error, TypeError):
+                    problems.append(f"path_pattern of host {url.hostname} is not a valid regular expression: {pattern!r}")
+                else:
+                    if not conforms:
+                        problems.append(f"source_url path {url.path} on {url.hostname} does not match the host's path_pattern "
+                                        f"{pattern} for source_class {record.get('source_class')}")
             if not approval.get("approved"):
                 problems.append(f"approval of host {url.hostname} is not supported by valid evidence: " + "; ".join(approval.get("problems", [])))
             elif record.get("source_class") and record["source_class"] not in approval["source_classes"]:

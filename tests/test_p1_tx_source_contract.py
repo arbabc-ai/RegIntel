@@ -15,13 +15,15 @@ from test_p1_rulemaking_sources import build_rule
 ROOT = Path(__file__).resolve().parent.parent
 FIXTURE = json.loads((Path(__file__).resolve().parent / "fixtures/tx_source_verification_48.json").read_text())
 TX = state_sources.contract()["jurisdictions"]["TX"]
+CONFORMING_PATHS = {"tcss.legis.texas.gov": "/resources/FI/htm/FI.31.htm"}
 
 
 def entry(root, host, cls, **over):
     body = b"<html><body><p>SYNTHETIC bytes for a contract test; not official text.</p></body></html>"
     (root / "raw").mkdir(parents=True, exist_ok=True)
     (root / "raw" / "tx.html").write_bytes(body)
-    rec = {"source_class": cls, "jurisdiction": "TX", "publisher": "synthetic", "source_url": f"https://{host}/synthetic",
+    path = CONFORMING_PATHS.get(host, "/synthetic")  # a host declaring path_pattern needs a conforming path (S7-P1-61)
+    rec = {"source_class": cls, "jurisdiction": "TX", "publisher": "synthetic", "source_url": f"https://{host}{path}",
            "legal_entity_scope": "synthetic", "locator": "synthetic",
            "rights": {"terms_url": f"https://{host}/terms", "terms_checked_at": "2026-11-03T00:00:00Z", "usage_status": "pending_review"},
            "acquisition_authorization": "synthetic test fixture",
