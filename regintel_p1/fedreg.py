@@ -201,14 +201,18 @@ DEPTH_CLASS = {1: "letter", 2: "digit", 3: "roman", 4: "upper", 5: "digit", 6: "
 
 
 def designator_classes(designator):
-    """Hierarchy classes a bare designator could belong to (`i`, `v`, `x` are both a letter and a roman numeral)."""
+    """Hierarchy classes a bare designator could belong to (`i`, `v`, `x` are both a letter and a roman numeral).
+
+    Lowercase letters run a-z, then doubled aa-zz, then tripled aaa-zzz (31 CFR 1010.100 reaches (xxx)); a repeated letter
+    that is also a listed roman numeral (`ii`, `iii`, `xx`) stays roman only (S7-P1-77).
+    """
     d = designator.strip("()")
     classes = set()
     if d.isdigit():
         classes.add("digit")
     if d in ROMAN_LOWER:
         classes.add("roman")
-    if d.islower() and (len(d) == 1 or (len(set(d)) == 1 and len(d) == 2 and d not in ROMAN_LOWER)) and d not in ROMAN_LOWER - {"i", "v", "x"}:
+    if d.islower() and (len(d) == 1 or (len(set(d)) == 1 and len(d) in (2, 3) and d not in ROMAN_LOWER)) and d not in ROMAN_LOWER - {"i", "v", "x"}:
         classes.add("letter")
     if d.isupper() and (len(d) == 1 or len(set(d)) == 1 and len(d) == 2):
         classes.add("upper")

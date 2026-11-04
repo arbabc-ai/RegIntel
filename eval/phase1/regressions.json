@@ -3687,5 +3687,178 @@
    "id": "PP02",
    "kind": "stored"
   }
+ ],
+ "triple_letter_paragraph_list": [
+  {
+   "id": "TL01",
+   "kind": "positive",
+   "texts": [
+    {
+     "text": "3. Revising § 1010.100 by: a. Revising and republishing paragraph (t)(9) and (t)(10); b. Adding paragraph (t)(11); c. Revising and republishing paragraph (ff)(8)(ii) and (ff)(8)(iii); d. Adding paragraph (ff)(8)(iv); e. Revising and republishing paragraph (bbb)(1); f. Revising and republishing paragraph (eee); and g. Adding paragraphs (nnn), (ooo), (ppp), (qqq), (rrr), (sss), (ttt), (uuu), (vvv), (www), and (xxx). The revisions, republications, and additions read as follows:",
+     "paths": [
+      "(t)(9)",
+      "(t)(10)",
+      "(t)(11)",
+      "(ff)(8)(ii)",
+      "(ff)(8)(iii)",
+      "(ff)(8)(iv)",
+      "(bbb)(1)",
+      "(eee)",
+      "(nnn)",
+      "(ooo)",
+      "(ppp)",
+      "(qqq)",
+      "(rrr)",
+      "(sss)",
+      "(ttt)",
+      "(uuu)",
+      "(vvv)",
+      "(www)",
+      "(xxx)"
+     ]
+    },
+    {
+     "text": "2. Amend § 1010.100 by: a. Revising paragraphs (e) and (r); and b. Adding paragraphs (nnn) and (ooo). The revisions and additions read as follows:",
+     "paths": [
+      "(e)",
+      "(r)",
+      "(nnn)",
+      "(ooo)"
+     ]
+    },
+    {
+     "text": "Amend § 1010.100 by adding paragraphs (aaa) and (bbb).",
+     "paths": [
+      "(aaa)",
+      "(bbb)"
+     ]
+    },
+    {
+     "text": "Amend § 1010.100 by adding paragraph (aaa)(1).",
+     "paths": [
+      "(aaa)(1)"
+     ]
+    }
+   ],
+   "delta": [
+    {
+     "citation": "31 CFR 1010.100(ooo)",
+     "doc_key": "fr:2026-06963",
+     "expect": {
+      "fr:2026-06963": "paragraph",
+      "fr:2026-07033": "paragraph"
+     }
+    },
+    {
+     "citation": "31 CFR 1010.100(xxx)",
+     "doc_key": "fr:2026-06963",
+     "expect": {
+      "fr:2026-06963": "paragraph",
+      "fr:2026-07033": "section_context"
+     }
+    }
+   ]
+  },
+  {
+   "id": "TL02",
+   "kind": "negative",
+   "texts": [
+    "In § 1010.100, revise the text to read “Adding paragraphs (nnn) and (ooo).”",
+    "Amend § 1010.100 by revising the definition as provided in paragraphs (nnn) and (ooo).",
+    "Amend § 1010.100 by adding paragraph (nnn",
+    "Amend § 1010.100 by adding paragraphs (nnn)(ooo"
+   ]
+  },
+  {
+   "id": "TL03",
+   "kind": "stored",
+   "units": [
+    {
+     "doc_key": "fr:2026-06963",
+     "locator": "2026-06963:reg:1:1010.100:16",
+     "paths": [
+      "(t)(9)",
+      "(t)(10)",
+      "(t)(11)",
+      "(ff)(8)(ii)",
+      "(ff)(8)(iii)",
+      "(ff)(8)(iv)",
+      "(bbb)(1)",
+      "(eee)",
+      "(nnn)",
+      "(ooo)",
+      "(ppp)",
+      "(qqq)",
+      "(rrr)",
+      "(sss)",
+      "(ttt)",
+      "(uuu)",
+      "(vvv)",
+      "(www)",
+      "(xxx)"
+     ]
+    },
+    {
+     "doc_key": "fr:2026-06963",
+     "locator": "2026-06963:reg:1:1010.100:17",
+     "paths": [
+      "(t)(9)",
+      "(t)(10)",
+      "(t)(11)",
+      "(ff)(8)(ii)",
+      "(ff)(8)(iii)",
+      "(ff)(8)(iv)",
+      "(bbb)(1)",
+      "(eee)",
+      "(nnn)",
+      "(ooo)",
+      "(ppp)",
+      "(qqq)",
+      "(rrr)",
+      "(sss)",
+      "(ttt)",
+      "(uuu)",
+      "(vvv)",
+      "(www)",
+      "(xxx)"
+     ]
+    },
+    {
+     "doc_key": "fr:2026-06963",
+     "locator": "2026-06963:reg:1:1010.100:18",
+     "paths": [
+      "(t)(9)",
+      "(t)(10)",
+      "(t)(11)",
+      "(ff)(8)(ii)",
+      "(ff)(8)(iii)",
+      "(ff)(8)(iv)",
+      "(bbb)(1)",
+      "(eee)",
+      "(nnn)",
+      "(ooo)",
+      "(ppp)",
+      "(qqq)",
+      "(rrr)",
+      "(sss)",
+      "(ttt)",
+      "(uuu)",
+      "(vvv)",
+      "(www)",
+      "(xxx)"
+     ]
+    },
+    {
+     "doc_key": "fr:2026-07033",
+     "locator": "2026-07033:reg:1:1010.100:2",
+     "paths": [
+      "(e)",
+      "(r)",
+      "(nnn)",
+      "(ooo)"
+     ]
+    }
+   ]
+  }
  ]
 }

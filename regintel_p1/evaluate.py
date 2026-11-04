@@ -2174,6 +2174,26 @@ def check_parenthesized_paragraph_list(index, item):
     return {"id": item["id"], "kind": kind, "passed": not failures, "failures": failures[:10]}
 
 
+def check_triple_letter_paragraph_list(index, item):
+    """Guard for added-paragraph lists of tripled letters ("Adding paragraphs (nnn), (ooo), ... and (xxx)", S7-P1-77). `positive`: the grammar
+    names every listed path, single- and triple-letter members alike, and, where the acquired index holds the document, delta support for a
+    later member comes from the instruments that name it (others stay section context). `negative`: quoted replacement text, a
+    cross-reference and a malformed designator name nothing. `stored`: where the index holds the unit, its stored explicit_paragraphs equal
+    the expected paths. Textual evidence only."""
+    if item["kind"] in ("positive", "negative"):
+        return {**check_lowercase_paragraph_clause(index, item), "id": item["id"], "kind": item["kind"]}
+    failures = []
+    for u in item["units"]:
+        row = index.conn.execute(
+            """SELECT p.explicit_paragraphs FROM provision p JOIN source_document d ON d.id=p.doc_id
+               WHERE d.doc_key=? AND p.locator=? AND p.kind='amendment'""", (u["doc_key"], u["locator"])).fetchone()
+        if row is None:
+            continue  # the document is not in this index
+        got = json.loads(row[0] or "{}")
+        if (got.get("status"), got.get("paths")) != ("attributed", u["paths"]):
+            failures.append(f"{u['locator']}: stored {got.get('status')} {got.get('paths')} != attributed {u['paths']}")
+    return {"id": item["id"], "kind": item["kind"], "passed": not failures, "failures": failures[:10]}
+
 def run_regressions(index, path):
     spec = json.loads(Path(path).read_text())
     out = {"version": spec["version"], "task": spec["task"],
@@ -2218,7 +2238,8 @@ def run_regressions(index, path):
            "nested_to_paragraph_scope": [check_nested_to_paragraph_scope(index, x) for x in spec.get("nested_to_paragraph_scope", [])],
            "paragraph_scope_continuity": [check_paragraph_scope_continuity(index, x) for x in spec.get("paragraph_scope_continuity", [])],
            "enumerated_paragraph_location": [check_enumerated_paragraph_location(index, x) for x in spec.get("enumerated_paragraph_location", [])],
-           "parenthesized_paragraph_list": [check_parenthesized_paragraph_list(index, x) for x in spec.get("parenthesized_paragraph_list", [])]}
+           "parenthesized_paragraph_list": [check_parenthesized_paragraph_list(index, x) for x in spec.get("parenthesized_paragraph_list", [])],
+           "triple_letter_paragraph_list": [check_triple_letter_paragraph_list(index, x) for x in spec.get("triple_letter_paragraph_list", [])]}
     out["passed"] = (all(d["passed"] for d in out["delta"]) and out["relationship_integrity"]["passed"]
                      and all(c["passed"] for c in out["citation_scope"]) and all(x["passed"] for x in out["status"])
                      and all(x["passed"] for x in out["citation_completeness"])
@@ -2258,12 +2279,14 @@ def run_regressions(index, path):
                      and all(x["passed"] for x in out["nested_to_paragraph_scope"])
                      and all(x["passed"] for x in out["paragraph_scope_continuity"])
                      and all(x["passed"] for x in out["enumerated_paragraph_location"])
-                     and all(x["passed"] for x in out["parenthesized_paragraph_list"]))
+                     and all(x["passed"] for x in out["parenthesized_paragraph_list"])
+                     and all(x["passed"] for x in out["triple_letter_paragraph_list"]))
     return out
 
 
 REGRESSION_GROUPS = ("delta", "relationship_integrity", "citation_scope", "status", "citation_completeness",
-                     "mixed_source", "delta_precision", "instruction_boundary", "current_agreement", "amendatory_lists", "designator_integrity", "query_citations", "suffix_integrity", "appendix_evidence", "titleless_delta", "query_lists", "query_ranges", "connector_operands", "part_ranges", "part_to_ranges", "part_lists", "four_digit_parts", "candidate_titles", "explicit_title_sign", "punctuated_cfr_title", "citation_tokens", "hyphen_tails", "list_recovery", "source_coverage", "required_sections", "rulemaking_sources", "dependency_verification", "lowercase_paragraph_clause", "paragraph_evidence", "relative_action_paragraphs", "enumerated_relative_paragraphs", "passive_location_paragraphs", "nested_by_paragraph_scope", "nested_to_paragraph_scope", "paragraph_scope_continuity", "enumerated_paragraph_location", "parenthesized_paragraph_list")
+                     "mixed_source", "delta_precision", "instruction_boundary", "current_agreement", "amendatory_lists", "designator_integrity", "query_citations", "suffix_integrity", "appendix_evidence", "titleless_delta", "query_lists", "query_ranges", "connector_operands", "part_ranges", "part_to_ranges", "part_lists", "four_digit_parts", "candidate_titles", "explicit_title_sign", "punctuated_cfr_title", "citation_tokens", "hyphen_tails", "list_recovery", "source_coverage", "required_sections", "rulemaking_sources", "dependency_verification", "lowercase_paragraph_clause", "paragraph_evidence", "relative_action_paragraphs", "enumerated_relative_paragraphs", "passive_location_paragraphs", "nested_by_paragraph_scope", "nested_to_paragraph_scope", "paragraph_scope_continuity", "enumerated_paragraph_location", "parenthesized_paragraph_list",
+                     "triple_letter_paragraph_list")
 
 
 def overall(report):
@@ -2451,6 +2474,8 @@ def render(report):
         lines.append(f"  {ri['id']} {'PASS' if ri['passed'] else 'FAIL'} relationship integrity violations={ri['violations']} {'; '.join(ri['failures'])}")
         for c in reg["citation_scope"]:
             lines.append(f"  {c['id']} {'PASS' if c['passed'] else 'FAIL'} citation scope '{c['query']}' {'; '.join(c['failures'])}")
+        for x in reg.get("triple_letter_paragraph_list", []):
+            lines.append(f"  {x['id']} {'PASS' if x['passed'] else 'FAIL'} triple-letter paragraph list [{x['kind']}] {'; '.join(x['failures'])}")
         for x in reg.get("parenthesized_paragraph_list", []):
             lines.append(f"  {x['id']} {'PASS' if x['passed'] else 'FAIL'} parenthesized paragraph list [{x['kind']}] {'; '.join(x['failures'])}")
         for x in reg.get("enumerated_paragraph_location", []):
