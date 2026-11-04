@@ -8,9 +8,14 @@ never counted as targets; an `amends` citation of any other shape is collected i
 target the producer's Index.delta() is run unchanged and its fields are recorded: nothing is merged across instruments, no proposal
 is relabelled, and every row keeps the producer's legal_validity and applicability_status.
 
-The reconciliation is independent: SQL_TARGETS counts distinct targets with SQLite directly over the index's relationship and
-amendment_range tables (shape tests in SQL, a recursive CTE for range members), and `reconciles` requires the Python distinct count,
-that SQL count and the evidence-status tally to agree. Added eCFR parts are derived from the two indexes' document sets.
+The reconciliation has two independent legs plus an injectivity check. (1) SQL_TARGETS counts distinct targets with SQLite directly
+over the index's relationship and amendment_range tables (shape tests in SQL, a recursive CTE for range members); (2) the Python
+enumeration counts its distinct (title, part, section) keys; `reconciles` requires (1) == (2) and that every key renders a distinct
+citation (no two keys collapse onto one row citation). The Python classifier uses fullmatch with re.ASCII, so it agrees with the
+SQL GLOB tests on trailing newlines and non-ASCII digits. status.amends_rows_unclassified_count counts rows; the distinct
+citations are listed in summary.amends_rows_unclassified_citations. Added eCFR parts are derived from the two indexes' document
+sets; when the two indexes' eCFR part sets differ, --added-parts must list exactly the derived parts, otherwise
+added_parts_mismatch is non-empty, comparison_clean is false and the CLI exits 1.
 
 Counting policy (both counters follow it; pinned by tests):
   - `amends` rows count only with review_status 'parsed_unreviewed'; other review statuses are tallied in
@@ -42,8 +47,9 @@ if str(REPO) not in sys.path:
 from regintel_p1.search import Index  # noqa: E402
 
 SCHEMA = "p1-delta-coverage-refresh-0.3"
-SECTION = re.compile(r"^(\d+) CFR (\d+)\.([0-9A-Za-z]+)$")
-PART = re.compile(r"^(\d+) CFR Part (\d+)$")
+# fullmatch + re.ASCII: no trailing-newline match and ASCII digits only, exactly as the GLOB tests in SQL_TARGETS.
+SECTION = re.compile(r"(\d+) CFR (\d+)\.([0-9A-Za-z]+)", re.ASCII)
+PART = re.compile(r"(\d+) CFR Part (\d+)", re.ASCII)
 
 
 def sha256(path):
@@ -62,11 +68,11 @@ def sources(conn):
         if review != "parsed_unreviewed":
             raw["amends_rows_other_review_status"] += 1
             continue
-        m = SECTION.match(cite or "")
+        m = SECTION.fullmatch(cite or "")
         if m:
             raw["amends_rows_section"] += 1
             targets[(m[1], m[2], f"{m[2]}.{m[3]}")].add("amends")
-        elif PART.match(cite or ""):
+        elif PART.fullmatch(cite or ""):
             raw["amends_rows_part_level"] += 1
             part_level.add(cite)
         else:
@@ -171,10 +177,11 @@ def coverage(index_path, as_of):
                "targets_by_baseline_kind": dict(sorted(Counter(r["baseline_kind"] for r in rows).items())),
                "targets_by_source": dict(sorted(Counter(s for r in rows for s in r["target_sources"]).items())),
                "part_level_amends_rows_not_counted": len(part_level), "amends_candidates_not_counted": len(candidates),
-               "candidates_that_are_also_targets": sum(1 for c in candidates if SECTION.match(c) and
-                                                       (SECTION.match(c)[1], SECTION.match(c)[2], f"{SECTION.match(c)[2]}.{SECTION.match(c)[3]}") in targets),
+               "candidates_that_are_also_targets": sum(1 for c in candidates if (m := SECTION.fullmatch(c or "")) and
+                                                       (m[1], m[2], f"{m[2]}.{m[3]}") in targets),
                "invariant_problems": invariants(rows)}
-    summary["reconciles"] = (sum(by_status.values()) == summary["distinct_targets"] == summary["sql_distinct_targets"])
+    summary["reconciles"] = (summary["distinct_targets"] == summary["sql_distinct_targets"]
+                             and len({r["citation"] for r in rows}) == summary["distinct_targets"])  # injectivity
     return {"rows": rows, "part_level_targets": part_level, "unresolved_candidates": candidates, "summary": summary,
             "source_status_counts": status, "dependency_verification": dep, "ecfr_parts": parts}
 
@@ -263,7 +270,7 @@ def main(argv=None):
     out = {"schema": SCHEMA,
            "status": {"label": "producer-reported; offline; read-only; no gate approved", "reconciles": s["reconciles"],
                       "invariant_problem_count": len(s["invariant_problems"]),
-                      "amends_rows_unclassified_count": len(s["amends_rows_unclassified_citations"]),
+                      "amends_rows_unclassified_count": s["amends_rows_unclassified"],  # rows; distinct citations are listed in the summary
                       "legal_validity": "not_determined", "applicability_status": "not_assessed"},
            "as_of": a.as_of, "index": {"name": Path(a.index).name, "path": str(a.index), "sha256": sha256(a.index),
                                         "dependency_verification": after.pop("dependency_verification"),
@@ -298,7 +305,7 @@ def main(argv=None):
     print(json.dumps({"out": a.out, "sha256": hashlib.sha256(raw).hexdigest(), "distinct_targets": s["distinct_targets"],
                       "sql_distinct_targets": s["sql_distinct_targets"], "by_status": s["targets_by_evidence_status"],
                       "reconciles": s["reconciles"], "invariant_problems": len(s["invariant_problems"]),
-                      "amends_rows_unclassified": len(s["amends_rows_unclassified_citations"]),
+                      "amends_rows_unclassified": s["amends_rows_unclassified"],
                       "comparison_clean": out["status"].get("comparison_clean")}, indent=1))
     ok = s["reconciles"] and not s["invariant_problems"] and not s["amends_rows_unclassified_citations"]
     return 0 if ok and out["status"].get("comparison_clean", True) else 1

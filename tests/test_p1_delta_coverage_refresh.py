@@ -178,7 +178,7 @@ class ComparisonTests(Fixture):
         exact = cov.compare(after, before, {("12", "217", "217.12")}, set())["inventory_54_check"]
         self.assertTrue(exact["inventory_54_matches_before_exact_section"])
 
-    def test_cli_writes_schema_0_2_with_a_computed_status_and_identical_reruns(self):
+    def test_cli_writes_schema_0_3_with_a_computed_status_and_identical_reruns(self):
         out1, out2 = Path(self.tmp) / "c1.json", Path(self.tmp) / "c2.json"
         with mock.patch("builtins.print"):
             self.assertEqual(cov.main(["--index", self.full, "--before-index", self.no217, "--added-parts", "12:217", "--out", str(out1)]), 0)
@@ -292,6 +292,50 @@ class StatusAndPolicyTests(Fixture):
         cites = [row["citation"] for row in cov.coverage(db, AS_OF)["rows"]]
         self.assertEqual(cites, ["12 CFR 3.2", "12 CFR 3.10", "12 CFR 217.12"])
         self.assertEqual(cites, cov.citations({(r.split()[0], r.split()[2].split(".")[0], r.split()[2]) for r in cites}))
+
+
+class ClassifierAgreementTests(Fixture):
+    """S7-P1-68: the Python classifier and SQL_TARGETS agree on edge-case citations; status counts rows; reconciliation checks that
+    each target key yields a distinct citation."""
+
+    def copy_with(self, name, **rows):
+        db = str(Path(self.tmp) / f"{name}.sqlite")
+        shutil.copy(self.full, db)
+        add_rows(db, **rows)
+        return db
+
+    def test_A1_trailing_newline_and_non_ascii_digit_citations_are_unclassified(self):
+        odd = ["12 CFR 324.7\n", "12 CFR 324.\u0667"]  # trailing newline; ARABIC-INDIC DIGIT SEVEN
+        db = self.copy_with("odd", amends=odd)
+        r = cov.coverage(db, AS_OF)
+        s = r["summary"]
+        self.assertEqual(sorted(s["amends_rows_unclassified_citations"]), sorted(odd))
+        self.assertFalse({row["citation"] for row in r["rows"]} & {"12 CFR 324.7", "12 CFR 324.\u0667"})
+        self.assertEqual((s["distinct_targets"], s["sql_distinct_targets"]), (1, 1))
+        self.assertTrue(s["reconciles"])
+        self.assertEqual(ran(["--index", db, "--out", str(Path(self.tmp) / "odd.json")]), 1)
+
+    def test_A2_status_counts_unclassified_rows_not_distinct_citations(self):
+        db = self.copy_with("dup", amends=["12 CFR Part 217, Appendix A", "12 CFR Part 217, Appendix A"])
+        out = Path(self.tmp) / "dup.json"
+        self.assertEqual(ran(["--index", db, "--out", str(out)]), 1)
+        doc = json.loads(out.read_text())
+        self.assertEqual(doc["summary"]["amends_rows_unclassified"], 2)
+        self.assertEqual(doc["summary"]["amends_rows_unclassified_citations"], ["12 CFR Part 217, Appendix A"])
+        self.assertEqual(doc["status"]["amends_rows_unclassified_count"], doc["summary"]["amends_rows_unclassified"])
+
+    def test_A3_two_target_keys_with_one_citation_do_not_reconcile(self):
+        real = cov.sources
+
+        def collide(conn):
+            targets, *rest = real(conn)
+            targets[("12", "999", "217.12")] = {"amends"}  # a second key that renders as "12 CFR 217.12"
+            return (targets, *rest)
+        # The SQL count is made to agree (2), so only the citation-injectivity leg can catch the collision.
+        with mock.patch.object(cov, "sources", collide), mock.patch.object(cov, "sql_distinct_count", lambda conn: 2):
+            s = cov.coverage(self.full, AS_OF)["summary"]
+        self.assertEqual((s["distinct_targets"], s["sql_distinct_targets"]), (2, 2))
+        self.assertFalse(s["reconciles"])
 
 
 if __name__ == "__main__":
