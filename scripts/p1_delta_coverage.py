@@ -17,13 +17,22 @@ citations are listed in summary.amends_rows_unclassified_citations. Added eCFR p
 sets; when the two indexes' eCFR part sets differ, --added-parts must list exactly the derived parts, otherwise
 added_parts_mismatch is non-empty, comparison_clean is false and the CLI exits 1.
 
+Changelog:
+  0.3 (S7-P1-67) comparison status and comparison_clean exit; inverted ranges have no members in either counter.
+  0.3 (S7-P1-68, no key change) status.amends_rows_unclassified_count counts rows (not distinct citations); reconciles is
+      SQL count == Python distinct count plus citation injectivity; classifier uses fullmatch with re.ASCII.
+  0.4 (S7-P1-69) rows gain baseline_gap_kind (null when a baseline exists; else part_held_section_absent when the part's eCFR
+      baseline is in the index, part_not_acquired otherwise); summary gains targets_without_baseline_by_gap_kind,
+      targets_without_baseline_by_part and amendment_range_rows_non_numeric.
+
 Counting policy (both counters follow it; pinned by tests):
   - `amends` rows count only with review_status 'parsed_unreviewed'; other review statuses are tallied in
     amends_rows_other_review_status and are not targets.
   - every `amendment_range` row counts, whatever its review_status or status (all rows the producer records are numeric ranges);
     its members are lo_minor..hi_minor inclusive. A row with lo_minor > hi_minor has no members and is tallied in
     amendment_range_rows_inverted. (Before S7-P1-67 the SQL path seeded lo_minor even for such a row while the Python path did not;
-    both now give no members.)
+    both now give no members.) A row whose lo_minor or hi_minor is not a non-negative ASCII-digit integer has no members in
+    either counter and is tallied in amendment_range_rows_non_numeric (S7-P1-69); coverage() does not raise on it.
 
 With --before-index the status also reports the comparison (baseline_lost, targets_removed, added_parts_mismatch, unattributed
 new baselines, the S7-P1-54 match) and `comparison_clean`; the CLI exits 1 unless it is clean. --inventory-54 and --added-parts
@@ -46,7 +55,7 @@ if str(REPO) not in sys.path:
 
 from regintel_p1.search import Index  # noqa: E402
 
-SCHEMA = "p1-delta-coverage-refresh-0.3"
+SCHEMA = "p1-delta-coverage-refresh-0.4"
 # fullmatch + re.ASCII: no trailing-newline match and ASCII digits only, exactly as the GLOB tests in SQL_TARGETS.
 SECTION = re.compile(r"(\d+) CFR (\d+)\.([0-9A-Za-z]+)", re.ASCII)
 PART = re.compile(r"(\d+) CFR Part (\d+)", re.ASCII)
@@ -54,6 +63,14 @@ PART = re.compile(r"(\d+) CFR Part (\d+)", re.ASCII)
 
 def sha256(path):
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
+
+DIGITS = re.compile(r"[0-9]+", re.ASCII)
+
+
+def numeric(value):
+    """True when a range bound is a non-negative integer written in ASCII digits, as the SQL members CTE tests it."""
+    return value is not None and DIGITS.fullmatch(str(value)) is not None
 
 
 def sources(conn):
@@ -79,14 +96,18 @@ def sources(conn):
             raw["amends_rows_unclassified"] += 1
             unclassified.append(cite)
     raw["amends_rows_by_review_status"] = dict(sorted(by_review.items(), key=lambda kv: str(kv[0])))
-    ranges = members = inverted = 0
+    ranges = members = inverted = non_numeric = 0
     for title, part, lo, hi in conn.execute("SELECT title_no, part_no, lo_minor, hi_minor FROM amendment_range"):
         ranges += 1
+        if not (numeric(lo) and numeric(hi)):
+            non_numeric += 1
+            continue
         inverted += int(lo) > int(hi)
         for n in range(int(lo), int(hi) + 1):
             members += 1
             targets[(str(title), str(part), f"{part}.{n}")].add("amendment_range")
     raw["amendment_range_rows"], raw["amendment_range_members"], raw["amendment_range_rows_inverted"] = ranges, members, inverted
+    raw["amendment_range_rows_non_numeric"] = non_numeric
     for (cite,) in conn.execute("SELECT dst_citation FROM relationship WHERE rel_type='amends_candidate'"):
         candidates.add(cite)
     raw["amends_candidate_rows"] = conn.execute("SELECT COUNT(*) FROM relationship WHERE rel_type='amends_candidate'").fetchone()[0]
@@ -106,7 +127,9 @@ amend_targets(title, part, section) AS (
   WHERE title NOT GLOB '*[^0-9]*' AND part NOT GLOB '*[^0-9]*' AND minor <> '' AND minor NOT GLOB '*[^0-9A-Za-z]*'),
 members(title, part, n, hi) AS (
   SELECT CAST(title_no AS TEXT), CAST(part_no AS TEXT), CAST(lo_minor AS INTEGER), CAST(hi_minor AS INTEGER) FROM amendment_range
-  WHERE CAST(lo_minor AS INTEGER) <= CAST(hi_minor AS INTEGER)
+  WHERE CAST(lo_minor AS TEXT) <> '' AND CAST(lo_minor AS TEXT) NOT GLOB '*[^0-9]*'
+    AND CAST(hi_minor AS TEXT) <> '' AND CAST(hi_minor AS TEXT) NOT GLOB '*[^0-9]*'
+    AND CAST(lo_minor AS INTEGER) <= CAST(hi_minor AS INTEGER)
   UNION ALL SELECT title, part, n + 1, hi FROM members WHERE n < hi)
 SELECT COUNT(*) FROM (SELECT title, part, section FROM amend_targets
                       UNION SELECT title, part, part || '.' || n FROM members)
@@ -170,12 +193,24 @@ def coverage(index_path, as_of):
         parts = ecfr_parts(ix.conn)
     finally:
         ix.conn.close()
+    held = set(parts)
+    for r in rows:
+        r["baseline_gap_kind"] = (None if r["baseline_kind"] != "none" else
+                                  "part_held_section_absent" if f"{r['title']}:{r['part']}" in held else "part_not_acquired")
+    gap_parts = {}
+    for r in rows:
+        if r["baseline_gap_kind"]:
+            e = gap_parts.setdefault(f"{r['title']}:{r['part']}", {"gap_kind": r["baseline_gap_kind"], "count": 0})
+            e["count"] += 1
     by_status = Counter(r["evidence_status"] for r in rows)
     summary = {"distinct_targets": len(rows), "sql_distinct_targets": sql_count, "sql_distinct_targets_basis": "index tables (SQL_TARGETS)",
                **raw, "amends_rows_unclassified_citations": unclassified,
                "targets_by_evidence_status": dict(sorted(by_status.items())),
                "targets_by_baseline_kind": dict(sorted(Counter(r["baseline_kind"] for r in rows).items())),
                "targets_by_source": dict(sorted(Counter(s for r in rows for s in r["target_sources"]).items())),
+               "targets_without_baseline_by_gap_kind": dict(sorted(Counter(r["baseline_gap_kind"] for r in rows
+                                                                           if r["baseline_gap_kind"]).items())),
+               "targets_without_baseline_by_part": {k: gap_parts[k] for k in sorted(gap_parts, key=lambda tp: [int(x) for x in tp.split(":")])},
                "part_level_amends_rows_not_counted": len(part_level), "amends_candidates_not_counted": len(candidates),
                "candidates_that_are_also_targets": sum(1 for c in candidates if (m := SECTION.fullmatch(c or "")) and
                                                        (m[1], m[2], f"{m[2]}.{m[3]}") in targets),

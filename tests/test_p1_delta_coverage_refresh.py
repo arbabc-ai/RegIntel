@@ -185,7 +185,7 @@ class ComparisonTests(Fixture):
             cov.main(["--index", self.full, "--before-index", self.no217, "--added-parts", "12:217", "--out", str(out2)])
         self.assertEqual(out1.read_bytes(), out2.read_bytes())
         doc = json.loads(out1.read_text())
-        self.assertEqual(doc["schema"], "p1-delta-coverage-refresh-0.3")
+        self.assertEqual(doc["schema"], "p1-delta-coverage-refresh-0.4")
         self.assertEqual(doc["status"]["reconciles"], True)
         self.assertEqual(doc["status"]["invariant_problem_count"], 0)
         self.assertEqual(doc["before_after"]["added_parts_mismatch"], [])
@@ -336,6 +336,60 @@ class ClassifierAgreementTests(Fixture):
             s = cov.coverage(self.full, AS_OF)["summary"]
         self.assertEqual((s["distinct_targets"], s["sql_distinct_targets"]), (2, 2))
         self.assertFalse(s["reconciles"])
+
+
+def add_range(db, title, part, lo, hi, status="numeric_range", review="parsed_unreviewed"):
+    """Insert one amendment_range row with raw lo/hi values (which may be non-numeric) into a fixture copy."""
+    conn = sqlite3.connect(db)
+    try:
+        src = conn.execute("SELECT p.id FROM provision p JOIN source_document d ON d.id=p.doc_id WHERE d.doc_key LIKE 'fr:%' LIMIT 1").fetchone()[0]
+        conn.execute("INSERT INTO amendment_range (src_provision_id, title_no, part_no, lo_section, hi_section, lo_minor, hi_minor, status, "
+                     "instruction_ordinal, basis, review_status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, 'synthetic', ?)",
+                     (src, title, part, f"{part}.{lo}", f"{part}.{hi}", lo, hi, status, review))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+class GapKindAndRangePolicyTests(Fixture):
+    """S7-P1-69: baseline_gap_kind per row and its summaries; range rows with any review_status/status count; non-numeric ranges."""
+
+    def copy_of(self, base, name):
+        db = str(Path(self.tmp) / f"{name}.sqlite")
+        shutil.copy(base, db)
+        return db
+
+    def test_1_a_range_row_counts_whatever_its_review_status_or_status(self):
+        db = self.copy_of(self.full, "anystatus")
+        add_range(db, "12", "324", 1, 1, status="other", review="reviewed_confirmed")
+        s = cov.coverage(db, AS_OF)["summary"]
+        self.assertEqual((s["amendment_range_rows"], s["amendment_range_members"]), (1, 1))
+        self.assertEqual((s["distinct_targets"], s["sql_distinct_targets"]), (2, 2))
+        self.assertTrue(s["reconciles"])
+
+    def test_2_a_non_numeric_range_is_tallied_and_yields_no_target(self):
+        db = self.copy_of(self.full, "nonnumeric")
+        add_range(db, "12", "324", "3a", "5")
+        s = cov.coverage(db, AS_OF)["summary"]  # must not raise
+        self.assertEqual(s["amendment_range_rows_non_numeric"], 1)
+        self.assertEqual(s["amendment_range_members"], 0)
+        self.assertEqual((s["distinct_targets"], s["sql_distinct_targets"]), (1, 1))
+        self.assertTrue(s["reconciles"])
+
+    def test_3_baseline_gap_kinds_and_their_summaries(self):
+        db = self.copy_of(self.rich, "gapkinds")
+        add_range(db, "12", "999", 1, 2)  # a part absent from the fixture
+        r = cov.coverage(db, AS_OF)
+        kinds = {row["citation"]: row["baseline_gap_kind"] for row in r["rows"]}
+        self.assertEqual(kinds, {"12 CFR 217.12": None, "12 CFR 324.1": None, "12 CFR 324.2": "part_held_section_absent",
+                                 "12 CFR 324.3": "part_held_section_absent", "12 CFR 999.1": "part_not_acquired",
+                                 "12 CFR 999.2": "part_not_acquired"})
+        s = r["summary"]
+        self.assertEqual(s["targets_without_baseline_by_gap_kind"], {"part_held_section_absent": 2, "part_not_acquired": 2})
+        self.assertEqual(sum(s["targets_without_baseline_by_gap_kind"].values()), s["targets_by_baseline_kind"]["none"])
+        self.assertEqual(s["targets_without_baseline_by_part"], {"12:324": {"gap_kind": "part_held_section_absent", "count": 2},
+                                                                 "12:999": {"gap_kind": "part_not_acquired", "count": 2}})
+        self.assertEqual(list(s["targets_without_baseline_by_part"]), ["12:324", "12:999"])
 
 
 if __name__ == "__main__":
