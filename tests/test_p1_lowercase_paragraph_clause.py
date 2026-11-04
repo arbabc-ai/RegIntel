@@ -178,7 +178,12 @@ class AcquiredSourceTests(unittest.TestCase):
         new = named(True)
         with mock.patch.object(fedreg, "PARA_LOCATION", re.compile(r"(?!x)x")):
             old = named(False)
-        self.assertEqual(sorted(k for k in new if new[k] != old[k]), ["2026-04373:reg:6", "2026-04373:reg:9"])
+        # S7-P1-74 added the Tranche C Treasury documents; in FR 2026-19973 (Cuban Assets Control Regulations, 31 CFR 515) three
+        # "In § 515.x, in paragraph (p), add ..." instructions are attributed by the clause rule as intended: reg:4 -> (c),
+        # reg:7 -> (a)(5), reg:17 -> (d).
+        self.assertEqual(sorted(k for k in new if new[k] != old[k]),
+                         ["2026-04373:reg:6", "2026-04373:reg:9", "2026-19973:reg:17", "2026-19973:reg:4", "2026-19973:reg:7"])
+        self.assertEqual((new["2026-19973:reg:4"], new["2026-19973:reg:7"], new["2026-19973:reg:17"]), (["(c)"], ["(a)(5)"], ["(d)"]))
 
 
 class EvaluatorTests(unittest.TestCase):

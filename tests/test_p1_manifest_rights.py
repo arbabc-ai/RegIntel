@@ -20,7 +20,11 @@ from test_p1_tx_source_contract import entry as state_entry
 
 MANIFEST = Path("/home/arbab/projects/regintel-corpus/phase1/manifest.json")
 OVERLAY = MANIFEST.with_name("federal_rights.json")
-PINNED_MANIFEST_SHA256 = "60cf22e12703d82678859a32a46b328886aa7c17af3739aa37ca629b010cb3b7"
+# S7-P1-74: the Tranche C Treasury run (run 1f5976edda804c1a95857577ec0c87b2; DR-5, founder record
+# 2026-11-04_s7-regintel-p1-founder-decisions_accepted.md) moved the manifest from 60cf22e1... to this value.
+PINNED_MANIFEST_SHA256 = "6b4f56e42ac2b258fb8dbf459071ec55c19f034b3fc40a13885e43c14319e9fb"
+PINNED_OVERLAY_SHA256 = "be0fcb0a9a8537989bc52c6bf7eaaf24cd72b766e2d789b3ae5216fe1c0ae4dd"  # not rewritten by S7-P1-74
+TRANCHE_C_RUN_LOG = MANIFEST.with_name("runs") / "1f5976edda804c1a95857577ec0c87b2.json"
 
 
 def setUpModule():
@@ -126,10 +130,18 @@ class ValidatorTests(unittest.TestCase):
 class CurrentCorpusTests(unittest.TestCase):
     def test_the_pinned_manifest_plus_overlay_passes_and_a_removed_record_fails(self):
         self.assertEqual(hashlib.sha256(MANIFEST.read_bytes()).hexdigest(), PINNED_MANIFEST_SHA256)
+        self.assertEqual(hashlib.sha256(OVERLAY.read_bytes()).hexdigest(), PINNED_OVERLAY_SHA256)
         report = federal_rights.check(json.loads(MANIFEST.read_text()), json.loads(OVERLAY.read_text()))
         self.assertTrue(report["passed"])
-        self.assertEqual((report["federal_entries"], report["complete"]), (89, 89))
-        self.assertTrue(all(r["rights_source"] == "overlay" for r in report["entries"]))
+        self.assertEqual((report["federal_entries"], report["complete"]), (140, 140))
+        sources = [r["rights_source"] for r in report["entries"]]
+        self.assertEqual(sources.count("overlay"), 89)  # the pre-run federal entries, from the unchanged overlay
+        counts = json.loads(TRANCHE_C_RUN_LOG.read_text())["counts"]
+        self.assertEqual(sources.count("inline"), counts["downloaded"] + counts["reused"])  # the Tranche C entries
+        pinned = federal_rights.check(json.loads(MANIFEST.read_text()), json.loads(OVERLAY.read_text()),
+                                      hashlib.sha256(MANIFEST.read_bytes()).hexdigest())
+        self.assertTrue(pinned["passed"])  # still passes with the manifest sha256 given (the overlay pin is absent)
+        self.assertEqual((pinned["overlay_manifest_sha256"], pinned["manifest_mismatch"]), ("absent", False))
         with tempfile.TemporaryDirectory() as tmp:
             mp, op, out = Path(tmp) / "manifest.json", Path(tmp) / "federal_rights.json", Path(tmp) / "out.json"
             shutil.copy(MANIFEST, mp)
