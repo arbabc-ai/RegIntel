@@ -18,14 +18,17 @@ values (a non-object record or binding, a non-list redirect_chain or source_clas
 reported as problems rather than raised; only those enumerated values are covered, and a registry missing required structure such as
 `validity_policy` still raises. None of these rules can turn a problem into an approval. From v0.7 (S7-P1-62) a path_pattern host also
 rejects a source_url carrying a query string or path parameters (fragments stay allowed), and `approval_diagnostics()` reports which
-record backs each approval and whether the distinctness check was really exercised. The registry grants no right:
+record backs each approval and whether the distinctness check was really exercised. From v0.8 (S7-P1-63) every state entry's source_url
+must have a bare lowercase netloc (no userinfo, port or uppercase) and a canonical path (no percent-encoded octet, dot segment,
+backslash, whitespace or control character, and identical to its unquoted form), and an evidence record's requested_url, final_url and
+every relied-on redirect hop must have a bare lowercase netloc; these rules only add problems. The registry grants no right:
 public access is not reuse permission, so `usage_status: permitted` still needs a named operator permission reference.
 """
 import json
 import re
 from datetime import datetime, timezone
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import unquote, urlparse
 
 CONTRACT_PATH = Path(__file__).with_name("state_sources.json")
 EVIDENCE_FIELDS = ("evidence_id", "level", "host", "requested_url", "final_url", "redirect_chain", "status", "access_time", "sha256",
@@ -51,6 +54,31 @@ def _when(value):
     except ValueError:
         return None
     return t if t.tzinfo else t.replace(tzinfo=timezone.utc)
+
+
+def netloc_problem(url):
+    """The netloc of `url` if it is not exactly the bare lowercase hostname (userinfo, explicit port or uppercase), else None."""
+    try:
+        parts = urlparse(str(url))
+        host = parts.hostname or ""
+    except ValueError:
+        return str(url)
+    return parts.netloc if parts.netloc and parts.netloc != host else None
+
+
+def path_problem(raw, path):
+    """The reason the path of a source_url is not canonical, or None."""
+    if re.search(r"%[0-9A-Fa-f]{2}", path):
+        return "percent-encoded octet"
+    if any(seg in (".", "..") for seg in path.split("/")):
+        return "dot segment"
+    if "\\" in path:
+        return "backslash"
+    if any(ch.isspace() or ord(ch) < 32 or ord(ch) == 127 for ch in raw):
+        return "whitespace or control character"
+    if unquote(path) != path:
+        return "path differs from its unquoted form"
+    return None
 
 
 def evidence_problems(evidence_id, reg, host, jur, reference, source_class=None):
@@ -89,6 +117,16 @@ def evidence_problems(evidence_id, reg, host, jur, reference, source_class=None)
     if not isinstance(chain, list) or not all(isinstance(hop, dict) for hop in chain):
         problems.append(f"evidence {evidence_id} has a malformed redirect_chain")
         chain = None
+    for field in ("requested_url", "final_url"):
+        bad = netloc_problem(rec[field])
+        if bad is not None:
+            problems.append(f"evidence {evidence_id} {field} netloc {bad} must be the bare lowercase host")
+    if chain is not None and (requested.scheme != "https" or requested.hostname != final.hostname):
+        for i, hop in enumerate(chain, 1):
+            for end in ("from", "to"):
+                bad = netloc_problem(hop[end]) if hop.get(end) else None
+                if bad is not None:
+                    problems.append(f"evidence {evidence_id} redirect hop {i} {end} netloc {bad} must be the bare lowercase host")
     if chain is not None:
         ends = bool(chain) and chain[-1].get("to") == rec["final_url"]
         joined = bool(chain) and chain[0].get("from") == rec["requested_url"] and \
@@ -235,6 +273,13 @@ def validate(key, record, spec=None, reg=None):
     url = urlparse(record.get("source_url") or "")
     if record.get("source_url") and url.scheme != "https":
         problems.append("source_url must be https")
+    if record.get("source_url"):
+        bad = netloc_problem(record["source_url"])
+        if bad is not None:
+            problems.append(f"source_url netloc {bad} must be the bare lowercase host")
+        reason = path_problem(str(record["source_url"]), url.path)
+        if reason is not None:
+            problems.append(f"source_url path is not canonical: {reason}")
     if jur is not None:
         if url.hostname not in jur["official_hosts"]:
             problems.append(f"source host {url.hostname} is not a confirmed official host for {record['jurisdiction']}")
