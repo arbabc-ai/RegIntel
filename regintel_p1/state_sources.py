@@ -15,7 +15,10 @@ approved, and an endpoint_basis outside the contract's `endpoint_bases` enum fai
 `path_pattern`, a regular expression the whole path of an entry's source_url must match; an https requested_url on a different host than
 final_url needs a redirect chain that starts at requested_url, is contiguous and ends at final_url; and malformed registry or binding
 values (a non-object record or binding, a non-list redirect_chain or source_classes, a non-object hop, a boolean byte count) are
-reported as problems, never raised. None of these rules can turn a problem into an approval. The registry grants no right:
+reported as problems rather than raised; only those enumerated values are covered, and a registry missing required structure such as
+`validity_policy` still raises. None of these rules can turn a problem into an approval. From v0.7 (S7-P1-62) a path_pattern host also
+rejects a source_url carrying a query string or path parameters (fragments stay allowed), and `approval_diagnostics()` reports which
+record backs each approval and whether the distinctness check was really exercised. The registry grants no right:
 public access is not reuse permission, so `usage_status: permitted` still needs a named operator permission reference.
 """
 import json
@@ -168,6 +171,56 @@ def approvals(jurisdiction, reference, spec=None, reg=None):
     return out
 
 
+DISTINCTNESS_CHECKS = ("checked_distinct", "checked_identical", "vacuous_same_record", "no_host_level_baseline", "not_evaluated")
+
+
+def approval_diagnostics(jurisdiction, reference, spec=None, reg=None):
+    """Per listed host: which evidence record backs the host and each listed class, and whether the S7-P1-59 distinctness check was really
+    exercised for the class (`distinctness_check`, one of DISTINCTNESS_CHECKS):
+      not_evaluated           the class evidence has problems other than the distinctness problem (or no record is cited);
+      vacuous_same_record     the class binding cites the host binding's own record, so there is nothing to compare;
+      checked_identical       a host-level record on the host has the same sha256 and bytes (the S7-P1-59 problem is present);
+      checked_distinct        a valid host-level record on the host exists and differs in sha256 or bytes;
+      no_host_level_baseline  no valid host-level record exists on the host to compare against.
+    Pure and read-only: diagnostics withhold nothing and widen nothing; approvals() and validate() are unaffected."""
+    spec = spec or contract()
+    reg = reg if reg is not None else registry(spec)
+    jur = spec["jurisdictions"].get(jurisdiction) or {}
+    records = reg.get("evidence") if isinstance(reg.get("evidence"), dict) else {}
+    out = {}
+    for host in jur.get("official_hosts", []):
+        meta = (jur.get("hosts") or {}).get(host) or {}
+        bind = meta.get("evidence") if isinstance(meta.get("evidence"), dict) else {}
+        bound = bind.get("source_classes") if isinstance(bind.get("source_classes"), dict) else {}
+        hid = bind.get("host")
+        hrec = records.get(hid) if isinstance(hid, str) else None
+        hlevel = hrec["level"] if isinstance(hrec, dict) and hrec.get("level") in ("host", "source_class") \
+            and not evidence_problems(hid, reg, host, jur, reference) else "missing_or_invalid"
+        baselines = [(i, r) for i, r in sorted(records.items()) if isinstance(r, dict) and r.get("host") == host
+                     and r.get("level") == "host" and not evidence_problems(i, reg, host, jur, reference)]
+        same, classes = {}, {}
+        for cls in meta.get("source_classes") or []:
+            cid = bound.get(cls)
+            same[cls] = cid is not None and cid == hid
+            problems = evidence_problems(cid, reg, host, jur, reference, cls)
+            other = [p for p in problems if "same sha256 and byte count as host-level record" not in p]
+            crec = records.get(cid) if isinstance(cid, str) else None
+            if other or not isinstance(crec, dict):
+                check = "not_evaluated"
+            elif same[cls]:
+                check = "vacuous_same_record"
+            elif len(problems) > len(other):
+                check = "checked_identical"
+            elif baselines:
+                check = "checked_distinct"
+            else:
+                check = "no_host_level_baseline"
+            classes[cls] = {"class_evidence_id": cid, "distinctness_check": check}
+        out[host] = {"host_evidence_id": hid, "host_evidence_level": hlevel, "host_and_class_same_record": same, "classes": classes,
+                     "endpoint_basis": meta.get("endpoint_basis"), "path_pattern_declared": "path_pattern" in meta}
+    return out
+
+
 def validate(key, record, spec=None, reg=None):
     """Problems (empty when valid) for a state manifest entry `key` -> `record`."""
     spec = spec or contract()
@@ -189,6 +242,8 @@ def validate(key, record, spec=None, reg=None):
             reference = (record.get("asset") or {}).get("retrieved_at")
             approval = approvals(record["jurisdiction"], reference, spec, reg).get(url.hostname, {})
             pattern = ((jur.get("hosts") or {}).get(url.hostname) or {}).get("path_pattern")
+            if pattern is not None and (url.query or url.params):
+                problems.append(f"source_url on {url.hostname} carries a query string; path_pattern hosts accept the path alone")
             if pattern is not None:
                 try:
                     conforms = re.fullmatch(pattern, url.path) is not None
