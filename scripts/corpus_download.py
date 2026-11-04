@@ -26,6 +26,13 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode, urljoin, urlsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
+REPO = Path(__file__).resolve().parents[1]
+if str(REPO) not in sys.path:
+    sys.path.insert(0, str(REPO))
+
+# DR-6 rights fields per DR-2, founder record 2026-11-04_s7-regintel-p1-founder-decisions_accepted.md (S7-P1-72).
+from regintel_p1 import federal_rights  # noqa: E402
+
 ECFR = "https://www.ecfr.gov"
 FR = "https://www.federalregister.gov"
 HOSTS = {"www.ecfr.gov", "www.federalregister.gov", "www.govinfo.gov", "www.gpo.gov"}
@@ -192,6 +199,10 @@ class Corpus:
                 "retrieved_at": response.checked_at}
 
     def record(self, key: str, record: dict):
+        if federal_rights.is_federal(key):  # DR-6: a federal entry is never written without a complete rights record
+            problems = federal_rights.record_problems(record.get("rights"))
+            if problems:
+                raise ValueError(f"federal entry {key} lacks a complete DR-6 rights record: {'; '.join(problems)}")
         self.manifest["documents"][key] = {**record, "checked_at": now(),
             "indexed": False, "eligible_for_indexing": False,
             "applicability_status": "not_assessed"}
@@ -334,7 +345,8 @@ def download_ecfr(args, client: Client, corpus: Corpus) -> dict:
                 "publisher_up_to_date_as_of": up_to_date,
                 "rule_status": "published_baseline_requires_operative_effect_review",
                 "asset": asset, "catalog_asset": catalog_asset,
-                "titles_metadata_sha256": digest(titles_response.body), "locators": locators})
+                "titles_metadata_sha256": digest(titles_response.body), "locators": locators,
+                "rights": federal_rights.federal_rights("eCFR")})
         except (KeyError, ValueError, RuntimeError, OSError) as exc:
             counts["failed"] += 1
             corpus.failure(key, exc)
@@ -398,7 +410,8 @@ def download_fr(args, client: Client, corpus: Corpus) -> dict:
                     "cfr_references": detail.get("cfr_references"),
                     "official_pdf_url": detail.get("pdf_url"),
                     "rule_status": "unreviewed_disposition_not_inferred_from_document_type",
-                    "asset": asset, "metadata_asset": metadata_asset})
+                    "asset": asset, "metadata_asset": metadata_asset,
+                    "rights": federal_rights.federal_rights("Federal Register")})
             except (KeyError, ValueError, RuntimeError, OSError, ET.ParseError) as exc:
                 counts["failed"] += 1
                 corpus.failure(key, exc)
