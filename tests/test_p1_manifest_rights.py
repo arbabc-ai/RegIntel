@@ -20,11 +20,13 @@ from test_p1_tx_source_contract import entry as state_entry
 
 MANIFEST = Path("/home/arbab/projects/regintel-corpus/phase1/manifest.json")
 OVERLAY = MANIFEST.with_name("federal_rights.json")
-# S7-P1-74: the Tranche C Treasury run (run 1f5976edda804c1a95857577ec0c87b2; DR-5, founder record
-# 2026-11-04_s7-regintel-p1-founder-decisions_accepted.md) moved the manifest from 60cf22e1... to this value.
-PINNED_MANIFEST_SHA256 = "6b4f56e42ac2b258fb8dbf459071ec55c19f034b3fc40a13885e43c14319e9fb"
+# S7-P1-74 and S7-P1-75: the Tranche C Treasury runs (1f5976edda804c1a95857577ec0c87b2, then the completion run
+# 09eee849c1594c63b46788fff0e4dbd1; DR-5, founder record 2026-11-04_s7-regintel-p1-founder-decisions_accepted.md) moved the
+# manifest from 60cf22e1... to 6b4f56e4... and then to this value.
+PINNED_MANIFEST_SHA256 = "06fd6f749840664742b48275b8bf7bd40ec11c916ab1531e88392bbda2e6e1ce"
 PINNED_OVERLAY_SHA256 = "be0fcb0a9a8537989bc52c6bf7eaaf24cd72b766e2d789b3ae5216fe1c0ae4dd"  # not rewritten by S7-P1-74
-TRANCHE_C_RUN_LOG = MANIFEST.with_name("runs") / "1f5976edda804c1a95857577ec0c87b2.json"
+TRANCHE_C_RUN_LOGS = [MANIFEST.with_name("runs") / f"{run_id}.json"
+                      for run_id in ("1f5976edda804c1a95857577ec0c87b2", "09eee849c1594c63b46788fff0e4dbd1")]
 
 
 def setUpModule():
@@ -133,11 +135,11 @@ class CurrentCorpusTests(unittest.TestCase):
         self.assertEqual(hashlib.sha256(OVERLAY.read_bytes()).hexdigest(), PINNED_OVERLAY_SHA256)
         report = federal_rights.check(json.loads(MANIFEST.read_text()), json.loads(OVERLAY.read_text()))
         self.assertTrue(report["passed"])
-        self.assertEqual((report["federal_entries"], report["complete"]), (140, 140))
+        self.assertEqual((report["federal_entries"], report["complete"]), (156, 156))
         sources = [r["rights_source"] for r in report["entries"]]
         self.assertEqual(sources.count("overlay"), 89)  # the pre-run federal entries, from the unchanged overlay
-        counts = json.loads(TRANCHE_C_RUN_LOG.read_text())["counts"]
-        self.assertEqual(sources.count("inline"), counts["downloaded"] + counts["reused"])  # the Tranche C entries
+        counts = [json.loads(log.read_text())["counts"] for log in TRANCHE_C_RUN_LOGS]
+        self.assertEqual(sources.count("inline"), sum(n["downloaded"] + n["reused"] for n in counts))  # the Tranche C entries
         pinned = federal_rights.check(json.loads(MANIFEST.read_text()), json.loads(OVERLAY.read_text()),
                                       hashlib.sha256(MANIFEST.read_bytes()).hexdigest())
         self.assertTrue(pinned["passed"])  # still passes with the manifest sha256 given (the overlay pin is absent)

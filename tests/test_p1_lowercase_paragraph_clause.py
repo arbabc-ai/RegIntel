@@ -165,7 +165,7 @@ class AcquiredSourceTests(unittest.TestCase):
         self.assertEqual(got["2026-04373:reg:9"], {"paths": [P7], "status": "attributed"})
         self.assertEqual(got["2026-04373:reg:4"]["paths"], ["(d)(2)"])
 
-    def test_across_all_acquired_federal_register_documents_only_those_two_instructions_change(self):
+    def test_across_all_acquired_federal_register_documents_only_the_listed_instructions_change(self):
         def named(include_clause):
             out = {}
             for key, d in self.docs.items():
@@ -180,7 +180,7 @@ class AcquiredSourceTests(unittest.TestCase):
             old = named(False)
         # S7-P1-74 added the Tranche C Treasury documents; in FR 2026-19973 (Cuban Assets Control Regulations, 31 CFR 515) three
         # "In § 515.x, in paragraph (p), add ..." instructions are attributed by the clause rule as intended: reg:4 -> (c),
-        # reg:7 -> (a)(5), reg:17 -> (d).
+        # reg:7 -> (a)(5), reg:17 -> (d). S7-P1-75 (the 16 completion-run documents) added no changed unit.
         self.assertEqual(sorted(k for k in new if new[k] != old[k]),
                          ["2026-04373:reg:6", "2026-04373:reg:9", "2026-19973:reg:17", "2026-19973:reg:4", "2026-19973:reg:7"])
         self.assertEqual((new["2026-19973:reg:4"], new["2026-19973:reg:7"], new["2026-19973:reg:17"]), (["(c)"], ["(a)(5)"], ["(d)"]))
