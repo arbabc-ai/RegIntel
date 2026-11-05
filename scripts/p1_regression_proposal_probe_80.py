@@ -14,7 +14,8 @@ For each draft the probe
 Read-only guarantee: the CLI hashes the index before and after the run and exits 1 if the sha256 changed. The index is also opened
 read-only by regintel_p1.search.Index (sqlite3.connect(f"file:{db_path}?mode=ro", uri=True), regintel_p1/search.py:505).
 An instruction_boundary literal may carry `title` (default "12"); the observed citations use it. The evaluator's own
-check_instruction_boundary still builds "12 CFR" citations, so a non-12 title only changes what the probe observes.
+check_instruction_boundary still builds "12 CFR" citations, so a non-12 title only changes what the probe observes; such a row carries
+`evaluator_title_mismatch: true` and is listed in the top-level `evaluator_title_mismatches` as [check, option, title] (S7-P1-82).
 
     python3 -I scripts/p1_regression_proposal_probe_80.py --index DB --drafts DRAFTS.json --out PROBE.json
 """
@@ -122,6 +123,8 @@ def probe(index, manifest, drafts):
         part_row = lambda p: {"part": p, "manifest_key": f"ecfr:{p}", "in_manifest": f"ecfr:{p}" in docs, "in_source_document": f"ecfr:{p}" in held}
         row["absent_parts"] = [part_row(p) for p in d.get("absent_parts", [])]
         row["present_parts"] = [part_row(p) for p in d.get("present_parts", [])]
+        if d["group"] == "instruction_boundary" and str(d["literal"].get("title", "12")) != "12":
+            row["evaluator_title_mismatch"] = True  # the evaluator's check_instruction_boundary reads the citation as 12 CFR
         rows.append(row)
     return rows
 
@@ -143,17 +146,19 @@ def main(argv=None):
     a = ap.parse_args(argv)
     before = sha256(a.index)
     index = Index(a.index, a.as_of)
-    rows = probe(index, json.loads(Path(a.manifest).read_text()), json.loads(Path(a.drafts).read_text())["drafts"])
+    drafts_in = json.loads(Path(a.drafts).read_text())["drafts"]
+    rows = probe(index, json.loads(Path(a.manifest).read_text()), drafts_in)
     meta = dict(index.meta)
     index.conn.close()
     after = sha256(a.index)
+    mismatched = [[r["check"], r["option"], str(d["literal"].get("title"))] for r, d in zip(rows, drafts_in) if r.get("evaluator_title_mismatch")]
     missing = [(r["check"], r["option"], p["part"]) for r in rows for p in r["present_parts"] if not (p["in_manifest"] and p["in_source_document"])]
     out = {"schema": SCHEMA, "task": "S7-P1-80", "decision_record": DECISION_RECORD, "head": head(), "as_of": a.as_of,
            "index": {"path": a.index, "sha256": before, "unchanged_after_run": before == after, "built_at": meta.get("built_at"),
                      "manifest_sha256": meta.get("manifest_sha256")},
            "manifest": {"path": a.manifest, "sha256": sha256(a.manifest)},
            "regressions": {"path": "eval/phase1/regressions.json", "sha256": sha256(REPO / "eval/phase1/regressions.json")},
-           "present_parts_failing": [list(x) for x in missing], "rows": rows, "legal_validity": "not_determined", "applicability_status": "not_assessed",
+           "present_parts_failing": [list(x) for x in missing], "evaluator_title_mismatches": mismatched, "rows": rows, "legal_validity": "not_determined", "applicability_status": "not_assessed",
            "status": "proposal; producer-reported; no gate approved; nothing authorised"}
     data = (json.dumps(out, indent=1, ensure_ascii=False, sort_keys=True, default=str) + "\n").encode()
     Path(a.out).write_bytes(data)

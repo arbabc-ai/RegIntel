@@ -80,6 +80,10 @@ class ProbeTests(unittest.TestCase):
             {"check": "PL01", "option": "R", "group": "part_lists", "literal": {**ql, "id": "PLX"}}])
         obs = rows[0]["observed"]
         self.assertEqual(obs["title"], "31")
+        self.assertIs(rows[0].get("evaluator_title_mismatch"), True)  # S7-P1-82 (F-81-2): the evaluator reads 12 CFR
+        twelve = probe.probe(self.ix, manifest, [{"check": "IB01", "option": "P", "group": "instruction_boundary",
+                                                  "literal": {**ib, "id": "IBZ", "title": "12"}}])
+        self.assertNotIn("evaluator_title_mismatch", twelve[0])
         self.assertEqual(obs["units"][0]["explicit_paragraphs"]["paths"], ["(e)", "(r)", "(nnn)", "(ooo)", "(xxx)"])
         self.assertEqual((obs["paths"]["(ooo)"]["future_resolved"], obs["paths"]["(ooo)"]["resolver_rows"]), (True, 1))  # resolved as 31 CFR
         self.assertEqual(obs["paths"]["(zzz)"]["future_resolved"], False)
@@ -95,6 +99,18 @@ class ProbeTests(unittest.TestCase):
         with mock.patch.object(self.ix, "resolve_citations", return_value=[]):
             obs = probe.observe(self.ix, "instruction_boundary", ib)
         self.assertEqual((obs["paths"]["(ooo)"]["future_resolved"], obs["paths"]["(ooo)"]["resolver_rows"]), (None, 0))
+
+    def test_the_cli_lists_evaluator_title_mismatches(self):
+        ib = {"id": "IBX", "doc_key": "fr:2026-97001", "section": "1010.100", "title": "31", "instruction_prefix": "1. Amend",
+              "instruction_max_len": 400, "carried_contains": ["x"], "supported": ["(ooo)"], "unsupported": []}
+        drafts, out = self.root / "drafts_tm.json", self.root / "probe_tm.json"
+        drafts.write_text(json.dumps({"drafts": [{"check": "IB01", "option": "R", "group": "instruction_boundary", "literal": ib},
+                                                 {"check": "IB01", "option": "P", "group": "instruction_boundary",
+                                                  "literal": {**ib, "id": "IBZ", "title": "12"}}]}))
+        with mock.patch("builtins.print"):
+            probe.main(["--index", str(self.root / "i.sqlite"), "--manifest", str(self.root / "corpus" / "manifest.json"),
+                        "--drafts", str(drafts), "--out", str(out)])
+        self.assertEqual(json.loads(out.read_text())["evaluator_title_mismatches"], [["IB01", "R", "31"]])
 
     def test_a_missing_present_part_makes_the_cli_exit_1(self):
         drafts, out = self.root / "drafts_pp.json", self.root / "probe_pp.json"

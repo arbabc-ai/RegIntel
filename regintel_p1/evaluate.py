@@ -1940,6 +1940,55 @@ def check_paragraph_evidence_integrity(index, item):
     return {"id": item["id"], "kind": kind, "passed": not failures, "failures": failures[:10]}
 
 
+# Stored-kind corpus-scan constructions (S7-P1-82: hoisted unchanged from the stored branches below, so the evaluator and
+# scripts/p1_instruction_construction_census_82.py apply the same predicates). Each predicate takes a unit's verbatim instruction and its
+# stored explicit_paragraphs JSON and returns whether the unit is in scope of the corresponding stored check.
+NESTED_BY_CONSTRUCTION = re.compile(r"paragraphs?\s+\([^)]*\)(?:\([^)]*\))*\s+by\s+\w+\s+(?:new\s+)?paragraphs?\b", re.I)
+NESTED_TO_CONSTRUCTION = re.compile(r"paragraphs?\s+\([^)]*\)(?:\([^)]*\))*\s+to\s+(?:add|remove|revise|reserve|delete|redesignate)\s+(?:new\s+)?paragraphs?\b", re.I)
+SCOPE_CONTINUITY_CONSTRUCTION = re.compile(r"\bIn\s+paragraphs?\s+\([^)]*\)[^.;:]*?,\s*(?:and\s+)?\w+\s+(?:new\s+)?paragraphs?\b|"
+                                           r"\b(?:by|to)\s+\w+\s+(?:new\s+)?paragraphs?\s+\([^)]*\)(?:\([^)]*\))*\s*(?:,|and|or)\s*(?:(?:and|or|by|to)\s+)?\w+\s+(?:new\s+)?paragraphs?\b", re.I)
+ENUMERATED_LOCATION_CONSTRUCTION = re.compile(r"\bparagraphs?\s+\([^)]*\)(?:\([^)]*\))*\s*(?:,\s*(?:amend|revis\w*)[^.;:]*)?:\s+(?:\d{1,2}|[A-Za-z]{1,4})\.\s+", re.I)
+PARENTHESIZED_LIST_CONSTRUCTION = re.compile(r":\s+\(\s*(?:\d{1,2}|[A-Za-z]{1,4})\s*\)\s+[A-Za-z]", re.I)
+
+
+def _fedreg():
+    from . import fedreg
+    return fedreg
+
+
+def is_attributed_paths_unit(instruction, explicit_paragraphs):
+    """relative_action_paragraphs: the unit stores at least one attributed paragraph path."""
+    return bool((json.loads(explicit_paragraphs or "{}")).get("paths"))
+
+
+def is_passive_location_unit(instruction, explicit_paragraphs=None):
+    """passive_location_paragraphs: a paragraph-qualified passive section location outside quoted text."""
+    f = _fedreg()
+    return any(m.group(1).strip() for m in f.PASSIVE_LOCATION_CITE.finditer(f.parsing_view(f.QUOTED.sub(" \u2039q\u203a ", instruction))))
+
+
+def _construction_predicate(construction, doc):
+    def predicate(instruction, explicit_paragraphs=None):
+        return bool(construction.search(_fedreg().parsing_view(instruction)))
+    predicate.__doc__ = doc
+    return predicate
+
+
+is_nested_by_unit = _construction_predicate(NESTED_BY_CONSTRUCTION, "nested_by_paragraph_scope: NESTED_BY_CONSTRUCTION in the parsing view.")
+is_nested_to_unit = _construction_predicate(NESTED_TO_CONSTRUCTION, "nested_to_paragraph_scope: NESTED_TO_CONSTRUCTION in the parsing view.")
+is_scope_continuity_unit = _construction_predicate(SCOPE_CONTINUITY_CONSTRUCTION,
+                                                   "paragraph_scope_continuity: SCOPE_CONTINUITY_CONSTRUCTION in the parsing view.")
+is_enumerated_location_unit = _construction_predicate(ENUMERATED_LOCATION_CONSTRUCTION,
+                                                      "enumerated_paragraph_location: ENUMERATED_LOCATION_CONSTRUCTION in the parsing view.")
+is_parenthesized_list_unit = _construction_predicate(PARENTHESIZED_LIST_CONSTRUCTION,
+                                                     "parenthesized_paragraph_list: PARENTHESIZED_LIST_CONSTRUCTION in the parsing view.")
+STORED_SCAN_PREDICATES = {"relative_action_paragraphs": is_attributed_paths_unit, "passive_location_paragraphs": is_passive_location_unit,
+                          "nested_by_paragraph_scope": is_nested_by_unit, "nested_to_paragraph_scope": is_nested_to_unit,
+                          "paragraph_scope_continuity": is_scope_continuity_unit,
+                          "enumerated_paragraph_location": is_enumerated_location_unit,
+                          "parenthesized_paragraph_list": is_parenthesized_list_unit}
+
+
 def check_relative_action_paragraphs(index, item):
     """Guard for paragraphs named inside a paragraph-qualified section location ("In § 265.7(d), revise paragraph (7)"). `grammar`: such a
     relative action establishes neither a top-level path nor an inferred joined one (revise/remove/add, nested enclosing designators,
@@ -1958,9 +2007,9 @@ def check_relative_action_paragraphs(index, item):
         for doc, loc, instruction, ev in index.conn.execute(
                 """SELECT d.doc_key, p.locator, p.instruction, p.explicit_paragraphs FROM provision p JOIN source_document d ON d.id=p.doc_id
                    WHERE p.kind='amendment' AND p.instruction IS NOT NULL"""):
-            paths = (json.loads(ev or "{}")).get("paths") or []
-            if not paths:
+            if not is_attributed_paths_unit(instruction, ev):
                 continue
+            paths = (json.loads(ev or "{}")).get("paths") or []
             checked += 1
             named = fedreg.named_paragraph_paths(instruction)
             stale = [p for p in paths if p not in named]
@@ -2042,7 +2091,7 @@ def check_passive_location_paragraphs(index, item):
         for doc, loc, instruction, ev in index.conn.execute(
                 """SELECT d.doc_key, p.locator, p.instruction, p.explicit_paragraphs FROM provision p JOIN source_document d ON d.id=p.doc_id
                    WHERE p.kind='amendment' AND p.instruction IS NOT NULL"""):
-            if not any(m.group(1).strip() for m in fedreg.PASSIVE_LOCATION_CITE.finditer(fedreg.parsing_view(fedreg.QUOTED.sub(" \u2039q\u203a ", instruction)))):
+            if not is_passive_location_unit(instruction, ev):
                 continue
             matched += 1
             paths = (json.loads(ev or "{}")).get("paths") or []
@@ -2070,11 +2119,10 @@ def check_nested_by_paragraph_scope(index, item):
                 failures.append(f"'{t['text'][:70]}': named {got}, expected {t['paths']}")
     elif kind == "stored":
         matched = 0  # S7-P1-81: units whose instruction carries the construction; zero is reported, not failed
-        construction = re.compile(r"paragraphs?\s+\([^)]*\)(?:\([^)]*\))*\s+by\s+\w+\s+(?:new\s+)?paragraphs?\b", re.I)
         for doc, loc, instruction, ev in index.conn.execute(
                 """SELECT d.doc_key, p.locator, p.instruction, p.explicit_paragraphs FROM provision p JOIN source_document d ON d.id=p.doc_id
                    WHERE p.kind='amendment' AND p.instruction IS NOT NULL"""):
-            if not construction.search(fedreg.parsing_view(instruction)):
+            if not is_nested_by_unit(instruction, ev):
                 continue
             matched += 1
             paths = (json.loads(ev or "{}")).get("paths") or []
@@ -2101,11 +2149,10 @@ def check_nested_to_paragraph_scope(index, item):
                 failures.append(f"'{t['text'][:70]}': named {got}, expected {t['paths']}")
     elif kind == "stored":
         matched = 0  # S7-P1-81: units whose instruction carries the construction; zero is reported, not failed
-        construction = re.compile(r"paragraphs?\s+\([^)]*\)(?:\([^)]*\))*\s+to\s+(?:add|remove|revise|reserve|delete|redesignate)\s+(?:new\s+)?paragraphs?\b", re.I)
         for doc, loc, instruction, ev in index.conn.execute(
                 """SELECT d.doc_key, p.locator, p.instruction, p.explicit_paragraphs FROM provision p JOIN source_document d ON d.id=p.doc_id
                    WHERE p.kind='amendment' AND p.instruction IS NOT NULL"""):
-            if not construction.search(fedreg.parsing_view(instruction)):
+            if not is_nested_to_unit(instruction, ev):
                 continue
             matched += 1
             paths = (json.loads(ev or "{}")).get("paths") or []
@@ -2133,12 +2180,10 @@ def check_paragraph_scope_continuity(index, item):
                 failures.append(f"'{t['text'][:70]}': named {got}, expected {t['paths']}")
     elif kind == "stored":
         matched = 0  # S7-P1-81: units whose instruction carries the construction; zero is reported, not failed
-        construction = re.compile(r"\bIn\s+paragraphs?\s+\([^)]*\)[^.;:]*?,\s*(?:and\s+)?\w+\s+(?:new\s+)?paragraphs?\b|"
-                                  r"\b(?:by|to)\s+\w+\s+(?:new\s+)?paragraphs?\s+\([^)]*\)(?:\([^)]*\))*\s*(?:,|and|or)\s*(?:(?:and|or|by|to)\s+)?\w+\s+(?:new\s+)?paragraphs?\b", re.I)
         for doc, loc, instruction, ev in index.conn.execute(
                 """SELECT d.doc_key, p.locator, p.instruction, p.explicit_paragraphs FROM provision p JOIN source_document d ON d.id=p.doc_id
                    WHERE p.kind='amendment' AND p.instruction IS NOT NULL"""):
-            if not construction.search(fedreg.parsing_view(instruction)):
+            if not is_scope_continuity_unit(instruction, ev):
                 continue
             matched += 1
             paths = (json.loads(ev or "{}")).get("paths") or []
@@ -2166,11 +2211,10 @@ def check_enumerated_paragraph_location(index, item):
                 failures.append(f"'{t['text'][:70]}': named {got}, expected {t['paths']}")
     elif kind == "stored":
         matched = 0  # S7-P1-81: units whose instruction carries the construction; zero is reported, not failed
-        construction = re.compile(r"\bparagraphs?\s+\([^)]*\)(?:\([^)]*\))*\s*(?:,\s*(?:amend|revis\w*)[^.;:]*)?:\s+(?:\d{1,2}|[A-Za-z]{1,4})\.\s+", re.I)
         for doc, loc, instruction, ev in index.conn.execute(
                 """SELECT d.doc_key, p.locator, p.instruction, p.explicit_paragraphs FROM provision p JOIN source_document d ON d.id=p.doc_id
                    WHERE p.kind='amendment' AND p.instruction IS NOT NULL"""):
-            if not construction.search(fedreg.parsing_view(instruction)):
+            if not is_enumerated_location_unit(instruction, ev):
                 continue
             matched += 1
             paths = (json.loads(ev or "{}")).get("paths") or []
@@ -2198,11 +2242,10 @@ def check_parenthesized_paragraph_list(index, item):
                 failures.append(f"'{t['text'][:70]}': named {got}, expected {t['paths']}")
     elif kind == "stored":
         matched = 0  # S7-P1-81: units whose instruction carries the construction; zero is reported, not failed
-        construction = re.compile(r":\s+\(\s*(?:\d{1,2}|[A-Za-z]{1,4})\s*\)\s+[A-Za-z]", re.I)
         for doc, loc, instruction, ev in index.conn.execute(
                 """SELECT d.doc_key, p.locator, p.instruction, p.explicit_paragraphs FROM provision p JOIN source_document d ON d.id=p.doc_id
                    WHERE p.kind='amendment' AND p.instruction IS NOT NULL"""):
-            if not construction.search(fedreg.parsing_view(instruction)):
+            if not is_parenthesized_list_unit(instruction, ev):
                 continue
             matched += 1
             paths = (json.loads(ev or "{}")).get("paths") or []
