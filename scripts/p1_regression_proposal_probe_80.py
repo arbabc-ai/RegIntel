@@ -9,8 +9,12 @@ For each draft the probe
   - runs the group's existing evaluator function (regintel_p1.evaluate) on the literal and records passed and failures;
   - records what the resolver and answer paths observe for it (statuses, citations, reasons, members, instruments, units);
   - applies the draft's `mutation` (the field that makes the literal non-vacuous) to a copy and reruns the check, which must fail;
-  - for every `absent_parts` entry, reports whether ecfr:<title>:<part> is in the manifest and in the index's source_document.
-The index is opened with SQLite mode=ro; its sha256 is recorded before and after, and the CLI exits 1 if it changed.
+  - for every `absent_parts` entry, reports whether ecfr:<title>:<part> is in the manifest and in the index's source_document;
+  - for every `present_parts` entry (a positive control, S7-P1-81), reports the same, and the CLI exits 1 unless each is in both.
+Read-only guarantee: the CLI hashes the index before and after the run and exits 1 if the sha256 changed. The index is also opened
+read-only by regintel_p1.search.Index (sqlite3.connect(f"file:{db_path}?mode=ro", uri=True), regintel_p1/search.py:505).
+An instruction_boundary literal may carry `title` (default "12"); the observed citations use it. The evaluator's own
+check_instruction_boundary still builds "12 CFR" citations, so a non-12 title only changes what the probe observes.
 
     python3 -I scripts/p1_regression_proposal_probe_80.py --index DB --drafts DRAFTS.json --out PROBE.json
 """
@@ -68,15 +72,20 @@ def observe(index, group, item):
             """SELECT p.locator, p.pairing_status, p.carried_text_origin, p.explicit_paragraphs, length(p.instruction) AS n
                FROM provision p JOIN source_document d ON d.id=p.doc_id WHERE d.doc_key=? AND p.kind='amendment' AND p.section_no=?""",
             (item["doc_key"], item["section"])).fetchall()
-        cite = lambda p: f"12 CFR {item['section']}{p}"
+        title = str(item.get("title", "12"))
+        cite = lambda p: f"{title} CFR {item['section']}{p}"
         paths = {}
         for p in item["supported"] + item["unsupported"]:
-            fut = index.resolve_citations(cite(p), "future")[0]
+            resolved = index.resolve_citations(cite(p), "future")
             cur = index.answer(cite(p), mode="exact", scope="current", k=10)
-            paths[p] = {"future_resolved": fut["resolved"], "future_achieved": fut.get("achieved"),
+            if not resolved:  # an empty resolver result is recorded, never raised (S7-P1-81)
+                paths[p] = {"future_resolved": None, "resolver_rows": 0, "current_exact_status": cur["status"]}
+                continue
+            fut = resolved[0]
+            paths[p] = {"future_resolved": fut["resolved"], "future_achieved": fut.get("achieved"), "resolver_rows": len(resolved),
                         "future_paragraph_support": [x["doc_key"] for x in fut.get("future_paragraph_support") or []],
                         "current_exact_status": cur["status"]}
-        return {"units": [{"locator": r["locator"], "pairing_status": r["pairing_status"], "carried_text_origin": r["carried_text_origin"],
+        return {"title": title, "units": [{"locator": r["locator"], "pairing_status": r["pairing_status"], "carried_text_origin": r["carried_text_origin"],
                            "explicit_paragraphs": json.loads(r["explicit_paragraphs"] or "null"), "instruction_chars": r["n"]} for r in rows],
                 "paths": paths}
     if group == "titleless_delta":
@@ -110,8 +119,9 @@ def probe(index, manifest, drafts):
             m = check(index, mutate(d["literal"], d["mutation"]))
             row["non_vacuity"] = {"field": d["mutation"]["path"], "mutated_value": d["mutation"]["value"],
                                   "mutated_passed": m["passed"], "mutated_failures": m["failures"][:4]}
-        row["absent_parts"] = [{"part": p, "manifest_key": f"ecfr:{p}", "in_manifest": f"ecfr:{p}" in docs,
-                                "in_source_document": f"ecfr:{p}" in held} for p in d.get("absent_parts", [])]
+        part_row = lambda p: {"part": p, "manifest_key": f"ecfr:{p}", "in_manifest": f"ecfr:{p}" in docs, "in_source_document": f"ecfr:{p}" in held}
+        row["absent_parts"] = [part_row(p) for p in d.get("absent_parts", [])]
+        row["present_parts"] = [part_row(p) for p in d.get("present_parts", [])]
         rows.append(row)
     return rows
 
@@ -137,20 +147,21 @@ def main(argv=None):
     meta = dict(index.meta)
     index.conn.close()
     after = sha256(a.index)
+    missing = [(r["check"], r["option"], p["part"]) for r in rows for p in r["present_parts"] if not (p["in_manifest"] and p["in_source_document"])]
     out = {"schema": SCHEMA, "task": "S7-P1-80", "decision_record": DECISION_RECORD, "head": head(), "as_of": a.as_of,
            "index": {"path": a.index, "sha256": before, "unchanged_after_run": before == after, "built_at": meta.get("built_at"),
                      "manifest_sha256": meta.get("manifest_sha256")},
            "manifest": {"path": a.manifest, "sha256": sha256(a.manifest)},
            "regressions": {"path": "eval/phase1/regressions.json", "sha256": sha256(REPO / "eval/phase1/regressions.json")},
-           "rows": rows, "legal_validity": "not_determined", "applicability_status": "not_assessed",
+           "present_parts_failing": [list(x) for x in missing], "rows": rows, "legal_validity": "not_determined", "applicability_status": "not_assessed",
            "status": "proposal; producer-reported; no gate approved; nothing authorised"}
     data = (json.dumps(out, indent=1, ensure_ascii=False, sort_keys=True, default=str) + "\n").encode()
     Path(a.out).write_bytes(data)
     print(json.dumps({"out": a.out, "sha256": hashlib.sha256(data).hexdigest(), "rows": len(rows),
                       "passed": sum(r["passed"] for r in rows),
                       "mutations_failing": sum(1 for r in rows if r.get("non_vacuity") and not r["non_vacuity"]["mutated_passed"]),
-                      "index_unchanged": before == after}))
-    return 0 if before == after else 1
+                      "present_parts_failing": len(missing), "index_unchanged": before == after}))
+    return 0 if before == after and not missing else 1
 
 
 if __name__ == "__main__":

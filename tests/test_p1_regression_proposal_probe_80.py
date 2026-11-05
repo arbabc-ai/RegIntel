@@ -67,5 +67,45 @@ class ProbeTests(unittest.TestCase):
         self.assertEqual(report["status"], "proposal; producer-reported; no gate approved; nothing authorised")
 
 
+    def test_instruction_boundary_title_and_list_drafts_are_observed(self):
+        # S7-P1-81 (F-80-2): the instruction_boundary title comes from the literal; query_lists / part_lists drafts are observed too
+        ib = {"id": "IBX", "doc_key": "fr:2026-97001", "section": "1010.100", "title": "31", "instruction_prefix": "1. Amend",
+              "instruction_max_len": 400, "carried_contains": ["x"], "supported": ["(ooo)"], "unsupported": ["(zzz)"]}
+        ql = {"id": "QLX", "kind": "equivalent", "shorthand": "31 CFR 1010.100, 1020.1", "control": "31 CFR 1010.100 and 31 CFR 1020.1",
+              "members": ["31 CFR 1010.100", "31 CFR 1020.1"], "complete": False, "gap": "citation:31 CFR 1020.1"}
+        manifest = json.loads((self.root / "corpus" / "manifest.json").read_text())
+        rows = probe.probe(self.ix, manifest, [
+            {"check": "IB01", "option": "R", "group": "instruction_boundary", "literal": ib, "present_parts": ["31:1010"]},
+            {"check": "QL01", "option": "R", "group": "query_lists", "literal": ql, "absent_parts": ["31:1020"]},
+            {"check": "PL01", "option": "R", "group": "part_lists", "literal": {**ql, "id": "PLX"}}])
+        obs = rows[0]["observed"]
+        self.assertEqual(obs["title"], "31")
+        self.assertEqual(obs["units"][0]["explicit_paragraphs"]["paths"], ["(e)", "(r)", "(nnn)", "(ooo)", "(xxx)"])
+        self.assertEqual((obs["paths"]["(ooo)"]["future_resolved"], obs["paths"]["(ooo)"]["resolver_rows"]), (True, 1))  # resolved as 31 CFR
+        self.assertEqual(obs["paths"]["(zzz)"]["future_resolved"], False)
+        self.assertEqual(rows[0]["present_parts"], [{"part": "31:1010", "manifest_key": "ecfr:31:1010", "in_manifest": True,
+                                                     "in_source_document": True}])
+        for row in rows[1:]:
+            self.assertEqual(row["observed"]["members_parsed"], ["31 CFR 1010.100", "31 CFR 1020.1"])
+            self.assertEqual(row["observed"]["current_exact"]["citation_gaps"], ["citation:31 CFR 1020.1"])
+        self.assertEqual(rows[1]["absent_parts"][0]["in_manifest"], False)
+
+    def test_an_empty_resolver_result_is_recorded_not_raised(self):
+        ib = {"id": "IBY", "doc_key": "fr:2026-97001", "section": "1010.100", "title": "31", "supported": ["(ooo)"], "unsupported": []}
+        with mock.patch.object(self.ix, "resolve_citations", return_value=[]):
+            obs = probe.observe(self.ix, "instruction_boundary", ib)
+        self.assertEqual((obs["paths"]["(ooo)"]["future_resolved"], obs["paths"]["(ooo)"]["resolver_rows"]), (None, 0))
+
+    def test_a_missing_present_part_makes_the_cli_exit_1(self):
+        drafts, out = self.root / "drafts_pp.json", self.root / "probe_pp.json"
+        bad = [{**self.drafts()[0], "present_parts": ["31:1010", "12:229"]}]  # 12:229 is held by neither
+        drafts.write_text(json.dumps({"drafts": bad}))
+        with mock.patch("builtins.print"):
+            code = probe.main(["--index", str(self.root / "i.sqlite"), "--manifest", str(self.root / "corpus" / "manifest.json"),
+                               "--drafts", str(drafts), "--out", str(out)])
+        self.assertEqual(code, 1)
+        self.assertEqual(json.loads(out.read_text())["present_parts_failing"], [["K02", "R", "12:229"]])
+
+
 if __name__ == "__main__":
     unittest.main()

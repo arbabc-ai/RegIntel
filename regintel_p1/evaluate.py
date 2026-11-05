@@ -1908,9 +1908,12 @@ def check_paragraph_evidence_integrity(index, item):
                 failures.append(f"'{t['text'][:60]}': named {got}, expected {t['paths']}")
     elif kind == "ranking":
         have = {r[0] for r in index.conn.execute("SELECT doc_key FROM source_document")}
+        checked = skipped = 0  # S7-P1-81: citations whose supporting document is absent from the index are skipped, and counted
         for d in item["citations"]:
             if d["doc_key"] not in have:
+                skipped += 1
                 continue
+            checked += 1
             for mode in ("exact", "hybrid"):
                 for scope in ("future", "both"):
                     for k in (1, 2, 5):
@@ -1932,6 +1935,8 @@ def check_paragraph_evidence_integrity(index, item):
             un = index.resolve_citations(d["unsupported"], "future")[0]
             if un["resolved"]:
                 failures.append(f"{d['unsupported']}: an unsupported path resolved")
+        return {"id": item["id"], "kind": kind, "passed": not failures, "failures": failures[:10],
+                "units_checked": checked, "units_skipped": skipped}
     return {"id": item["id"], "kind": kind, "passed": not failures, "failures": failures[:10]}
 
 
@@ -1963,6 +1968,8 @@ def check_relative_action_paragraphs(index, item):
                 failures.append(f"{doc} {loc}: stored {stale} is not named by its instruction under the current grammar")
         if not checked:
             failures.append("no attributed paragraph paths were found to check")
+    if kind == "stored":
+        return {"id": item["id"], "kind": kind, "passed": not failures, "failures": failures[:10], "units_matched": checked}
     return {"id": item["id"], "kind": kind, "passed": not failures, "failures": failures[:10]}
 
 
@@ -1983,6 +1990,7 @@ def check_enumerated_relative_paragraphs(index, item):
                 failures.append(f"'{t['text'][:70]}': named {got}, expected {t['paths']}")
     elif kind == "acquired":
         row = index.conn.execute("SELECT sha256 FROM source_document WHERE doc_key=?", (item["doc_key"],)).fetchone()
+        acquired_counts = {"units_checked": int(row is not None), "units_skipped": int(row is None)}  # S7-P1-81: an absent document is counted
         if row is not None:
             if row[0] != item["sha256"]:
                 failures.append(f"{item['doc_key']}: source sha256 {row[0]} is not the pinned {item['sha256']}")
@@ -2011,6 +2019,8 @@ def check_enumerated_relative_paragraphs(index, item):
                                         failures.append(f"{cite} {mode}/{scope}/k{k}: evidence_found without paragraph support")
                         if index.answer(cite, mode="exact", scope="future", k=1, parts=[item["excluded_part"]])["results"]:
                             failures.append(f"{cite}: an excluded-part filter still returned results")
+    if kind == "acquired":
+        return {"id": item["id"], "kind": kind, "passed": not failures, "failures": failures[:10], **acquired_counts}
     return {"id": item["id"], "kind": kind, "passed": not failures, "failures": failures[:10]}
 
 
@@ -2028,16 +2038,20 @@ def check_passive_location_paragraphs(index, item):
             if got != t["paths"]:
                 failures.append(f"'{t['text'][:70]}': named {got}, expected {t['paths']}")
     elif kind == "stored":
+        matched = 0  # S7-P1-81: units whose instruction carries the construction; zero is reported, not failed
         for doc, loc, instruction, ev in index.conn.execute(
                 """SELECT d.doc_key, p.locator, p.instruction, p.explicit_paragraphs FROM provision p JOIN source_document d ON d.id=p.doc_id
                    WHERE p.kind='amendment' AND p.instruction IS NOT NULL"""):
             if not any(m.group(1).strip() for m in fedreg.PASSIVE_LOCATION_CITE.finditer(fedreg.parsing_view(fedreg.QUOTED.sub(" \u2039q\u203a ", instruction)))):
                 continue
+            matched += 1
             paths = (json.loads(ev or "{}")).get("paths") or []
             named = fedreg.named_paragraph_paths(instruction)
             stale = [p for p in paths if p not in named]
             if stale:
                 failures.append(f"{doc} {loc}: stored {stale} is not named under the current grammar")
+    if kind == "stored":
+        return {"id": item["id"], "kind": kind, "passed": not failures, "failures": failures[:10], "units_matched": matched}
     return {"id": item["id"], "kind": kind, "passed": not failures, "failures": failures[:10]}
 
 
@@ -2055,16 +2069,20 @@ def check_nested_by_paragraph_scope(index, item):
             if got != t["paths"]:
                 failures.append(f"'{t['text'][:70]}': named {got}, expected {t['paths']}")
     elif kind == "stored":
+        matched = 0  # S7-P1-81: units whose instruction carries the construction; zero is reported, not failed
         construction = re.compile(r"paragraphs?\s+\([^)]*\)(?:\([^)]*\))*\s+by\s+\w+\s+(?:new\s+)?paragraphs?\b", re.I)
         for doc, loc, instruction, ev in index.conn.execute(
                 """SELECT d.doc_key, p.locator, p.instruction, p.explicit_paragraphs FROM provision p JOIN source_document d ON d.id=p.doc_id
                    WHERE p.kind='amendment' AND p.instruction IS NOT NULL"""):
             if not construction.search(fedreg.parsing_view(instruction)):
                 continue
+            matched += 1
             paths = (json.loads(ev or "{}")).get("paths") or []
             stale = [p for p in paths if p not in fedreg.named_paragraph_paths(instruction)]
             if stale:
                 failures.append(f"{doc} {loc}: stored {stale} is not named under the current grammar")
+    if kind == "stored":
+        return {"id": item["id"], "kind": kind, "passed": not failures, "failures": failures[:10], "units_matched": matched}
     return {"id": item["id"], "kind": kind, "passed": not failures, "failures": failures[:10]}
 
 
@@ -2082,16 +2100,20 @@ def check_nested_to_paragraph_scope(index, item):
             if got != t["paths"]:
                 failures.append(f"'{t['text'][:70]}': named {got}, expected {t['paths']}")
     elif kind == "stored":
+        matched = 0  # S7-P1-81: units whose instruction carries the construction; zero is reported, not failed
         construction = re.compile(r"paragraphs?\s+\([^)]*\)(?:\([^)]*\))*\s+to\s+(?:add|remove|revise|reserve|delete|redesignate)\s+(?:new\s+)?paragraphs?\b", re.I)
         for doc, loc, instruction, ev in index.conn.execute(
                 """SELECT d.doc_key, p.locator, p.instruction, p.explicit_paragraphs FROM provision p JOIN source_document d ON d.id=p.doc_id
                    WHERE p.kind='amendment' AND p.instruction IS NOT NULL"""):
             if not construction.search(fedreg.parsing_view(instruction)):
                 continue
+            matched += 1
             paths = (json.loads(ev or "{}")).get("paths") or []
             stale = [p for p in paths if p not in fedreg.named_paragraph_paths(instruction)]
             if stale:
                 failures.append(f"{doc} {loc}: stored {stale} is not named under the current grammar")
+    if kind == "stored":
+        return {"id": item["id"], "kind": kind, "passed": not failures, "failures": failures[:10], "units_matched": matched}
     return {"id": item["id"], "kind": kind, "passed": not failures, "failures": failures[:10]}
 
 
@@ -2110,6 +2132,7 @@ def check_paragraph_scope_continuity(index, item):
             if got != t["paths"]:
                 failures.append(f"'{t['text'][:70]}': named {got}, expected {t['paths']}")
     elif kind == "stored":
+        matched = 0  # S7-P1-81: units whose instruction carries the construction; zero is reported, not failed
         construction = re.compile(r"\bIn\s+paragraphs?\s+\([^)]*\)[^.;:]*?,\s*(?:and\s+)?\w+\s+(?:new\s+)?paragraphs?\b|"
                                   r"\b(?:by|to)\s+\w+\s+(?:new\s+)?paragraphs?\s+\([^)]*\)(?:\([^)]*\))*\s*(?:,|and|or)\s*(?:(?:and|or|by|to)\s+)?\w+\s+(?:new\s+)?paragraphs?\b", re.I)
         for doc, loc, instruction, ev in index.conn.execute(
@@ -2117,10 +2140,13 @@ def check_paragraph_scope_continuity(index, item):
                    WHERE p.kind='amendment' AND p.instruction IS NOT NULL"""):
             if not construction.search(fedreg.parsing_view(instruction)):
                 continue
+            matched += 1
             paths = (json.loads(ev or "{}")).get("paths") or []
             stale = [p for p in paths if p not in fedreg.named_paragraph_paths(instruction)]
             if stale:
                 failures.append(f"{doc} {loc}: stored {stale} is not named under the current grammar")
+    if kind == "stored":
+        return {"id": item["id"], "kind": kind, "passed": not failures, "failures": failures[:10], "units_matched": matched}
     return {"id": item["id"], "kind": kind, "passed": not failures, "failures": failures[:10]}
 
 
@@ -2139,16 +2165,20 @@ def check_enumerated_paragraph_location(index, item):
             if got != t["paths"]:
                 failures.append(f"'{t['text'][:70]}': named {got}, expected {t['paths']}")
     elif kind == "stored":
+        matched = 0  # S7-P1-81: units whose instruction carries the construction; zero is reported, not failed
         construction = re.compile(r"\bparagraphs?\s+\([^)]*\)(?:\([^)]*\))*\s*(?:,\s*(?:amend|revis\w*)[^.;:]*)?:\s+(?:\d{1,2}|[A-Za-z]{1,4})\.\s+", re.I)
         for doc, loc, instruction, ev in index.conn.execute(
                 """SELECT d.doc_key, p.locator, p.instruction, p.explicit_paragraphs FROM provision p JOIN source_document d ON d.id=p.doc_id
                    WHERE p.kind='amendment' AND p.instruction IS NOT NULL"""):
             if not construction.search(fedreg.parsing_view(instruction)):
                 continue
+            matched += 1
             paths = (json.loads(ev or "{}")).get("paths") or []
             stale = [p for p in paths if p not in fedreg.named_paragraph_paths(instruction)]
             if stale:
                 failures.append(f"{doc} {loc}: stored {stale} is not named under the current grammar")
+    if kind == "stored":
+        return {"id": item["id"], "kind": kind, "passed": not failures, "failures": failures[:10], "units_matched": matched}
     return {"id": item["id"], "kind": kind, "passed": not failures, "failures": failures[:10]}
 
 
@@ -2167,16 +2197,20 @@ def check_parenthesized_paragraph_list(index, item):
             if got != t["paths"]:
                 failures.append(f"'{t['text'][:70]}': named {got}, expected {t['paths']}")
     elif kind == "stored":
+        matched = 0  # S7-P1-81: units whose instruction carries the construction; zero is reported, not failed
         construction = re.compile(r":\s+\(\s*(?:\d{1,2}|[A-Za-z]{1,4})\s*\)\s+[A-Za-z]", re.I)
         for doc, loc, instruction, ev in index.conn.execute(
                 """SELECT d.doc_key, p.locator, p.instruction, p.explicit_paragraphs FROM provision p JOIN source_document d ON d.id=p.doc_id
                    WHERE p.kind='amendment' AND p.instruction IS NOT NULL"""):
             if not construction.search(fedreg.parsing_view(instruction)):
                 continue
+            matched += 1
             paths = (json.loads(ev or "{}")).get("paths") or []
             stale = [p for p in paths if p not in fedreg.named_paragraph_paths(instruction)]
             if stale:
                 failures.append(f"{doc} {loc}: stored {stale} is not named under the current grammar")
+    if kind == "stored":
+        return {"id": item["id"], "kind": kind, "passed": not failures, "failures": failures[:10], "units_matched": matched}
     return {"id": item["id"], "kind": kind, "passed": not failures, "failures": failures[:10]}
 
 
@@ -2207,7 +2241,10 @@ def check_triple_letter_paragraph_list(index, item):
     return {"id": item["id"], "kind": item["kind"], "passed": not failures, "failures": failures[:10],
             "units_checked": checked, "units_skipped": skipped}
 
-SKIP_COUNTED_GROUPS = ("lowercase_paragraph_clause", "triple_letter_paragraph_list")
+SKIP_COUNTED_GROUPS = ("lowercase_paragraph_clause", "triple_letter_paragraph_list", "paragraph_evidence",
+                       "enumerated_relative_paragraphs")  # S7-P1-81 adds the last two
+STORED_SCAN_GROUPS = ("relative_action_paragraphs", "passive_location_paragraphs", "nested_by_paragraph_scope", "nested_to_paragraph_scope",
+                      "paragraph_scope_continuity", "enumerated_paragraph_location", "parenthesized_paragraph_list")
 
 
 def skipped_absent_document(reg):
@@ -2219,6 +2256,12 @@ def skipped_absent_document(reg):
         groups[group] = {"deltas_skipped": sum(x.get("deltas_skipped", 0) for x in items),
                          "units_skipped": sum(x.get("units_skipped", 0) for x in items)}
     return {"total": sum(g["deltas_skipped"] + g["units_skipped"] for g in groups.values()), "groups": groups}
+
+
+def stored_kind_zero_match(reg):
+    """Ids of `stored`-kind corpus-scan checks that found no unit carrying their construction in the evaluated index (S7-P1-81). Such a check
+    passes vacuously; it is reported here, never failed. Reporting only; no pass/fail outcome depends on it."""
+    return [x["id"] for group in STORED_SCAN_GROUPS for x in reg.get(group) or [] if x.get("units_matched") == 0]
 
 
 def run_regressions(index, path):
@@ -2268,6 +2311,7 @@ def run_regressions(index, path):
            "parenthesized_paragraph_list": [check_parenthesized_paragraph_list(index, x) for x in spec.get("parenthesized_paragraph_list", [])],
            "triple_letter_paragraph_list": [check_triple_letter_paragraph_list(index, x) for x in spec.get("triple_letter_paragraph_list", [])]}
     out["expectations_skipped_absent_document"] = skipped_absent_document(out)
+    out["stored_kind_zero_match"] = stored_kind_zero_match(out)
     out["passed"] = (all(d["passed"] for d in out["delta"]) and out["relationship_integrity"]["passed"]
                      and all(c["passed"] for c in out["citation_scope"]) and all(x["passed"] for x in out["status"])
                      and all(x["passed"] for x in out["citation_completeness"])
@@ -2455,6 +2499,16 @@ def run(index, questions_path, regressions_path=None):
     return report
 
 
+def _count_suffix(x):
+    """The S7-P1-81 count shown on a regression line: `units matched=N` for stored-kind scans, `checked=N skipped=M` for skip-counted
+    kinds, nothing otherwise."""
+    if "units_matched" in x:
+        return f"units matched={x['units_matched']} "
+    if "units_checked" in x:
+        return f"checked={x['units_checked']} skipped={x['units_skipped']} "
+    return ""
+
+
 def render(report):
     lines = [f"As of {report['as_of']}; index built {report['index'].get('built_at')}", ""]
     lines.append("Retrieval (hit@k = first gold hit within top k; MRR over first-hit rank)")
@@ -2499,6 +2553,8 @@ def render(report):
         skip = reg.get("expectations_skipped_absent_document") or skipped_absent_document(reg)
         lines.append(f"  expectations skipped because the document is absent from the index: {skip['total']} (groups: "
                      + "; ".join(f"{g} deltas={c['deltas_skipped']} units={c['units_skipped']}" for g, c in skip["groups"].items()) + ")")
+        zero = reg["stored_kind_zero_match"] if "stored_kind_zero_match" in reg else stored_kind_zero_match(reg)
+        lines.append(f"  stored-kind checks with zero matching units: {len(zero)} (ids: {', '.join(zero) or 'none'})")
         for d in reg["delta"]:
             lines.append(f"  {d['id']} {'PASS' if d['passed'] else 'FAIL'} delta {d['citation']} instruments={len(d['instruments_found'])} candidates={d['unresolved_candidates']} {'; '.join(d['failures'])}")
         ri = reg["relationship_integrity"]
@@ -2510,23 +2566,32 @@ def render(report):
                       f"deltas checked={x.get('deltas_checked', 0)} skipped={x.get('deltas_skipped', 0)}")
             lines.append(f"  {x['id']} {'PASS' if x['passed'] else 'FAIL'} triple-letter paragraph list [{x['kind']}] {counts} {'; '.join(x['failures'])}")
         for x in reg.get("parenthesized_paragraph_list", []):
-            lines.append(f"  {x['id']} {'PASS' if x['passed'] else 'FAIL'} parenthesized paragraph list [{x['kind']}] {'; '.join(x['failures'])}")
+            lines.append(f"  {x['id']} {'PASS' if x['passed'] else 'FAIL'} parenthesized paragraph list [{x['kind']}] "
+                         f"{_count_suffix(x)}{'; '.join(x['failures'])}")
         for x in reg.get("enumerated_paragraph_location", []):
-            lines.append(f"  {x['id']} {'PASS' if x['passed'] else 'FAIL'} enumerated paragraph location [{x['kind']}] {'; '.join(x['failures'])}")
+            lines.append(f"  {x['id']} {'PASS' if x['passed'] else 'FAIL'} enumerated paragraph location [{x['kind']}] "
+                         f"{_count_suffix(x)}{'; '.join(x['failures'])}")
         for x in reg.get("paragraph_scope_continuity", []):
-            lines.append(f"  {x['id']} {'PASS' if x['passed'] else 'FAIL'} paragraph scope continuity [{x['kind']}] {'; '.join(x['failures'])}")
+            lines.append(f"  {x['id']} {'PASS' if x['passed'] else 'FAIL'} paragraph scope continuity [{x['kind']}] "
+                         f"{_count_suffix(x)}{'; '.join(x['failures'])}")
         for x in reg.get("nested_to_paragraph_scope", []):
-            lines.append(f"  {x['id']} {'PASS' if x['passed'] else 'FAIL'} nested-to paragraph scope [{x['kind']}] {'; '.join(x['failures'])}")
+            lines.append(f"  {x['id']} {'PASS' if x['passed'] else 'FAIL'} nested-to paragraph scope [{x['kind']}] "
+                         f"{_count_suffix(x)}{'; '.join(x['failures'])}")
         for x in reg.get("nested_by_paragraph_scope", []):
-            lines.append(f"  {x['id']} {'PASS' if x['passed'] else 'FAIL'} nested-by paragraph scope [{x['kind']}] {'; '.join(x['failures'])}")
+            lines.append(f"  {x['id']} {'PASS' if x['passed'] else 'FAIL'} nested-by paragraph scope [{x['kind']}] "
+                         f"{_count_suffix(x)}{'; '.join(x['failures'])}")
         for x in reg.get("passive_location_paragraphs", []):
-            lines.append(f"  {x['id']} {'PASS' if x['passed'] else 'FAIL'} passive location paragraphs [{x['kind']}] {'; '.join(x['failures'])}")
+            lines.append(f"  {x['id']} {'PASS' if x['passed'] else 'FAIL'} passive location paragraphs [{x['kind']}] "
+                         f"{_count_suffix(x)}{'; '.join(x['failures'])}")
         for x in reg.get("enumerated_relative_paragraphs", []):
-            lines.append(f"  {x['id']} {'PASS' if x['passed'] else 'FAIL'} enumerated relative paragraphs [{x['kind']}] {'; '.join(x['failures'])}")
+            lines.append(f"  {x['id']} {'PASS' if x['passed'] else 'FAIL'} enumerated relative paragraphs [{x['kind']}] "
+                         f"{_count_suffix(x)}{'; '.join(x['failures'])}")
         for x in reg.get("relative_action_paragraphs", []):
-            lines.append(f"  {x['id']} {'PASS' if x['passed'] else 'FAIL'} relative action paragraphs [{x['kind']}] {'; '.join(x['failures'])}")
+            lines.append(f"  {x['id']} {'PASS' if x['passed'] else 'FAIL'} relative action paragraphs [{x['kind']}] "
+                         f"{_count_suffix(x)}{'; '.join(x['failures'])}")
         for x in reg.get("paragraph_evidence", []):
-            lines.append(f"  {x['id']} {'PASS' if x['passed'] else 'FAIL'} paragraph evidence [{x['kind']}] {'; '.join(x['failures'])}")
+            lines.append(f"  {x['id']} {'PASS' if x['passed'] else 'FAIL'} paragraph evidence [{x['kind']}] "
+                         f"{_count_suffix(x)}{'; '.join(x['failures'])}")
         for x in reg.get("lowercase_paragraph_clause", []):
             lines.append(f"  {x['id']} {'PASS' if x['passed'] else 'FAIL'} lowercase paragraph clause [{x['kind']}] "
                          f"deltas checked={x.get('deltas_checked', 0)} skipped={x.get('deltas_skipped', 0)} {'; '.join(x['failures'])}")

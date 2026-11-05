@@ -61,7 +61,7 @@ class SkipVisibilityTests(unittest.TestCase):
         reg["expectations_skipped_absent_document"] = evaluate.skipped_absent_document(reg)
         line = self.rollup_line(evaluate.render(report))
         self.assertTrue(line.strip().startswith(f"{ROLLUP} 0 (groups: "), line)
-        self.assertEqual(re.findall(r"(?:deltas|units)=(\d+)", line), ["0"] * 4)
+        self.assertEqual(re.findall(r"(?:deltas|units)=(\d+)", line), ["0"] * (2 * len(evaluate.SKIP_COUNTED_GROUPS)))  # S7-P1-81: more groups
 
     def test_the_roll_up_changes_no_outcome(self):
         reg = self.report["regressions"]
