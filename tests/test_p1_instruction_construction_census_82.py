@@ -45,6 +45,8 @@ class CensusTests(unittest.TestCase):
         # S7-P1-83 (F-82-2): only three identical letters count; the existing positive test above is kept
         self.assertNotIn("triple_letter_designator", census.tags_of("Amend § 1010.100 by adding paragraph (abc) and paragraph (abd)."))
         self.assertTrue(census.tags_of("Amend § 1010.100 by adding paragraphs (nnn) and (ooo).").get("triple_letter_designator"))
+        # S7-P1-84 (F-83-3): a roman (iii) is three identical letters but not a letter designator; a guard, not a behaviour change
+        self.assertNotIn("triple_letter_designator", census.tags_of("Amend § 1010.100 by revising paragraph (c)(1)(iii)."))
 
     def test_census_counts_equal_the_evaluator_units_matched(self):
         check = census.consistency(self.result, census.evaluator_units_matched(self.ix))

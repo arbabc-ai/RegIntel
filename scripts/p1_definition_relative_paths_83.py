@@ -1,4 +1,4 @@
-"""S7-P1-83: evidence on stored paragraph paths that do not start with a letter designator (offline, read-only, stdlib only).
+r"""S7-P1-83: evidence on stored paragraph paths that do not start with a letter designator (offline, read-only, stdlib only).
 
 Governing scope: founder record 2026-11-04_s7-regintel-p1-founder-decisions_accepted.md. Evidence only (C3 F-82-1): nothing is acquired,
 no parser, evaluator or expectation contract changes, and no decision is implied. Non-letter-led paths are reported, never failed.
@@ -14,6 +14,14 @@ A2. For each distinct (title, section, non-letter-led path) the citation "<title
     k=5 (status, first locator), answer exact current k=5 (status), and delta instruments' paragraph_precision. The current baseline
     ecfr:<title>:<part> is queried for a provision whose citation is "<title> CFR <section>(<first designator>)" (top level) and for the
     full path; "baseline part not in index" when the part is not acquired.
+A3 (0.2, S7-P1-84). Each observation gains `definition_anchor`: the definition terms the paired instruction names for that path (the
+    instruction is split into enumerated items at fedreg.ENUM_BOUNDARY boundaries carrying a fedreg._boundary_token enumerator, as the
+    census does; in each item whose parsing view contains the path text, every `definition of|for “…”` term is captured, curly or straight
+    quotes), `ambiguous` when more than one distinct term maps to the path, and per term the term-anchored baseline locator
+    `<section>(<term>)<path>` and citation `<title> CFR <section> “<term>” <path>`, whether that locator is present in ecfr:<title>:<part>,
+    and, when it is not, the literal baseline rows a LIKE query on `<section>(<term>)%` / `% “<term>” %` finds. `term_anchor_census` counts,
+    per baseline part queried, the provisions whose locator matches `^\d+\.\d+\([^()]*[A-Za-z ][^()]*\)` (the task's regex, which also
+    admits lettered paragraphs such as `32.2(a)`) and, separately, those whose first segment is not a designator shape (a term).
 The index is opened through regintel_p1.search.Index (sqlite3 mode=ro, regintel_p1/search.py:505); the CLI hashes it before and after and
 exits 1 only if it changed.
 
@@ -22,6 +30,7 @@ exits 1 only if it changed.
 import argparse
 import hashlib
 import json
+import re
 import subprocess
 import sys
 from collections import Counter, defaultdict
@@ -34,7 +43,7 @@ if str(REPO) not in sys.path:
 from regintel_p1 import fedreg  # noqa: E402
 from regintel_p1.search import Index  # noqa: E402
 
-SCHEMA = "p1-definition-relative-paths-0.1"
+SCHEMA = "p1-definition-relative-paths-0.2"  # 0.2 (S7-P1-84) adds definition_anchor and term_anchor_census; 0.1 fields kept
 DECISION_RECORD = "2026-11-04_s7-regintel-p1-founder-decisions_accepted.md"
 CLASSES = ("letter", "digit", "roman", "other_or_ambiguous")
 
@@ -81,7 +90,7 @@ def classify(rows):
             listed.append({"doc_key": r["doc_key"], "locator": r["locator"], "title_no": r["title_no"], "part_no": r["part_no"],
                            "section_no": r["section_no"], "paths": paths,
                            "path_classes": [{"path": p, "class": c, "first_designator_classes": cl} for p, c, cl in kinds],
-                           "instruction_head": r["instruction"][:200]})
+                           "instruction_head": r["instruction"][:200], "instruction": r["instruction"]})
     for u in listed:
         u["units_sharing_instruction"] = groups[(u["doc_key"], next(r["instruction"] for r in rows if r["locator"] == u["locator"]))]
     shared = [{"doc_key": k[0], "instruction_head": k[1][:200], "locators": v, "units": len(v)} for k, v in groups.items()]
@@ -101,6 +110,65 @@ def baseline(conn, title, part, section, path):
     return {"baseline_doc_key": key, "status": "queried", "top_level_citation": top, "top_level_paragraph_present": exists(top),
             "full_path_citation": full, "full_path_present": exists(full),
             "section_present": exists(f"{title} CFR {section}")}
+
+
+TERM = re.compile(r"definition\s+(?:of|for)\s+[\u201c\"]([^\u201d\"]+)[\u201d\"]")
+TERM_SEGMENT = re.compile(r"^\d+\.\d+\([^()]*[A-Za-z ][^()]*\)")
+DESIGNATOR_SHAPE = re.compile(r"^(?:[a-z]{1,3}|[ivxl]+|\d+|[A-Z]{1,2})$")
+
+
+def items(instruction):
+    """Enumerated items of an instruction: text between ENUM_BOUNDARY boundaries that carry an enumerator token."""
+    cuts = [0] + [b.start() for b in fedreg.ENUM_BOUNDARY.finditer(instruction) if fedreg._boundary_token(b)] + [len(instruction)]
+    return [instruction[a:b] for a, b in zip(cuts, cuts[1:]) if instruction[a:b].strip()]
+
+
+def anchor_terms(instruction, path):
+    terms = []
+    for item in items(instruction):
+        if path in fedreg.parsing_view(item):
+            terms += [t.strip() for t in TERM.findall(item) if t.strip() not in terms]
+    return terms
+
+
+def definition_anchor(conn, title, part, section, path, instruction):
+    terms = anchor_terms(instruction, path)
+    key = f"ecfr:{title}:{part}"
+    held = bool(conn.execute("SELECT 1 FROM source_document WHERE doc_key=?", (key,)).fetchone())
+    rows = []
+    for term in terms:
+        loc, cite = f"{section}({term}){path}", f"{title} CFR {section} \u201c{term}\u201d {path}"
+        row = {"term": term, "term_anchored_locator": loc, "term_anchored_citation": cite}
+        if not held:
+            row["baseline_status"] = "baseline part not in index"
+        else:
+            hit = conn.execute("""SELECT p.locator, p.citation FROM provision p JOIN source_document d ON d.id=p.doc_id
+                                  WHERE d.doc_key=? AND p.locator=?""", (key, loc)).fetchone()
+            row.update({"baseline_status": "queried", "term_anchored_present": hit is not None,
+                        "baseline_locator": hit[0] if hit else None, "baseline_citation": hit[1] if hit else None})
+            if hit is None:
+                like = conn.execute("""SELECT p.locator, p.citation FROM provision p JOIN source_document d ON d.id=p.doc_id
+                                       WHERE d.doc_key=? AND p.section_no=? AND (p.locator LIKE ? OR p.citation LIKE ?) ORDER BY p.ordinal""",
+                                    (key, section, f"{section}({term})%", f"% \u201c{term}\u201d %")).fetchall()
+                row["like_matches"] = [{"locator": a, "citation": b} for a, b in like[:20]]
+                row["like_match_count"] = len(like)
+        rows.append(row)
+    return {"terms": terms, "ambiguous": len(set(terms)) > 1, "baseline_doc_key": key, "baseline_in_index": held, "anchors": rows}
+
+
+def term_anchor_census(conn, keys):
+    out = {}
+    for key in sorted(keys):
+        locs = [r[0] for r in conn.execute("""SELECT p.locator FROM provision p JOIN source_document d ON d.id=p.doc_id
+                                              WHERE d.doc_key=?""", (key,))]
+        if not locs:
+            out[key] = {"in_index": False}
+            continue
+        regex = [l for l in locs if TERM_SEGMENT.match(l)]
+        term = [l for l in regex if not DESIGNATOR_SHAPE.match(re.match(r"^\d+\.\d+\(([^()]*)\)", l).group(1))]
+        out[key] = {"in_index": True, "provisions": len(locs), "regex_matches": len(regex), "term_segment_matches": len(term),
+                    "term_segment_examples": term[:5]}
+    return out
 
 
 def observe(index, listed):
@@ -130,7 +198,9 @@ def observe(index, listed):
                                                                        for k in ("resolved", "achieved", "reason", "supported_by")}}
                                               for g in d["instruments"]],
                         "delta_legal_validity": d["legal_validity"], "delta_applicability_status": d["applicability_status"],
-                        "baseline": baseline(index.conn, u["title_no"], u["part_no"], u["section_no"], pc["path"])})
+                        "baseline": baseline(index.conn, u["title_no"], u["part_no"], u["section_no"], pc["path"]),
+                        "definition_anchor": definition_anchor(index.conn, u["title_no"], u["part_no"], u["section_no"], pc["path"],
+                                                               u["instruction"])})
     return out
 
 
@@ -151,13 +221,16 @@ def main(argv=None):
     index = Index(a.index, a.as_of)
     totals, listed, shared = classify(units(index.conn))
     observations = observe(index, listed)
+    census = term_anchor_census(index.conn, {o["definition_anchor"]["baseline_doc_key"] for o in observations if o["class"] == "digit"})
+    for u in listed:
+        u.pop("instruction", None)  # used for anchoring only; the 0.1 instruction_head stays
     meta = dict(index.meta)
     index.conn.close()
     after = sha256(a.index)
     out = {"schema": SCHEMA, "task": "S7-P1-83", "decision_record": DECISION_RECORD, "head": head(), "as_of": a.as_of,
            "index": {"path": a.index, "sha256": before, "unchanged_after_run": before == after, "built_at": meta.get("built_at"),
                      "manifest_sha256": meta.get("manifest_sha256")},
-           "totals": totals, "non_letter_led_units": listed, "instruction_groups": shared, "observations": observations,
+           "totals": totals, "non_letter_led_units": listed, "instruction_groups": shared, "observations": observations, "term_anchor_census": census,
            "storage": "explicit_paragraphs is stored per amendment unit; units that share one paired instruction repeat the same list",
            "legal_validity": "not_determined", "applicability_status": "not_assessed",
            "status": "proposal; producer-reported; no gate approved; nothing authorised"}
