@@ -22,6 +22,21 @@ A3 (0.2, S7-P1-84). Each observation gains `definition_anchor`: the definition t
     and, when it is not, the literal baseline rows a LIKE query on `<section>(<term>)%` / `% “<term>” %` finds. `term_anchor_census` counts,
     per baseline part queried, the provisions whose locator matches `^\d+\.\d+\([^()]*[A-Za-z ][^()]*\)` (the task's regex, which also
     admits lettered paragraphs such as `32.2(a)`) and, separately, those whose first segment is not a designator shape (a term).
+A4 (0.3, S7-P1-85, C3 F-84-1..F-84-5). Every 0.1 and 0.2 field keeps its name and meaning. (F-84-1) Each captured term is
+    normalised (surrounding whitespace and trailing ".", ",", ";", ":" stripped) before the locator, citation and LIKE patterns are
+    composed; the raw capture is kept as `term_raw` on its anchor row. (F-84-2) An item contains a path only as a whole token: re.escape(path)
+    not immediately preceded by ")" and not immediately followed by "(", so "(4)" no longer matches inside "(4)(i)(A)";
+    definition_anchor carries `containment: "token"`. Items are cut just after each boundary's punctuation, so an item carries its own
+    closing ".", ";" or ":". (F-84-3) When an item that contains the path names no term, the items before it are walked back to the
+    nearest one that ends with ":" (after parsing_view); if that parent names exactly one term the term is used and its anchor row has
+    `inherited_from_parent: true` and `parent_item_head` (first 120 chars); direct terms have `inherited_from_parent: false`. If the
+    parent names zero or several terms (or no earlier item ends with ":"), nothing is inherited and, when no term is found at all,
+    `parent_status: "no_single_parent_term"`; `parent_status: "no_item_contains_path"` when no item contains the path. A term reached both
+    directly and through a parent keeps its first occurrence in item order. (F-84-4) term_anchor_census adds
+    `balanced_term_segment_matches`: the first segment after the section number is read with a depth counter from its "(" to the matching
+    ")" (so "3.2(Adjusted allowances for credit losses (AACL))" is one segment) and designator-shaped segments are excluded; up to 5
+    `balanced_examples`. regex_matches and term_segment_matches are unchanged. "%", "_" and "\" in a term are escaped in the LIKE patterns
+    (ESCAPE '\'); `like_escape` lists the observed terms that contain one of them.
 The index is opened through regintel_p1.search.Index (sqlite3 mode=ro, regintel_p1/search.py:505); the CLI hashes it before and after and
 exits 1 only if it changed.
 
@@ -43,7 +58,7 @@ if str(REPO) not in sys.path:
 from regintel_p1 import fedreg  # noqa: E402
 from regintel_p1.search import Index  # noqa: E402
 
-SCHEMA = "p1-definition-relative-paths-0.2"  # 0.2 (S7-P1-84) adds definition_anchor and term_anchor_census; 0.1 fields kept
+SCHEMA = "p1-definition-relative-paths-0.3"  # 0.3 (S7-P1-85): term normalisation, token containment, parent inheritance, balanced census
 DECISION_RECORD = "2026-11-04_s7-regintel-p1-founder-decisions_accepted.md"
 CLASSES = ("letter", "digit", "roman", "other_or_ambiguous")
 
@@ -92,7 +107,7 @@ def classify(rows):
                            "path_classes": [{"path": p, "class": c, "first_designator_classes": cl} for p, c, cl in kinds],
                            "instruction_head": r["instruction"][:200], "instruction": r["instruction"]})
     for u in listed:
-        u["units_sharing_instruction"] = groups[(u["doc_key"], next(r["instruction"] for r in rows if r["locator"] == u["locator"]))]
+        u["units_sharing_instruction"] = groups[(u["doc_key"], u["instruction"])]  # S7-P1-85 (F-84-6): the carried instruction
     shared = [{"doc_key": k[0], "instruction_head": k[1][:200], "locators": v, "units": len(v)} for k, v in groups.items()]
     return ({"paths": {c: path_totals.get(c, 0) for c in CLASSES}, "units": {c: unit_totals.get(c, 0) for c in CLASSES},
              "amendment_units": len(rows), "units_with_paths": sum(1 for r in rows if (json.loads(r["explicit_paragraphs"] or "{}")).get("paths"))},
@@ -117,28 +132,64 @@ TERM_SEGMENT = re.compile(r"^\d+\.\d+\([^()]*[A-Za-z ][^()]*\)")
 DESIGNATOR_SHAPE = re.compile(r"^(?:[a-z]{1,3}|[ivxl]+|\d+|[A-Z]{1,2})$")
 
 
+LIKE_SPECIAL = ("\\", "%", "_")
+
+
 def items(instruction):
-    """Enumerated items of an instruction: text between ENUM_BOUNDARY boundaries that carry an enumerator token."""
-    cuts = [0] + [b.start() for b in fedreg.ENUM_BOUNDARY.finditer(instruction) if fedreg._boundary_token(b)] + [len(instruction)]
+    """Enumerated items of an instruction, cut just after the punctuation of each ENUM_BOUNDARY that carries an enumerator token
+    (S7-P1-85: the item keeps its own closing ".", ";" or ":")."""
+    cuts = [0] + [b.start(1) + 1 for b in fedreg.ENUM_BOUNDARY.finditer(instruction) if fedreg._boundary_token(b)] + [len(instruction)]
     return [instruction[a:b] for a, b in zip(cuts, cuts[1:]) if instruction[a:b].strip()]
 
 
+def normalise(term):
+    """S7-P1-85 (F-84-1): surrounding whitespace and trailing . , ; : removed."""
+    return term.strip().rstrip(".,;:").strip()
+
+
+def contains(item, path):
+    """S7-P1-85 (F-84-2): the path as a whole token, not inside a longer path."""
+    return re.search(r"(?<!\))" + re.escape(path) + r"(?!\()", fedreg.parsing_view(item)) is not None
+
+
+def like_escape(text):
+    for ch in LIKE_SPECIAL:
+        text = text.replace(ch, "\\" + ch)
+    return text
+
+
 def anchor_terms(instruction, path):
-    terms = []
-    for item in items(instruction):
-        if path in fedreg.parsing_view(item):
-            terms += [t.strip() for t in TERM.findall(item) if t.strip() not in terms]
-    return terms
+    """[(term, term_raw, parent_item_head or None)] in item order, and a parent_status when nothing was found."""
+    its, found, attempted = items(instruction), [], False
+    for k, item in enumerate(its):
+        if not contains(item, path):
+            continue
+        attempted = True
+        direct = TERM.findall(item)
+        parent = None
+        if not direct:
+            parent = next((p for p in reversed(its[:k]) if fedreg.parsing_view(p).rstrip().endswith(":")), None)
+            raw = TERM.findall(parent) if parent is not None else []
+            direct = raw if len({normalise(t) for t in raw}) == 1 else []
+        for t in direct:
+            if normalise(t) and normalise(t) not in [f[0] for f in found]:
+                found.append((normalise(t), t, parent.strip()[:120] if parent is not None else None))
+    status = None if found else ("no_single_parent_term" if attempted else "no_item_contains_path")
+    return found, status
 
 
 def definition_anchor(conn, title, part, section, path, instruction):
-    terms = anchor_terms(instruction, path)
+    found, status = anchor_terms(instruction, path)
+    terms = [t for t, _, _ in found]
     key = f"ecfr:{title}:{part}"
     held = bool(conn.execute("SELECT 1 FROM source_document WHERE doc_key=?", (key,)).fetchone())
     rows = []
-    for term in terms:
-        loc, cite = f"{section}({term}){path}", f"{title} CFR {section} \u201c{term}\u201d {path}"
-        row = {"term": term, "term_anchored_locator": loc, "term_anchored_citation": cite}
+    for term, raw, parent in found:
+        loc, cite = f"{section}({term}){path}", f"{title} CFR {section} “{term}” {path}"
+        row = {"term": term, "term_anchored_locator": loc, "term_anchored_citation": cite, "term_raw": raw,
+               "inherited_from_parent": parent is not None}
+        if parent is not None:
+            row["parent_item_head"] = parent
         if not held:
             row["baseline_status"] = "baseline part not in index"
         else:
@@ -148,12 +199,31 @@ def definition_anchor(conn, title, part, section, path, instruction):
                         "baseline_locator": hit[0] if hit else None, "baseline_citation": hit[1] if hit else None})
             if hit is None:
                 like = conn.execute("""SELECT p.locator, p.citation FROM provision p JOIN source_document d ON d.id=p.doc_id
-                                       WHERE d.doc_key=? AND p.section_no=? AND (p.locator LIKE ? OR p.citation LIKE ?) ORDER BY p.ordinal""",
-                                    (key, section, f"{section}({term})%", f"% \u201c{term}\u201d %")).fetchall()
+                                       WHERE d.doc_key=? AND p.section_no=? AND (p.locator LIKE ? ESCAPE '\\' OR p.citation LIKE ? ESCAPE '\\')
+                                       ORDER BY p.ordinal""",
+                                    (key, section, f"{like_escape(section)}({like_escape(term)})%",
+                                     f"% “{like_escape(term)}” %")).fetchall()
                 row["like_matches"] = [{"locator": a, "citation": b} for a, b in like[:20]]
                 row["like_match_count"] = len(like)
         rows.append(row)
-    return {"terms": terms, "ambiguous": len(set(terms)) > 1, "baseline_doc_key": key, "baseline_in_index": held, "anchors": rows}
+    out = {"terms": terms, "ambiguous": len(set(terms)) > 1, "baseline_doc_key": key, "baseline_in_index": held, "anchors": rows,
+           "containment": "token"}
+    if status:
+        out["parent_status"] = status
+    return out
+
+
+def first_balanced_segment(locator):
+    """S7-P1-85 (F-84-4): the first segment after the section number, read from its "(" to the matching ")"; None if unbalanced."""
+    m = re.match(r"^\d+\.\d+\(", locator)
+    if not m:
+        return None
+    depth = 0
+    for i in range(m.end() - 1, len(locator)):
+        depth += {"(": 1, ")": -1}.get(locator[i], 0)
+        if depth == 0:
+            return locator[m.end():i]
+    return None
 
 
 def term_anchor_census(conn, keys):
@@ -166,8 +236,9 @@ def term_anchor_census(conn, keys):
             continue
         regex = [l for l in locs if TERM_SEGMENT.match(l)]
         term = [l for l in regex if not DESIGNATOR_SHAPE.match(re.match(r"^\d+\.\d+\(([^()]*)\)", l).group(1))]
+        balanced = [l for l in locs if (seg := first_balanced_segment(l)) is not None and not DESIGNATOR_SHAPE.match(seg)]
         out[key] = {"in_index": True, "provisions": len(locs), "regex_matches": len(regex), "term_segment_matches": len(term),
-                    "term_segment_examples": term[:5]}
+                    "term_segment_examples": term[:5], "balanced_term_segment_matches": len(balanced), "balanced_examples": balanced[:5]}
     return out
 
 
@@ -222,6 +293,7 @@ def main(argv=None):
     totals, listed, shared = classify(units(index.conn))
     observations = observe(index, listed)
     census = term_anchor_census(index.conn, {o["definition_anchor"]["baseline_doc_key"] for o in observations if o["class"] == "digit"})
+    observed_terms = sorted({a["term"] for o in observations for a in o["definition_anchor"]["anchors"]})
     for u in listed:
         u.pop("instruction", None)  # used for anchoring only; the 0.1 instruction_head stays
     meta = dict(index.meta)
@@ -231,6 +303,8 @@ def main(argv=None):
            "index": {"path": a.index, "sha256": before, "unchanged_after_run": before == after, "built_at": meta.get("built_at"),
                      "manifest_sha256": meta.get("manifest_sha256")},
            "totals": totals, "non_letter_led_units": listed, "instruction_groups": shared, "observations": observations, "term_anchor_census": census,
+           "like_escape": {"escaped": list(LIKE_SPECIAL), "observed_terms": len(observed_terms),
+                           "observed_terms_containing_escaped": [t for t in observed_terms if any(c in t for c in LIKE_SPECIAL)]},
            "storage": "explicit_paragraphs is stored per amendment unit; units that share one paired instruction repeat the same list",
            "legal_validity": "not_determined", "applicability_status": "not_assessed",
            "status": "proposal; producer-reported; no gate approved; nothing authorised"}

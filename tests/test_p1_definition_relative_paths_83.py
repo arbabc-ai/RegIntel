@@ -4,6 +4,7 @@ the index is left byte-identical. Expected values are literals. Offline; task-77
 scope: founder record 2026-11-04_s7-regintel-p1-founder-decisions_accepted.md."""
 import hashlib
 import json
+import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
@@ -16,6 +17,21 @@ DEF_KEY = "fr:2026-97101"
 TWO_KEY = "fr:2026-97102"
 TWO_XML = ("<RULE><PREAMB><CFR>12 CFR Part 9</CFR></PREAMB><SUPLINF><REGTEXT TITLE=\"12\" PART=\"9\"><AMDPAR>1. In § 9.3: a. Revise "
            "paragraph (2) of the definition of “Alpha”; b. Revise paragraph (2) of the definition of “Beta”.</AMDPAR></REGTEXT></SUPLINF></RULE>").encode()
+def def_xml(section, body):
+    return (f"<RULE><PREAMB><CFR>12 CFR Part 9</CFR></PREAMB><SUPLINF><REGTEXT TITLE=\"12\" PART=\"9\"><AMDPAR>1. In § {section}: {body}"
+            "</AMDPAR></REGTEXT></SUPLINF></RULE>").encode()
+
+
+# S7-P1-85 in-test documents (C3 F-84-1..F-84-3)
+TOKEN_KEY, PARENT_KEY = "fr:2026-97105", "fr:2026-97106"
+TOKEN_XML = def_xml("9.6", "t. Revise paragraph (4)(i)(A) in the definition of “Alpha”; u. Revise paragraphs (3) and (4) of the definition "
+                           "for “Beta”.")
+PARENT_XML = def_xml("9.7", "ee. In the definition of “Gamma”: i. Remove paragraph (2); ii. Redesignate paragraphs (1)(i) and (1)(ii) as "
+                            "paragraphs (1) and (2).")
+MERGED = ("1. In § 9.4: i. Revise footnote 3 to paragraph (2) of the definition for “Cleared transaction.” j. Revise the definition for "
+          "“Commitment”.")
+SPLIT = ("1. In § 9.5: i. Revise footnote 3 to paragraph (2) of the definition for “Cleared transaction.”; j. Revise the definition for "
+         "“Commitment”.")
 DEF_XML = ("<RULE><PREAMB><CFR>12 CFR Part 9</CFR></PREAMB><SUPLINF><REGTEXT TITLE=\"12\" PART=\"9\"><AMDPAR>1. In § 9.2: a. Revise the "
            "definition of “Term”; b. Revise paragraph (3) of the definition of “Term”.</AMDPAR></REGTEXT></SUPLINF></RULE>").encode()
 
@@ -48,7 +64,7 @@ class FixtureOnlyTests(unittest.TestCase):
             self.assertEqual(paths.main(["--index", str(db), "--out", str(out)]), 0)
         self.assertEqual(hashlib.sha256(db.read_bytes()).hexdigest(), before)
         report = json.loads(out.read_text())
-        self.assertEqual(report["schema"], "p1-definition-relative-paths-0.2")  # S7-P1-84 schema bump
+        self.assertEqual(report["schema"], "p1-definition-relative-paths-0.3")  # S7-P1-85 schema bump
         self.assertEqual(report["decision_record"], "2026-11-04_s7-regintel-p1-founder-decisions_accepted.md")
         self.assertEqual((report["legal_validity"], report["applicability_status"]), ("not_determined", "not_assessed"))
         self.assertEqual(report["status"], "proposal; producer-reported; no gate approved; nothing authorised")
@@ -59,7 +75,7 @@ class DefinitionRelativeTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.tmp = tempfile.TemporaryDirectory()
-        with mock.patch.dict(tl.DOCS, {DEF_KEY: DEF_XML, TWO_KEY: TWO_XML}):
+        with mock.patch.dict(tl.DOCS, {DEF_KEY: DEF_XML, TWO_KEY: TWO_XML, TOKEN_KEY: TOKEN_XML, PARENT_KEY: PARENT_XML}):
             cls.ix = tl.build_index(cls.tmp.name)
 
     @classmethod
@@ -76,7 +92,8 @@ class DefinitionRelativeTests(unittest.TestCase):
         # S7-P1-84 (F-83-1): the term the instruction names for the path, and its term-anchored baseline locator
         self.assertEqual(obs["definition_anchor"]["terms"], ["Term"])
         self.assertIs(obs["definition_anchor"]["ambiguous"], False)
-        self.assertEqual(obs["definition_anchor"]["anchors"],
+        keys = ("term", "term_anchored_locator", "term_anchored_citation", "baseline_status")  # the 0.2 literal; 0.3 adds keys
+        self.assertEqual([{k: a[k] for k in keys} for a in obs["definition_anchor"]["anchors"]],
                          [{"term": "Term", "term_anchored_locator": "9.2(Term)(3)", "term_anchored_citation": "12 CFR 9.2 \u201cTerm\u201d (3)",
                            "baseline_status": "baseline part not in index"}])
         self.assertEqual(obs["citation"], "12 CFR 9.2(3)")
@@ -97,6 +114,113 @@ class DefinitionRelativeTests(unittest.TestCase):
         self.assertEqual(obs["definition_anchor"]["terms"], ["Alpha", "Beta"])
         self.assertIs(obs["definition_anchor"]["ambiguous"], True)
         self.assertEqual([a["term_anchored_locator"] for a in obs["definition_anchor"]["anchors"]], ["9.3(Alpha)(2)", "9.3(Beta)(2)"])
+
+    def observed(self, key):
+        _, listed, _ = paths.classify(paths.units(self.ix.conn))
+        return {o["path"]: o["definition_anchor"] for o in paths.observe(self.ix, [u for u in listed if u["doc_key"] == key])}
+
+    def test_a_trailing_period_is_stripped_and_the_raw_capture_kept(self):
+        # S7-P1-85 (F-84-1). The parser stores no path for the footnote instruction, so definition_anchor is called directly.
+        merged = paths.definition_anchor(self.ix.conn, "12", "9", "9.4", "(2)", MERGED)
+        # fedreg.ENUM_BOUNDARY does not split after `.”`, so items i. and j. stay one item and “Commitment” stays attached (literal)
+        self.assertEqual(paths.items(MERGED), ["1. In § 9.4:", " i. Revise footnote 3 to paragraph (2) of the definition for "
+                                               "“Cleared transaction.” j. Revise the definition for “Commitment”."])
+        self.assertEqual(merged["terms"], ["Cleared transaction", "Commitment"])
+        self.assertEqual([(a["term"], a["term_raw"]) for a in merged["anchors"]],
+                         [("Cleared transaction", "Cleared transaction."), ("Commitment", "Commitment")])
+        self.assertEqual(merged["anchors"][0]["term_anchored_locator"], "9.4(Cleared transaction)(2)")
+        self.assertEqual(merged["anchors"][0]["term_anchored_citation"], "12 CFR 9.4 \u201cCleared transaction\u201d (2)")
+        self.assertIs(merged["ambiguous"], True)
+        # when the items are split, “Commitment” (whose item has no (2)) is not attached
+        split = paths.definition_anchor(self.ix.conn, "12", "9", "9.5", "(2)", SPLIT)
+        self.assertEqual(split["terms"], ["Cleared transaction"])
+        self.assertEqual(split["anchors"][0]["term_raw"], "Cleared transaction.")
+        self.assertIs(split["ambiguous"], False)
+        self.assertEqual(split["containment"], "token")
+
+    def test_a_path_is_contained_only_as_a_whole_token(self):
+        # S7-P1-85 (F-84-2)
+        obs = self.observed(TOKEN_KEY)
+        self.assertEqual(sorted(obs), ["(3)", "(4)(i)(A)"])  # the parser stores no (4) for this instruction
+        self.assertEqual(obs["(4)(i)(A)"]["terms"], ["Alpha"])
+        self.assertEqual(obs["(3)"]["terms"], ["Beta"])
+        instruction = self.ix.conn.execute("SELECT instruction FROM provision WHERE instruction LIKE '1. In § 9.6:%'").fetchone()[0]
+        four = paths.definition_anchor(self.ix.conn, "12", "9", "9.6", "(4)", instruction)
+        self.assertEqual(four["terms"], ["Beta"])
+        self.assertIs(four["ambiguous"], False)
+        self.assertEqual(four["containment"], "token")
+        self.assertIs(paths.contains("revise paragraph (4)(i)(A)", "(4)"), False)
+        self.assertIs(paths.contains("revise paragraph (4)(i)(A)", "(4)(i)(A)"), True)
+        self.assertIs(paths.contains("revise paragraph (1)(i)", "(i)"), False)
+
+    def test_a_nested_item_inherits_the_single_term_of_its_parent(self):
+        # S7-P1-85 (F-84-3)
+        obs = self.observed(PARENT_KEY)
+        self.assertEqual(sorted(obs), ["(1)(i)", "(1)(ii)", "(2)"])
+        two = obs["(2)"]
+        self.assertEqual(two["terms"], ["Gamma"])
+        self.assertIs(two["ambiguous"], False)
+        self.assertEqual([(a["term_anchored_locator"], a["inherited_from_parent"], a["parent_item_head"]) for a in two["anchors"]],
+                         [("9.7(Gamma)(2)", True, "ee. In the definition of “Gamma”:")])
+        self.assertNotIn("parent_status", two)
+        direct = self.observed(DEF_KEY)["(3)"]
+        self.assertEqual([a["inherited_from_parent"] for a in direct["anchors"]], [False])
+
+    def test_no_single_parent_term_and_no_containing_item(self):
+        two_terms = "1. In § 9.8: a. In the definition of “Delta” and the definition of “Epsilon”: i. Remove paragraph (2)."
+        self.assertEqual(paths.definition_anchor(self.ix.conn, "12", "9", "9.8", "(2)", two_terms)["parent_status"], "no_single_parent_term")
+        self.assertEqual(paths.definition_anchor(self.ix.conn, "12", "9", "9.8", "(2)", two_terms)["terms"], [])
+        none = paths.definition_anchor(self.ix.conn, "12", "9", "9.8", "(5)", two_terms)
+        self.assertEqual((none["terms"], none["parent_status"]), ([], "no_item_contains_path"))
+
+
+class HeldBaselineTests(unittest.TestCase):
+    """S7-P1-85 (F-84-5). The task-77 builder cannot carry an eCFR document other than ecfr:31:1010
+    (tests/test_p1_triple_letter_paragraph_list.py:86 hard-codes it; every tl.DOCS entry is built as a Federal Register document), so the
+    held-baseline, LIKE-fallback and census paths are pinned on an in-memory sqlite3 fixture with the columns the script queries."""
+
+    LOCATORS = [("9.2", "12 CFR 9.2"), ("9.2(a)", "12 CFR 9.2(a)"), ("9.2(Term)", "12 CFR 9.2 \u201cTerm\u201d"),
+                ("9.2(Term)(3)", "12 CFR 9.2 \u201cTerm\u201d (3)"), ("9.2(Other term (OT))", "12 CFR 9.2 \u201cOther term (OT)\u201d"),
+                ("9.2(Other term (OT))(1)", "12 CFR 9.2 \u201cOther term (OT)\u201d (1)"), ("9.2(Rate 5x)(1)", "12 CFR 9.2 \u201cRate 5x\u201d (1)"),
+                ("9.2(4)", "12 CFR 9.2(4)")]
+
+    def setUp(self):
+        self.conn = sqlite3.connect(":memory:")
+        self.conn.executescript("""CREATE TABLE source_document (id INTEGER PRIMARY KEY, doc_key TEXT);
+                                   CREATE TABLE provision (id INTEGER PRIMARY KEY, doc_id INTEGER, locator TEXT, citation TEXT,
+                                                           section_no TEXT, ordinal INTEGER);
+                                   INSERT INTO source_document VALUES (1, 'ecfr:12:9');""")
+        self.conn.executemany("INSERT INTO provision (doc_id, locator, citation, section_no, ordinal) VALUES (1, ?, ?, '9.2', ?)",
+                              [(l, c, i) for i, (l, c) in enumerate(self.LOCATORS)])
+
+    def tearDown(self):
+        self.conn.close()
+
+    def test_a_held_term_anchored_locator_is_present(self):
+        a = paths.definition_anchor(self.conn, "12", "9", "9.2", "(3)", "1. In § 9.2: a. Revise paragraph (3) of the definition of “Term”.")
+        self.assertIs(a["baseline_in_index"], True)
+        self.assertEqual([(x["term_anchored_present"], x["baseline_locator"], x["baseline_citation"], x["baseline_status"]) for x in a["anchors"]],
+                         [(True, "9.2(Term)(3)", "12 CFR 9.2 \u201cTerm\u201d (3)", "queried")])
+        self.assertNotIn("like_matches", a["anchors"][0])
+
+    def test_an_absent_locator_falls_back_to_like_and_escapes_percent(self):
+        a = paths.definition_anchor(self.conn, "12", "9", "9.2", "(4)", "1. In § 9.2: a. Revise paragraph (4) of the definition of “Term”.")
+        self.assertEqual([(x["term_anchored_present"], x["like_match_count"]) for x in a["anchors"]], [(False, 2)])
+        self.assertEqual([m["locator"] for m in a["anchors"][0]["like_matches"]], ["9.2(Term)", "9.2(Term)(3)"])
+        pct = paths.definition_anchor(self.conn, "12", "9", "9.2", "(1)", "1. In § 9.2: a. Revise paragraph (1) of the definition of “Rate 5%”.")
+        self.assertEqual(pct["anchors"][0]["like_match_count"], 0)  # unescaped, `5%` would match 9.2(Rate 5x)(1)
+
+    def test_census_keeps_the_old_counts_and_adds_the_balanced_count(self):
+        self.assertEqual(paths.term_anchor_census(self.conn, {"ecfr:12:9", "ecfr:12:99"}), {
+            "ecfr:12:9": {"in_index": True, "provisions": 8, "regex_matches": 4, "term_segment_matches": 3,
+                          "term_segment_examples": ["9.2(Term)", "9.2(Term)(3)", "9.2(Rate 5x)(1)"],
+                          "balanced_term_segment_matches": 5,
+                          "balanced_examples": ["9.2(Term)", "9.2(Term)(3)", "9.2(Other term (OT))", "9.2(Other term (OT))(1)",
+                                                "9.2(Rate 5x)(1)"]},
+            "ecfr:12:99": {"in_index": False}})
+        self.assertEqual(paths.first_balanced_segment("3.2(Adjusted allowances for credit losses (AACL))(1)"),
+                         "Adjusted allowances for credit losses (AACL)")
+        self.assertIsNone(paths.first_balanced_segment("3.2(Unclosed (x)"))
 
 
 if __name__ == "__main__":
