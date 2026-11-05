@@ -41,6 +41,11 @@ class CensusTests(unittest.TestCase):
         self.assertGreaterEqual(tl["units_with_paths"], 1)
         self.assertNotIn(KEY, {e["doc_key"] for e in self.result["unclassified"]["with_paths_examples"]})
 
+    def test_a_non_identical_three_letter_token_is_not_tagged_triple_letter(self):
+        # S7-P1-83 (F-82-2): only three identical letters count; the existing positive test above is kept
+        self.assertNotIn("triple_letter_designator", census.tags_of("Amend § 1010.100 by adding paragraph (abc) and paragraph (abd)."))
+        self.assertTrue(census.tags_of("Amend § 1010.100 by adding paragraphs (nnn) and (ooo).").get("triple_letter_designator"))
+
     def test_census_counts_equal_the_evaluator_units_matched(self):
         check = census.consistency(self.result, census.evaluator_units_matched(self.ix))
         self.assertTrue(check["consistent"], check["mismatches"])

@@ -71,7 +71,8 @@ def tags_of(instruction):
     if lowercase:
         out["lowercase_location_clause"] = True
     for token in re.finditer(fedreg.PARA_TOKEN, view):
-        if any("letter" in fedreg.designator_classes(p) and len(p.strip("()")) == 3 for p in fedreg.PARA_PART.findall(token.group(0))):
+        if any("letter" in fedreg.designator_classes(p) and len(p.strip("()")) == 3 and len(set(p.strip("()"))) == 1
+               for p in fedreg.PARA_PART.findall(token.group(0))):  # tripled: three identical letters (S7-P1-83, F-82-2)
             out["triple_letter_designator"] = True
             break
     if any(fedreg._relative_to_enclosing_location(view, m, lowercase) for m in fedreg.PARA_ACTION.finditer(view)):
