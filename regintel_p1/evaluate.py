@@ -2207,6 +2207,20 @@ def check_triple_letter_paragraph_list(index, item):
     return {"id": item["id"], "kind": item["kind"], "passed": not failures, "failures": failures[:10],
             "units_checked": checked, "units_skipped": skipped}
 
+SKIP_COUNTED_GROUPS = ("lowercase_paragraph_clause", "triple_letter_paragraph_list")
+
+
+def skipped_absent_document(reg):
+    """Roll-up of expectations skipped because their document is absent from the evaluated index (S7-P1-79): deltas_skipped plus
+    units_skipped per counting group. Reporting only; no pass/fail outcome depends on it."""
+    groups = {}
+    for group in SKIP_COUNTED_GROUPS:
+        items = reg.get(group) or []
+        groups[group] = {"deltas_skipped": sum(x.get("deltas_skipped", 0) for x in items),
+                         "units_skipped": sum(x.get("units_skipped", 0) for x in items)}
+    return {"total": sum(g["deltas_skipped"] + g["units_skipped"] for g in groups.values()), "groups": groups}
+
+
 def run_regressions(index, path):
     spec = json.loads(Path(path).read_text())
     out = {"version": spec["version"], "task": spec["task"],
@@ -2253,6 +2267,7 @@ def run_regressions(index, path):
            "enumerated_paragraph_location": [check_enumerated_paragraph_location(index, x) for x in spec.get("enumerated_paragraph_location", [])],
            "parenthesized_paragraph_list": [check_parenthesized_paragraph_list(index, x) for x in spec.get("parenthesized_paragraph_list", [])],
            "triple_letter_paragraph_list": [check_triple_letter_paragraph_list(index, x) for x in spec.get("triple_letter_paragraph_list", [])]}
+    out["expectations_skipped_absent_document"] = skipped_absent_document(out)
     out["passed"] = (all(d["passed"] for d in out["delta"]) and out["relationship_integrity"]["passed"]
                      and all(c["passed"] for c in out["citation_scope"]) and all(x["passed"] for x in out["status"])
                      and all(x["passed"] for x in out["citation_completeness"])
@@ -2481,6 +2496,9 @@ def render(report):
     reg = report.get("regressions")
     if reg:
         lines.append(f"Boundary regressions ({reg['task']}, {reg['version']}): {'PASS' if reg['passed'] else 'FAIL'}")
+        skip = reg.get("expectations_skipped_absent_document") or skipped_absent_document(reg)
+        lines.append(f"  expectations skipped because the document is absent from the index: {skip['total']} (groups: "
+                     + "; ".join(f"{g} deltas={c['deltas_skipped']} units={c['units_skipped']}" for g, c in skip["groups"].items()) + ")")
         for d in reg["delta"]:
             lines.append(f"  {d['id']} {'PASS' if d['passed'] else 'FAIL'} delta {d['citation']} instruments={len(d['instruments_found'])} candidates={d['unresolved_candidates']} {'; '.join(d['failures'])}")
         ri = reg["relationship_integrity"]
@@ -2510,7 +2528,8 @@ def render(report):
         for x in reg.get("paragraph_evidence", []):
             lines.append(f"  {x['id']} {'PASS' if x['passed'] else 'FAIL'} paragraph evidence [{x['kind']}] {'; '.join(x['failures'])}")
         for x in reg.get("lowercase_paragraph_clause", []):
-            lines.append(f"  {x['id']} {'PASS' if x['passed'] else 'FAIL'} lowercase paragraph clause [{x['kind']}] {'; '.join(x['failures'])}")
+            lines.append(f"  {x['id']} {'PASS' if x['passed'] else 'FAIL'} lowercase paragraph clause [{x['kind']}] "
+                         f"deltas checked={x.get('deltas_checked', 0)} skipped={x.get('deltas_skipped', 0)} {'; '.join(x['failures'])}")
         for x in reg.get("dependency_verification", []):
             lines.append(f"  {x['id']} {'PASS' if x['passed'] else 'FAIL'} dependency verification [{x['kind']}] {'; '.join(x['failures'])}")
         for x in reg.get("rulemaking_sources", []):
