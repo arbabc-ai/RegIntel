@@ -67,6 +67,23 @@ A6 (0.5, S7-P1-87, C3 F-86-1, F-86-2). Every 0.1-0.4 field keeps its name and me
     definition_anchor also gains `item_walks`: one entry per containing item, with its `direct_terms`, or with the `parent_index`,
     `parent_enumerator` and `inherited_terms` its walk reached, so that a term reached through a later item (anchor rows keep only the
     first occurrence) stays visible.
+A7 (0.6, S7-P1-88, C3 F-87-1, F-87-2; optional F-87-3, F-87-4). Every 0.1-0.5 field keeps its name and meaning.
+    (F-87-1) observe() keeps one observation per (title, section, path) for the resolver, answer, delta and baseline fields, but builds
+    definition_anchor from every listed unit that carries that path: the units are grouped by distinct (doc_key, instruction) in listing
+    order, each distinct instruction is anchored once, and the anchor rows are merged in group order, each gaining `doc_key` and
+    `instruction_index`. `terms` (distinct, in row order), `ambiguous`, `path_role`, `term_phrase_form` and `parent_status` are computed
+    over the merged instructions; `anchored_units`, `instructions_anchored` and `anchored_doc_keys` (sorted) are added. The 0.5 flat
+    `sibling_skipped` and `item_walks` are those of the first instruction; `by_instruction` lists, per instruction, its doc_key,
+    instruction_index, terms, parent_status, path_role, sibling_skipped and item_walks. `from_unit` stays the first unit.
+    (F-87-2) Structural parent: the parent candidate of a containing item is its parent in the item tree, read forward with a stack: an
+    item closes every open item up to and including the nearest open item it is a sibling of (enumerator_class(open) & containing_class
+    (item) non-empty) and is then the child of the item below; otherwise it is the child of the innermost open item. The walk therefore
+    never passes a non-sibling item that is not a descendant of an earlier sibling; `sibling_skipped` lists, as in 0.5, the items between
+    the candidate and the containing item that are siblings by the 0.5 test. Inheritance only when the candidate's parsing view ends with
+    ":" and names exactly one normalised term (unchanged rule); otherwise no inheritance and, with no term, parent_status
+    "no_single_parent_term". Each walk entry gains `parent_candidate_index`, `parent_candidate_enumerator` and
+    `parent_candidate_ends_with_colon`; `parent_index` / `parent_enumerator` keep their 0.5 meaning (the ":" parent the walk reached,
+    else None). (F-87-4) Containment reads path_spans(views[k], path), the same token test contains() applies.
 The index is opened through regintel_p1.search.Index (sqlite3 mode=ro, regintel_p1/search.py:505); the CLI hashes it before and after and
 exits 1 only if it changed.
 
@@ -88,7 +105,7 @@ if str(REPO) not in sys.path:
 from regintel_p1 import fedreg  # noqa: E402
 from regintel_p1.search import Index  # noqa: E402
 
-SCHEMA = "p1-definition-relative-paths-0.5"  # 0.5 (S7-P1-87): sibling skip, designator-list redesignation
+SCHEMA = "p1-definition-relative-paths-0.6"  # 0.6 (S7-P1-88): per-instruction anchoring, structural parent
 DECISION_RECORD = "2026-11-04_s7-regintel-p1-founder-decisions_accepted.md"
 CLASSES = ("letter", "digit", "roman", "other_or_ambiguous")
 
@@ -232,14 +249,28 @@ def like_escape(text):
     return text
 
 
+def structural_parents(its):
+    """S7-P1-88 (F-87-2): the parent index (or None) of every item, read forward with a stack of open items."""
+    parents, stack = [], []
+    for k, (_, token) in enumerate(its):
+        cls = containing_class(token)
+        match = next((n for n in range(len(stack) - 1, -1, -1) if enumerator_class(its[stack[n]][1]) & cls), None)
+        if match is not None:
+            del stack[match:]
+        parents.append(stack[-1] if stack else None)
+        stack.append(k)
+    return parents
+
+
 def anchor_terms(instruction, path):
     """Anchor rows (dicts) in item order, the containing items' roles and direct phrase forms, the sibling-guard stops, and a
     parent_status when nothing was found."""
     its = enumerated_items(instruction)
     views = [fedreg.parsing_view(text) for text, _ in its]
+    tree = structural_parents(its)
     found, roles, forms, skipped, walks, attempted = [], [], [], [], [], False
     for k, (text, token) in enumerate(its):
-        if not contains(text, path):
+        if not path_spans(views[k], path):  # S7-P1-88 (F-87-4): the token test contains() applies, on the same view
             continue
         attempted = True
         role = item_role(views[k], path)
@@ -249,18 +280,19 @@ def anchor_terms(instruction, path):
         parent = None
         if not caps:
             cls = containing_class(token)
-            for j in range(k - 1, -1, -1):
+            candidate = tree[k]
+            for j in range(k - 1, -1 if candidate is None else candidate, -1):
                 if enumerator_class(its[j][1]) & cls:  # a sibling: skipped, never a parent (S7-P1-87, F-86-1)
                     skipped.append({"item_index": k, "item_enumerator": token, "skipped_index": j, "skipped_enumerator": its[j][1]})
-                    continue
-                if views[j].rstrip().endswith(":"):
-                    parent = j
-                    break
+            colon = candidate is not None and views[candidate].rstrip().endswith(":")
+            parent = candidate if colon else None
             raw = capture_terms(views[parent]) if parent is not None else []
             caps = raw if len({normalise(t) for t, _ in raw}) == 1 else []
             walks.append({"item_index": k, "item_enumerator": token, "parent_index": parent,
                           "parent_enumerator": its[parent][1] if parent is not None else None,
-                          "inherited_terms": [normalise(t) for t, _ in caps]})
+                          "inherited_terms": [normalise(t) for t, _ in caps], "parent_candidate_index": candidate,
+                          "parent_candidate_enumerator": its[candidate][1] if candidate is not None else None,
+                          "parent_candidate_ends_with_colon": colon})
         else:
             walks.append({"item_index": k, "item_enumerator": token, "direct_terms": [normalise(t) for t, _ in caps]})
         for t, form in caps:
@@ -341,6 +373,38 @@ def term_anchor_census(conn, keys):
     return out
 
 
+def anchored(conn, listed, u, path):
+    sharing = [v for v in listed if (v["title_no"], v["section_no"]) == (u["title_no"], u["section_no"])
+               and any(pc["path"] == path for pc in v["path_classes"])]
+    instructions = list(dict.fromkeys((v["doc_key"], v["instruction"]) for v in sharing))
+    out = merged_definition_anchor(conn, u["title_no"], u["part_no"], u["section_no"], path, instructions)
+    out["anchored_units"] = len(sharing)
+    return out
+
+
+def merged_definition_anchor(conn, title, part, section, path, instructions):
+    """S7-P1-88 (F-87-1): definition_anchor over every distinct (doc_key, instruction), rows merged in group order."""
+    per = [(doc, definition_anchor(conn, title, part, section, path, text)) for doc, text in instructions]
+    first = per[0][1]
+    rows = [{**r, "doc_key": doc, "instruction_index": n} for n, (doc, a) in enumerate(per) for r in a["anchors"]]
+    terms = list(dict.fromkeys(r["term"] for r in rows))
+    roles = sorted({a["path_role"] for _, a in per if a["path_role"]} - {"multiple"})
+    multiple = any(a["path_role"] == "multiple" for _, a in per)
+    forms = {a["term_phrase_form"] for _, a in per} - {"none"}
+    out = {**first, "terms": terms, "ambiguous": len(set(terms)) > 1, "anchors": rows,
+           "path_role": "multiple" if multiple or len(roles) > 1 else (roles[0] if roles else None),
+           "term_phrase_form": "none" if not forms else (forms.pop() if len(forms) == 1 and "mixed" not in forms else "mixed"),
+           "anchored_units": None, "instructions_anchored": len(per), "anchored_doc_keys": sorted({doc for doc, _ in per}),
+           "by_instruction": [{"doc_key": doc, "instruction_index": n, "terms": a["terms"], "parent_status": a.get("parent_status"),
+                               "path_role": a["path_role"], "sibling_skipped": a["sibling_skipped"], "item_walks": a["item_walks"]}
+                              for n, (doc, a) in enumerate(per)]}
+    out.pop("parent_status", None)
+    if not terms:
+        statuses = [a.get("parent_status") for _, a in per]
+        out["parent_status"] = "no_single_parent_term" if "no_single_parent_term" in statuses else "no_item_contains_path"
+    return out
+
+
 def observe(index, listed):
     seen, out = set(), []
     for u in listed:
@@ -369,8 +433,7 @@ def observe(index, listed):
                                               for g in d["instruments"]],
                         "delta_legal_validity": d["legal_validity"], "delta_applicability_status": d["applicability_status"],
                         "baseline": baseline(index.conn, u["title_no"], u["part_no"], u["section_no"], pc["path"]),
-                        "definition_anchor": definition_anchor(index.conn, u["title_no"], u["part_no"], u["section_no"], pc["path"],
-                                                               u["instruction"])})
+                        "definition_anchor": anchored(index.conn, listed, u, pc["path"])})
     return out
 
 

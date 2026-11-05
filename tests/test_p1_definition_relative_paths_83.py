@@ -22,6 +22,10 @@ def def_xml(section, body):
             "</AMDPAR></REGTEXT></SUPLINF></RULE>").encode()
 
 
+# S7-P1-88 in-test documents (C3 F-87-1): two instructions amend the same path with different terms
+KAPPA_KEY, LAMBDA_KEY = "fr:2026-97107", "fr:2026-97108"
+
+
 # S7-P1-85 in-test documents (C3 F-84-1..F-84-3)
 TOKEN_KEY, PARENT_KEY = "fr:2026-97105", "fr:2026-97106"
 TOKEN_XML = def_xml("9.6", "t. Revise paragraph (4)(i)(A) in the definition of “Alpha”; u. Revise paragraphs (3) and (4) of the definition "
@@ -64,7 +68,7 @@ class FixtureOnlyTests(unittest.TestCase):
             self.assertEqual(paths.main(["--index", str(db), "--out", str(out)]), 0)
         self.assertEqual(hashlib.sha256(db.read_bytes()).hexdigest(), before)
         report = json.loads(out.read_text())
-        self.assertEqual(report["schema"], "p1-definition-relative-paths-0.5")  # S7-P1-87 schema bump
+        self.assertEqual(report["schema"], "p1-definition-relative-paths-0.6")  # S7-P1-88 schema bump
         self.assertEqual(report["decision_record"], "2026-11-04_s7-regintel-p1-founder-decisions_accepted.md")
         self.assertEqual((report["legal_validity"], report["applicability_status"]), ("not_determined", "not_assessed"))
         self.assertEqual(report["status"], "proposal; producer-reported; no gate approved; nothing authorised")
@@ -75,7 +79,9 @@ class DefinitionRelativeTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.tmp = tempfile.TemporaryDirectory()
-        with mock.patch.dict(tl.DOCS, {DEF_KEY: DEF_XML, TWO_KEY: TWO_XML, TOKEN_KEY: TOKEN_XML, PARENT_KEY: PARENT_XML}):
+        with mock.patch.dict(tl.DOCS, {DEF_KEY: DEF_XML, TWO_KEY: TWO_XML, TOKEN_KEY: TOKEN_XML, PARENT_KEY: PARENT_XML,
+                                       KAPPA_KEY: def_xml("9.10", "a. Revise paragraph (3) of the definition of “Kappa”."),
+                                       LAMBDA_KEY: def_xml("9.10", "a. Revise paragraph (3) of the definition of “Lambda”.")}):
             cls.ix = tl.build_index(cls.tmp.name)
 
     @classmethod
@@ -103,6 +109,11 @@ class DefinitionRelativeTests(unittest.TestCase):
                          {"path_role": "operand", "term_phrase_form": "singular", "sibling_skipped": []})  # S7-P1-87: sibling_skipped
         self.assertEqual(obs["definition_anchor"]["item_walks"], [{"item_index": 2, "item_enumerator": "b", "direct_terms": ["Term"]}])
         self.assertNotIn("sibling_blocked", obs["definition_anchor"])  # removed in 0.5
+        da = obs["definition_anchor"]  # S7-P1-88 (F-87-1): one unit, one instruction
+        self.assertEqual((da["anchored_units"], da["instructions_anchored"], da["anchored_doc_keys"]), (1, 1, [DEF_KEY]))
+        self.assertEqual([(a["doc_key"], a["instruction_index"]) for a in da["anchors"]], [(DEF_KEY, 0)])
+        self.assertEqual([(b["doc_key"], b["instruction_index"], b["terms"], b["item_walks"]) for b in da["by_instruction"]],
+                         [(DEF_KEY, 0, ["Term"], da["item_walks"])])
         self.assertEqual(obs["citation"], "12 CFR 9.2(3)")
         self.assertEqual(obs["baseline"], {"baseline_doc_key": "ecfr:12:9", "status": "baseline part not in index"})
         self.assertEqual((obs["resolve_future"]["resolved"], obs["resolve_future"]["achieved"]), (True, "paragraph"))
@@ -221,13 +232,67 @@ class DefinitionRelativeTests(unittest.TestCase):
                          [{"item_index": 4, "item_enumerator": "iii", "skipped_index": 3, "skipped_enumerator": "ii"},
                           {"item_index": 4, "item_enumerator": "iii", "skipped_index": 2, "skipped_enumerator": "i"}])
         self.assertNotIn("parent_status", five)
-        self.assertEqual(five["item_walks"], [{"item_index": 4, "item_enumerator": "iii", "parent_index": 1, "parent_enumerator": "ee",
-                                               "inherited_terms": ["Gamma"]}])
-        self.assertEqual(three["item_walks"], [{"item_index": 4, "item_enumerator": "ff", "parent_index": 0, "parent_enumerator": None,
-                                                "inherited_terms": []}])
+        walk05 = ("item_index", "item_enumerator", "parent_index", "parent_enumerator", "inherited_terms")  # the 0.5 keys
+        self.assertEqual([{k: w[k] for k in walk05} for w in five["item_walks"]],
+                         [{"item_index": 4, "item_enumerator": "iii", "parent_index": 1, "parent_enumerator": "ee",
+                           "inherited_terms": ["Gamma"]}])
+        self.assertEqual([{k: w[k] for k in walk05} for w in three["item_walks"]],
+                         [{"item_index": 4, "item_enumerator": "ff", "parent_index": 0, "parent_enumerator": None,
+                           "inherited_terms": []}])
+        # S7-P1-88 (F-87-2): the structural parent candidate of "ff." is the instruction head, of "iii." the item "ee."
+        cand = ("parent_candidate_index", "parent_candidate_enumerator", "parent_candidate_ends_with_colon")
+        self.assertEqual([tuple(w[k] for k in cand) for w in three["item_walks"]], [(0, None, True)])
+        self.assertEqual([tuple(w[k] for k in cand) for w in five["item_walks"]], [(1, "ee", True)])
         # the containing class is fedreg._enum_class's single class; candidates keep the full designator_classes set
         self.assertEqual((paths.containing_class("i"), paths.containing_class("ee"), paths.enumerator_class("i")),
                          (frozenset({"roman"}), frozenset({"letter"}), frozenset({"letter", "roman"})))
+
+    def test_two_instructions_on_one_path_are_both_anchored(self):
+        # S7-P1-88 (F-87-1)
+        _, listed, _ = paths.classify(paths.units(self.ix.conn))
+        listed = [u for u in listed if u["doc_key"] in (KAPPA_KEY, LAMBDA_KEY)]
+        self.assertEqual(sorted((u["doc_key"], u["section_no"], u["paths"]) for u in listed),
+                         [(KAPPA_KEY, "9.10", ["(3)"]), (LAMBDA_KEY, "9.10", ["(3)"])])
+        [obs] = paths.observe(self.ix, listed)
+        da = obs["definition_anchor"]
+        self.assertEqual(obs["from_unit"], listed[0]["locator"])
+        self.assertEqual(da["terms"], ["Kappa", "Lambda"])
+        self.assertIs(da["ambiguous"], True)
+        self.assertEqual([(a["term"], a["doc_key"], a["instruction_index"]) for a in da["anchors"]],
+                         [("Kappa", KAPPA_KEY, 0), ("Lambda", LAMBDA_KEY, 1)])
+        self.assertEqual((da["anchored_units"], da["instructions_anchored"], da["anchored_doc_keys"]), (2, 2, [KAPPA_KEY, LAMBDA_KEY]))
+        self.assertEqual([(b["doc_key"], b["terms"]) for b in da["by_instruction"]], [(KAPPA_KEY, ["Kappa"]), (LAMBDA_KEY, ["Lambda"])])
+        self.assertEqual(da["item_walks"], da["by_instruction"][0]["item_walks"])  # the 0.5 flat list: the first instruction
+
+    def test_the_walk_stops_at_the_structural_parent(self):
+        # S7-P1-88 (F-87-2)
+        b = ("1. In § 9.7: a. In the definition of “X”: i. Remove paragraph (2); ii. Revise paragraph (4); b. Revise paragraph (3) as "
+             "follows. i. Remove paragraph (5); ii. Revise paragraph (6).")
+        six = paths.definition_anchor(self.ix.conn, "12", "9", "9.7", "(6)", b)
+        self.assertEqual((six["terms"], six["parent_status"]), ([], "no_single_parent_term"))
+        self.assertEqual([(w["parent_candidate_index"], w["parent_candidate_enumerator"], w["parent_candidate_ends_with_colon"])
+                          for w in six["item_walks"]], [(4, "b", False)])
+        self.assertEqual(six["sibling_skipped"], [{"item_index": 6, "item_enumerator": "ii", "skipped_index": 5, "skipped_enumerator": "i"}])
+        four = paths.definition_anchor(self.ix.conn, "12", "9", "9.7", "(4)", b)
+        self.assertEqual(four["terms"], ["X"])
+        self.assertEqual([(x["parent_enumerator"], x["parent_item_index"]) for x in four["anchors"]], [("a", 1)])
+        c = ("1. In § 9.7: a. In the definition of “X”: i. Remove paragraph (2); ii. In the definition of “Z”: A. Revise paragraph (7); "
+             "c. Revise paragraph (3).")
+        three = paths.definition_anchor(self.ix.conn, "12", "9", "9.7", "(3)", c)
+        self.assertEqual((three["terms"], three["parent_status"]), ([], "no_single_parent_term"))  # "Z" is not inherited
+        self.assertEqual([(w["parent_candidate_index"], w["parent_candidate_enumerator"], w["parent_candidate_ends_with_colon"],
+                           w["inherited_terms"]) for w in three["item_walks"]], [(0, None, True, [])])
+        self.assertEqual(paths.structural_parents(paths.enumerated_items(c)), [None, 0, 1, 1, 3, 0])
+
+    def test_v_and_x_containing_items_read_as_letters(self):
+        # S7-P1-88 (F-87-3): fedreg._enum_class reads "v" and "x" as letters; a roman "v." sub-item therefore closes its lettered parent
+        self.assertEqual((paths.containing_class("v"), paths.containing_class("x")), (frozenset({"letter"}), frozenset({"letter"})))
+        text = ("1. In § 9.7: a. In the definition of “X”: i. Remove paragraph (1); ii. Remove paragraph (2); iii. Remove paragraph (3); "
+                "iv. Remove paragraph (4); v. Remove paragraph (5).")
+        four, five = (paths.definition_anchor(self.ix.conn, "12", "9", "9.7", p, text) for p in ("(4)", "(5)"))
+        self.assertEqual(four["terms"], ["X"])
+        self.assertEqual((five["terms"], five["parent_status"]), ([], "no_single_parent_term"))  # measured limit
+        self.assertEqual([(w["parent_candidate_index"], w["parent_candidate_enumerator"]) for w in five["item_walks"]], [(0, None)])
 
     def test_redesignation_source_and_target_roles(self):
         # S7-P1-86 (F-85-3)
