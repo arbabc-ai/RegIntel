@@ -37,6 +37,21 @@ A4 (0.3, S7-P1-85, C3 F-84-1..F-84-5). Every 0.1 and 0.2 field keeps its name an
     ")" (so "3.2(Adjusted allowances for credit losses (AACL))" is one segment) and designator-shaped segments are excluded; up to 5
     `balanced_examples`. regex_matches and term_segment_matches are unchanged. "%", "_" and "\" in a term are escaped in the LIKE patterns
     (ESCAPE '\'); `like_escape` lists the observed terms that contain one of them.
+A5 (0.4, S7-P1-86, C3 F-85-1..F-85-5). Every 0.1-0.3 field keeps its name and meaning. View: every term capture, containment test,
+    parent ":" test and redesignation test reads fedreg.parsing_view(item) (F-85-4); `term_raw` is the raw capture from that view.
+    (F-85-2) TERM also reads the plural "definitions of|for" and a run of quoted terms joined by ",", "and", "or" or ", and"; each quoted
+    term is one capture. Each anchor row records the `term_phrase_form` ("singular" | "plural") of the phrase that captured it, and
+    definition_anchor records `term_phrase_form` over the containing items' direct captures: "singular", "plural", "mixed", or "none".
+    (F-85-1) Sibling guard: the enumerator token of each item is fedreg._boundary_token of the boundary that opens it (the first item has
+    none) and its class is the set fedreg.designator_classes gives. Walking back from a containing item, the walk stops with no inheritance
+    at the first earlier item whose class set equals the containing item's; otherwise the nearest earlier item ending with ":" is the
+    parent. Inherited rows carry `item_enumerator`, `parent_enumerator` and `parent_item_index`; each stop is listed in
+    definition_anchor `sibling_blocked`, and `parent_status: "sibling_boundary"` is set when no term is found and a stop occurred. Because
+    designator_classes gives "i" {letter, roman} and "ii", "iii" {roman}, an "iii." item stops at its sibling "ii." (measured, reported).
+    (F-85-3) In a containing item that matches REDESIGNATION, a path occurrence inside group 1 has role "redesignation_source", inside
+    group 2 "redesignation_target", elsewhere "operand" (several distinct roles in one item: "multiple"). Each anchor row has `role`
+    (of the item its path was found in); definition_anchor has `path_role` over all containing items; target rows add
+    `present_refers_to: "current_baseline_text"`. baseline() and term_anchored_present are unchanged.
 The index is opened through regintel_p1.search.Index (sqlite3 mode=ro, regintel_p1/search.py:505); the CLI hashes it before and after and
 exits 1 only if it changed.
 
@@ -58,7 +73,7 @@ if str(REPO) not in sys.path:
 from regintel_p1 import fedreg  # noqa: E402
 from regintel_p1.search import Index  # noqa: E402
 
-SCHEMA = "p1-definition-relative-paths-0.3"  # 0.3 (S7-P1-85): term normalisation, token containment, parent inheritance, balanced census
+SCHEMA = "p1-definition-relative-paths-0.4"  # 0.4 (S7-P1-86): plural terms, sibling guard, redesignation roles, one view
 DECISION_RECORD = "2026-11-04_s7-regintel-p1-founder-decisions_accepted.md"
 CLASSES = ("letter", "digit", "roman", "other_or_ambiguous")
 
@@ -127,7 +142,10 @@ def baseline(conn, title, part, section, path):
             "section_present": exists(f"{title} CFR {section}")}
 
 
-TERM = re.compile(r"definition\s+(?:of|for)\s+[\u201c\"]([^\u201d\"]+)[\u201d\"]")
+QUOTED_TERM = r"[“\"]([^”\"]+)[”\"]"
+_Q = r"[“\"][^”\"]+[”\"]"
+TERM = re.compile(r"(definitions?)\s+(?:of|for)\s+(" + _Q + r"(?:(?:\s*,\s*(?:and\s+|or\s+)?|\s+(?:and|or)\s+)" + _Q + r")*)")  # S7-P1-86
+REDESIGNATION = re.compile(r"redesignat\w*\s+(?:paragraphs?|the\s+paragraphs?)\s+(.+?)\s+as\s+(?:paragraphs?\s+)?(.+?)[.;:]", re.I)
 TERM_SEGMENT = re.compile(r"^\d+\.\d+\([^()]*[A-Za-z ][^()]*\)")
 DESIGNATOR_SHAPE = re.compile(r"^(?:[a-z]{1,3}|[ivxl]+|\d+|[A-Z]{1,2})$")
 
@@ -135,11 +153,45 @@ DESIGNATOR_SHAPE = re.compile(r"^(?:[a-z]{1,3}|[ivxl]+|\d+|[A-Z]{1,2})$")
 LIKE_SPECIAL = ("\\", "%", "_")
 
 
+def enumerated_items(instruction):
+    """[(item, enumerator token or None)]: cut just after the punctuation of each ENUM_BOUNDARY that carries an enumerator token
+    (S7-P1-85: the item keeps its own closing ".", ";" or ":"); the token is the one that opens the item (S7-P1-86)."""
+    cuts = [(0, None)] + [(b.start(1) + 1, fedreg._boundary_token(b)) for b in fedreg.ENUM_BOUNDARY.finditer(instruction)
+                          if fedreg._boundary_token(b)]
+    bounds = cuts + [(len(instruction), None)]
+    return [(instruction[a:b], tok) for (a, tok), (b, _) in zip(bounds, bounds[1:]) if instruction[a:b].strip()]
+
+
 def items(instruction):
-    """Enumerated items of an instruction, cut just after the punctuation of each ENUM_BOUNDARY that carries an enumerator token
-    (S7-P1-85: the item keeps its own closing ".", ";" or ":")."""
-    cuts = [0] + [b.start(1) + 1 for b in fedreg.ENUM_BOUNDARY.finditer(instruction) if fedreg._boundary_token(b)] + [len(instruction)]
-    return [instruction[a:b] for a, b in zip(cuts, cuts[1:]) if instruction[a:b].strip()]
+    return [text for text, _ in enumerated_items(instruction)]
+
+
+def enumerator_class(token):
+    return frozenset(fedreg.designator_classes(f"({token})")) if token else frozenset()
+
+
+def capture_terms(view):
+    """S7-P1-86 (F-85-2): [(term_raw, "singular" | "plural")] from one parsing view, one capture per quoted term."""
+    return [(t, "plural" if m.group(1).endswith("s") else "singular") for m in TERM.finditer(view) for t in re.findall(QUOTED_TERM, m.group(2))]
+
+
+def path_spans(view, path):
+    return [m.start() for m in re.finditer(r"(?<!\))" + re.escape(path) + r"(?!\()", view)]
+
+
+def item_role(view, path):
+    """S7-P1-86 (F-85-3): redesignation_source / redesignation_target / operand, or multiple."""
+    moves = list(REDESIGNATION.finditer(view))
+    roles = set()
+    for pos in path_spans(view, path):
+        role = "operand"
+        for m in moves:
+            if m.start(1) <= pos < m.end(1):
+                role = "redesignation_source"
+            elif m.start(2) <= pos < m.end(2):
+                role = "redesignation_target"
+        roles.add(role)
+    return roles.pop() if len(roles) == 1 else ("multiple" if roles else None)
 
 
 def normalise(term):
@@ -159,37 +211,57 @@ def like_escape(text):
 
 
 def anchor_terms(instruction, path):
-    """[(term, term_raw, parent_item_head or None)] in item order, and a parent_status when nothing was found."""
-    its, found, attempted = items(instruction), [], False
-    for k, item in enumerate(its):
-        if not contains(item, path):
+    """Anchor rows (dicts) in item order, the containing items' roles and direct phrase forms, the sibling-guard stops, and a
+    parent_status when nothing was found."""
+    its = enumerated_items(instruction)
+    views = [fedreg.parsing_view(text) for text, _ in its]
+    found, roles, forms, blocked, attempted = [], [], [], [], False
+    for k, (text, token) in enumerate(its):
+        if not contains(text, path):
             continue
         attempted = True
-        direct = TERM.findall(item)
+        role = item_role(views[k], path)
+        roles.append(role)
+        caps = capture_terms(views[k])
+        forms += [f for _, f in caps]
         parent = None
-        if not direct:
-            parent = next((p for p in reversed(its[:k]) if fedreg.parsing_view(p).rstrip().endswith(":")), None)
-            raw = TERM.findall(parent) if parent is not None else []
-            direct = raw if len({normalise(t) for t in raw}) == 1 else []
-        for t in direct:
-            if normalise(t) and normalise(t) not in [f[0] for f in found]:
-                found.append((normalise(t), t, parent.strip()[:120] if parent is not None else None))
-    status = None if found else ("no_single_parent_term" if attempted else "no_item_contains_path")
-    return found, status
+        if not caps:
+            cls = enumerator_class(token)
+            for j in range(k - 1, -1, -1):
+                if enumerator_class(its[j][1]) == cls:
+                    blocked.append({"item_index": k, "item_enumerator": token, "stopped_at_index": j, "stopped_at_enumerator": its[j][1]})
+                    break
+                if views[j].rstrip().endswith(":"):
+                    parent = j
+                    break
+            raw = capture_terms(views[parent]) if parent is not None else []
+            caps = raw if len({normalise(t) for t, _ in raw}) == 1 else []
+        for t, form in caps:
+            if normalise(t) and normalise(t) not in [f["term"] for f in found]:
+                row = {"term": normalise(t), "term_raw": t, "term_phrase_form": form, "role": role, "inherited_from_parent": parent is not None}
+                if parent is not None:
+                    row.update({"parent_item_head": views[parent].strip()[:120], "item_enumerator": token,
+                                "parent_enumerator": its[parent][1], "parent_item_index": parent})
+                found.append(row)
+    status = None if found else ("sibling_boundary" if blocked else "no_single_parent_term" if attempted else "no_item_contains_path")
+    distinct = sorted({r for r in roles if r})
+    path_role = distinct[0] if len(distinct) == 1 else ("multiple" if distinct else None)
+    form = {frozenset(): "none", frozenset({"singular"}): "singular", frozenset({"plural"}): "plural"}.get(frozenset(forms), "mixed")
+    return found, status, {"path_role": path_role, "term_phrase_form": form, "sibling_blocked": blocked}
 
 
 def definition_anchor(conn, title, part, section, path, instruction):
-    found, status = anchor_terms(instruction, path)
-    terms = [t for t, _, _ in found]
+    found, status, extra = anchor_terms(instruction, path)
+    terms = [f["term"] for f in found]
     key = f"ecfr:{title}:{part}"
     held = bool(conn.execute("SELECT 1 FROM source_document WHERE doc_key=?", (key,)).fetchone())
     rows = []
-    for term, raw, parent in found:
-        loc, cite = f"{section}({term}){path}", f"{title} CFR {section} “{term}” {path}"
-        row = {"term": term, "term_anchored_locator": loc, "term_anchored_citation": cite, "term_raw": raw,
-               "inherited_from_parent": parent is not None}
-        if parent is not None:
-            row["parent_item_head"] = parent
+    for f in found:
+        term = f["term"]
+        loc, cite = f"{section}({term}){path}", f"{title} CFR {section} \u201c{term}\u201d {path}"
+        row = {"term": term, "term_anchored_locator": loc, "term_anchored_citation": cite, **{k: v for k, v in f.items() if k != "term"}}
+        if f["role"] == "redesignation_target":
+            row["present_refers_to"] = "current_baseline_text"
         if not held:
             row["baseline_status"] = "baseline part not in index"
         else:
@@ -202,12 +274,12 @@ def definition_anchor(conn, title, part, section, path, instruction):
                                        WHERE d.doc_key=? AND p.section_no=? AND (p.locator LIKE ? ESCAPE '\\' OR p.citation LIKE ? ESCAPE '\\')
                                        ORDER BY p.ordinal""",
                                     (key, section, f"{like_escape(section)}({like_escape(term)})%",
-                                     f"% “{like_escape(term)}” %")).fetchall()
+                                     f"% \u201c{like_escape(term)}\u201d %")).fetchall()
                 row["like_matches"] = [{"locator": a, "citation": b} for a, b in like[:20]]
                 row["like_match_count"] = len(like)
         rows.append(row)
     out = {"terms": terms, "ambiguous": len(set(terms)) > 1, "baseline_doc_key": key, "baseline_in_index": held, "anchors": rows,
-           "containment": "token"}
+           "containment": "token", **extra}
     if status:
         out["parent_status"] = status
     return out

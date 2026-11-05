@@ -64,7 +64,7 @@ class FixtureOnlyTests(unittest.TestCase):
             self.assertEqual(paths.main(["--index", str(db), "--out", str(out)]), 0)
         self.assertEqual(hashlib.sha256(db.read_bytes()).hexdigest(), before)
         report = json.loads(out.read_text())
-        self.assertEqual(report["schema"], "p1-definition-relative-paths-0.3")  # S7-P1-85 schema bump
+        self.assertEqual(report["schema"], "p1-definition-relative-paths-0.4")  # S7-P1-86 schema bump
         self.assertEqual(report["decision_record"], "2026-11-04_s7-regintel-p1-founder-decisions_accepted.md")
         self.assertEqual((report["legal_validity"], report["applicability_status"]), ("not_determined", "not_assessed"))
         self.assertEqual(report["status"], "proposal; producer-reported; no gate approved; nothing authorised")
@@ -92,10 +92,15 @@ class DefinitionRelativeTests(unittest.TestCase):
         # S7-P1-84 (F-83-1): the term the instruction names for the path, and its term-anchored baseline locator
         self.assertEqual(obs["definition_anchor"]["terms"], ["Term"])
         self.assertIs(obs["definition_anchor"]["ambiguous"], False)
-        keys = ("term", "term_anchored_locator", "term_anchored_citation", "baseline_status")  # the 0.2 literal; 0.3 adds keys
+        keys = ("term", "term_anchored_locator", "term_anchored_citation", "baseline_status",  # the 0.2 literal
+                "term_raw", "inherited_from_parent",  # 0.3 keys (S7-P1-85)
+                "term_phrase_form", "role")  # 0.4 keys (S7-P1-86)
         self.assertEqual([{k: a[k] for k in keys} for a in obs["definition_anchor"]["anchors"]],
                          [{"term": "Term", "term_anchored_locator": "9.2(Term)(3)", "term_anchored_citation": "12 CFR 9.2 \u201cTerm\u201d (3)",
-                           "baseline_status": "baseline part not in index"}])
+                           "baseline_status": "baseline part not in index", "term_raw": "Term", "inherited_from_parent": False,
+                           "term_phrase_form": "singular", "role": "operand"}])
+        self.assertEqual({k: obs["definition_anchor"][k] for k in ("path_role", "term_phrase_form", "sibling_blocked")},
+                         {"path_role": "operand", "term_phrase_form": "singular", "sibling_blocked": []})
         self.assertEqual(obs["citation"], "12 CFR 9.2(3)")
         self.assertEqual(obs["baseline"], {"baseline_doc_key": "ecfr:12:9", "status": "baseline part not in index"})
         self.assertEqual((obs["resolve_future"]["resolved"], obs["resolve_future"]["achieved"]), (True, "paragraph"))
@@ -173,6 +178,70 @@ class DefinitionRelativeTests(unittest.TestCase):
         none = paths.definition_anchor(self.ix.conn, "12", "9", "9.8", "(5)", two_terms)
         self.assertEqual((none["terms"], none["parent_status"]), ([], "no_item_contains_path"))
 
+    def test_plural_definitions_capture_every_quoted_term(self):
+        # S7-P1-86 (F-85-2)
+        a = paths.definition_anchor(self.ix.conn, "12", "9", "9.9", "(2)",
+                                    "1. In § 9.9: a. Revise paragraph (2) of the definitions of “A” and “B”.")
+        self.assertEqual(a["terms"], ["A", "B"])
+        self.assertEqual([(x["term"], x["term_phrase_form"]) for x in a["anchors"]], [("A", "plural"), ("B", "plural")])
+        self.assertEqual((a["term_phrase_form"], a["ambiguous"]), ("plural", True))
+        self.assertEqual(paths.capture_terms("the definitions of “A”, “B”, and “C”; the definition for “D” or “E”"),
+                         [("A", "plural"), ("B", "plural"), ("C", "plural"), ("D", "singular"), ("E", "singular")])
+        mixed = paths.definition_anchor(self.ix.conn, "12", "9", "9.9", "(2)",
+                                        "1. In § 9.9: a. Revise paragraph (2) of the definitions of “A”, “B” and the definition of “C”.")
+        self.assertEqual((mixed["terms"], mixed["term_phrase_form"]), (["A", "B", "C"], "mixed"))
+
+    def test_the_sibling_guard_stops_inheritance_at_an_item_of_the_same_class(self):
+        # S7-P1-86 (F-85-1)
+        text = "1. In § 9.7: ee. In the definition of “Gamma”: i. Remove paragraph (2); ii. Revise paragraph (4); ff. Revise paragraph (3)."
+        anchor = lambda p: paths.definition_anchor(self.ix.conn, "12", "9", "9.7", p, text)
+        three = anchor("(3)")
+        self.assertEqual((three["terms"], three["parent_status"]), ([], "sibling_boundary"))
+        self.assertEqual(three["sibling_blocked"],
+                         [{"item_index": 4, "item_enumerator": "ff", "stopped_at_index": 1, "stopped_at_enumerator": "ee"}])
+        for path, enumerator in (("(2)", "i"), ("(4)", "ii")):
+            a = anchor(path)
+            self.assertEqual(a["terms"], ["Gamma"])
+            self.assertEqual([(x["inherited_from_parent"], x["item_enumerator"], x["parent_enumerator"], x["parent_item_index"])
+                              for x in a["anchors"]], [(True, enumerator, "ee", 1)])
+            self.assertNotIn("parent_status", a)
+        # measured limit: designator_classes gives "ii" and "iii" the same class {roman}, so "iii." stops at "ii."
+        limit = paths.definition_anchor(self.ix.conn, "12", "9", "9.7", "(5)", "1. In § 9.7: ee. In the definition of “Gamma”: "
+                                        "i. Remove paragraph (2); ii. Revise paragraph (4); iii. Revise paragraph (5).")
+        self.assertEqual((limit["terms"], limit["parent_status"], limit["sibling_blocked"]),
+                         ([], "sibling_boundary", [{"item_index": 4, "item_enumerator": "iii", "stopped_at_index": 3,
+                                                    "stopped_at_enumerator": "ii"}]))
+
+    def test_redesignation_source_and_target_roles(self):
+        # S7-P1-86 (F-85-3)
+        text = "1. In § 9.8: a. In the definition of “Delta”: i. Redesignate paragraph (4) as paragraph (3)."
+        four = paths.definition_anchor(self.ix.conn, "12", "9", "9.8", "(4)", text)
+        three = paths.definition_anchor(self.ix.conn, "12", "9", "9.8", "(3)", text)
+        self.assertEqual([(x["term"], x["role"]) for x in four["anchors"]], [("Delta", "redesignation_source")])
+        self.assertNotIn("present_refers_to", four["anchors"][0])
+        self.assertEqual([(x["term"], x["role"], x["present_refers_to"]) for x in three["anchors"]],
+                         [("Delta", "redesignation_target", "current_baseline_text")])
+        self.assertEqual((four["path_role"], three["path_role"]), ("redesignation_source", "redesignation_target"))
+        self.assertEqual(paths.item_role("ii. Redesignate paragraphs (1)(i) and (1)(ii) as paragraphs (1) and (2);", "(2)"),
+                         "redesignation_target")
+        self.assertEqual(paths.item_role("ii. Redesignate paragraphs (1)(i) and (1)(ii) as paragraphs (1) and (2); and iii. In paragraph (2)",
+                                         "(2)"), "multiple")  # one item (no boundary before "and iii."): target and operand
+        self.assertEqual(paths.item_role("i. Remove paragraph (2); ii. Redesignate paragraph (1) as paragraph (2).", "(2)"), "multiple")
+
+    def test_terms_and_containment_read_the_same_parsing_view(self):
+        # S7-P1-86 (F-85-4): whitespace inside a designator is removed by fedreg.parsing_view for both the path and the term
+        a = paths.definition_anchor(self.ix.conn, "12", "9", "9.9", "(3)", "1. In § 9.9: a. Revise paragraph ( 3 ) of the definition of “Rate ( a )”.")
+        self.assertEqual([(x["term"], x["term_raw"]) for x in a["anchors"]], [("Rate (a)", "Rate (a)")])
+
+    def test_enum_boundary_punctuation_is_one_character(self):
+        # S7-P1-86 (F-85-5): items() cuts at b.start(1) + 1, which equals b.end(1) only while group 1 is one character
+        spans = []
+        for text in ("x; a. y", "x: i. y", "x. 2. y", "x: (ii) y", "x; (A) y"):
+            b = paths.fedreg.ENUM_BOUNDARY.search(text)
+            spans.append((text, b.group(1), b.end(1) - b.start(1), b.start(1) + 1 == b.end(1), paths.fedreg._boundary_token(b)))
+        self.assertEqual(spans, [("x; a. y", ";", 1, True, "a"), ("x: i. y", ":", 1, True, "i"), ("x. 2. y", ".", 1, True, "2"),
+                                 ("x: (ii) y", ":", 1, True, "ii"), ("x; (A) y", ";", 1, True, "A")])
+
 
 class HeldBaselineTests(unittest.TestCase):
     """S7-P1-85 (F-84-5). The task-77 builder cannot carry an eCFR document other than ecfr:31:1010
@@ -209,6 +278,12 @@ class HeldBaselineTests(unittest.TestCase):
         self.assertEqual([m["locator"] for m in a["anchors"][0]["like_matches"]], ["9.2(Term)", "9.2(Term)(3)"])
         pct = paths.definition_anchor(self.conn, "12", "9", "9.2", "(1)", "1. In § 9.2: a. Revise paragraph (1) of the definition of “Rate 5%”.")
         self.assertEqual(pct["anchors"][0]["like_match_count"], 0)  # unescaped, `5%` would match 9.2(Rate 5x)(1)
+
+    def test_a_held_redesignation_target_says_what_present_refers_to(self):
+        a = paths.definition_anchor(self.conn, "12", "9", "9.2", "(3)",
+                                    "1. In § 9.2: a. In the definition of “Term”: i. Redesignate paragraph (4) as paragraph (3).")
+        self.assertEqual([(x["role"], x["term_anchored_present"], x["present_refers_to"], x["baseline_locator"]) for x in a["anchors"]],
+                         [("redesignation_target", True, "current_baseline_text", "9.2(Term)(3)")])
 
     def test_census_keeps_the_old_counts_and_adds_the_balanced_count(self):
         self.assertEqual(paths.term_anchor_census(self.conn, {"ecfr:12:9", "ecfr:12:99"}), {
