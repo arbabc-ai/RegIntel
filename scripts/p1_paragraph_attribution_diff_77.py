@@ -21,7 +21,7 @@ REPO = Path(__file__).resolve().parents[1]
 if str(REPO) not in sys.path:
     sys.path.insert(0, str(REPO))
 
-from regintel_p1 import fedreg  # noqa: E402
+from regintel_p1 import build, fedreg  # noqa: E402
 
 DEFAULT_MANIFEST = "/home/arbab/projects/regintel-corpus/phase1/manifest.json"
 
@@ -41,14 +41,7 @@ def dump(manifest_path):
         if hashlib.sha256(raw).hexdigest() != entry["asset"]["sha256"]:
             raise ValueError(f"{key}: raw bytes do not match the pinned sha256")
         _provisions, parsed, _stats = fedreg.parse_fr(raw, key.split(":", 1)[1])
-        n = 0  # the index locator of regintel_p1/build.py: unit_id:section:n over non-appendix-text units
-        for u in parsed:
-            ap = u.get("appendix")
-            if ap and ap.get("kind") == "appendix_extract" and u["text"]:
-                locator = f"{u['unit_id']}:appx-{ap['part']}-{ap['letter'] or 'unknown'}:{ap['chunk']:03d}of{ap['chunks']:03d}"
-            else:
-                n += 1
-                locator = f"{u['unit_id']}:{u['section_no'] or 'part'}:{n}"
+        for u, locator in zip(parsed, build.amendment_locators(parsed)):  # the index locators (S7-P1-78: shared with build.py)
             if locator in units:
                 raise ValueError(f"{key}: duplicate locator {locator}")
             units[locator] = {"doc_key": key, "section_no": u.get("section_no"), "instruction": u.get("instruction"),

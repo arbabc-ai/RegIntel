@@ -20,6 +20,29 @@ NON_CONTENT_KINDS = ("part", "subpart", "authority", "source", "footnote")
 DEPENDENCIES_PATH = Path(__file__).with_name("topic_dependencies.json")
 
 
+def is_appendix_text(unit):
+    """True for a recovered appendix-text unit (`appendix_extract` with text), which gets an appendix locator and no running number."""
+    ap = unit.get("appendix")
+    return bool(ap and ap.get("kind") == "appendix_extract" and unit["text"])
+
+
+def amendment_locators(units):
+    """The index locator of each parse_fr amendment unit, in order (S7-P1-78: the one derivation, shared with the attribution diff).
+
+    Appendix-text units: `unit_id:appx-PART-LETTER:CHUNKofCHUNKS`. Every other unit: `unit_id:SECTION:n` (`part` when no section), where n
+    counts only non-appendix-text units, so recovered appendix chunks never shift earlier locators.
+    """
+    out, n = [], 0
+    for u in units:
+        if is_appendix_text(u):
+            ap = u["appendix"]
+            out.append(f"{u['unit_id']}:appx-{ap['part']}-{ap['letter'] or 'unknown'}:{ap['chunk']:03d}of{ap['chunks']:03d}")
+        else:
+            n += 1
+            out.append(f"{u['unit_id']}:{u['section_no'] or 'part'}:{n}")
+    return out
+
+
 def fts_rows(prov):
     head = " ".join(x for x in (prov.get("citation"), prov.get("heading"), prov.get("defined_term"),
                                 prov.get("subject")) if x)
@@ -116,18 +139,18 @@ def build(corpus_dir, db_path, as_of, log=print):
                     "heading": passage["heading"], "context": passage["heading"], "text": passage["text"],
                     "fr_page": passage["fr_page"], "ordinal": n})
             spans = extract_spans(raw.decode("utf-8")) if any(u.get("appendix") for u in units) else []
-            n = 0  # position among non-appendix-text units: unchanged by recovered appendix chunks, so earlier locators are stable
+            locators = amendment_locators(units)  # unit_id:section:n, or the appendix locator for appendix text
+            n = 0  # position among non-appendix-text units (the n of the locator; also the ordinal below)
             for k, u in enumerate(units, 1):
                 ap = u.get("appendix")
-                if ap and ap.get("kind") == "appendix_extract" and u["text"]:
+                if is_appendix_text(u):
                     span = spans[ap["extract_index"]] if ap.get("extract_index") is not None and ap["extract_index"] < len(spans) else (None, None)
                     ap = {**ap, "source_sha256": digest, "source_asset_url": asset.get("url"), "source_url": d.get("source_url"),
                           "source_span": "whole EXTRACT element, characters of the UTF-8-decoded source",
                           "policy_statement": bool(re.search(r"policy statement", ap.get("title") or "", re.I)),
                           "note": "text as published; binding effect, applicability and amended passages are not determined"}
-                    where = f"appx-{ap['part']}-{ap['letter'] or 'unknown'}"
                     provs.append({
-                        "locator": f"{u['unit_id']}:{where}:{ap['chunk']:03d}of{ap['chunks']:03d}", "kind": "amendment",
+                        "locator": locators[k - 1], "kind": "amendment",
                         "citation": (f"FR Doc. {doc_no}, appendix text: {u['title_no'] or '?'} CFR Part {ap['part']}, "
                                      f"Appendix {ap['letter'] or '?'} (passage {ap['chunk']} of {ap['chunks']})"),
                         "title_no": u["title_no"], "part_no": u["part_no"], "section_no": None,
@@ -144,7 +167,7 @@ def build(corpus_dir, db_path, as_of, log=print):
                 n += 1
                 label = u["section_no"] or (f"Part {u['part_no']}" if u["part_no"] else "regulatory text")
                 provs.append({
-                    "locator": f"{u['unit_id']}:{u['section_no'] or 'part'}:{n}", "kind": "amendment",
+                    "locator": locators[k - 1], "kind": "amendment",
                     "citation": f"FR Doc. {doc_no}, amendment to {u['title_no'] or '?'} CFR {label}",
                     "title_no": u["title_no"], "part_no": u["part_no"], "section_no": u["section_no"],
                     "heading": u["subject"], "context": u["subject"] or "", "text": u["text"] or u["instruction"],

@@ -193,7 +193,10 @@ class EvaluatorTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             ix = build_index(tmp)
             for x in reg["triple_letter_paragraph_list"]:
-                self.assertTrue(evaluate.check_triple_letter_paragraph_list(ix, x)["passed"], x["id"])
+                out = evaluate.check_triple_letter_paragraph_list(ix, x)
+                self.assertTrue(out["passed"], x["id"])
+                if x["kind"] == "stored":  # S7-P1-78: the synthetic index holds none of the acquired units, and says so
+                    self.assertEqual((out["units_checked"], out["units_skipped"]), (0, 4))
             positive = next(x for x in reg["triple_letter_paragraph_list"] if x["kind"] == "positive")
             with pre_fix():
                 self.assertFalse(evaluate.check_triple_letter_paragraph_list(ix, positive)["passed"])

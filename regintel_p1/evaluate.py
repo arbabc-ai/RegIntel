@@ -1858,10 +1858,13 @@ def check_lowercase_paragraph_clause(index, item):
             got = fedreg.named_paragraph_paths(text)
             if got:
                 failures.append(f"'{text[:60]}': named {got}, expected nothing")
+    checked = skipped = 0  # S7-P1-78: delta expectations whose document is absent from the index are skipped, and now counted
     if kind in ("positive", "negative") and item.get("delta"):
         for d in item["delta"]:
             if d["doc_key"] not in have:
+                skipped += 1
                 continue
+            checked += 1
             inst = {g["doc_key"]: g["paragraph_precision"] for g in index.delta(d["citation"])["instruments"]}
             for doc, want in d["expect"].items():
                 got = inst.get(doc)
@@ -1876,7 +1879,9 @@ def check_lowercase_paragraph_clause(index, item):
     elif kind == "exact_citation":
         for d in item["delta"]:
             if d["doc_key"] not in have:
+                skipped += 1
                 continue
+            checked += 1
             r = index.resolve_citations(d["citation"], "future")[0]
             out = index.answer(d["citation"], mode="exact", scope="future", k=10)
             if not r["resolved"] or d["doc_key"] not in {x["doc_key"] for x in out["results"]} or \
@@ -1884,7 +1889,8 @@ def check_lowercase_paragraph_clause(index, item):
                 failures.append(f"{d['citation']}: future citation did not resolve to {d['doc_key']}")
             if out["applicability_status"] != "not_assessed":
                 failures.append("applicability_status changed")
-    return {"id": item["id"], "kind": kind, "passed": not failures, "failures": failures[:10]}
+    return {"id": item["id"], "kind": kind, "passed": not failures, "failures": failures[:10],
+            "deltas_checked": checked, "deltas_skipped": skipped}
 
 
 def check_paragraph_evidence_integrity(index, item):
@@ -2178,21 +2184,28 @@ def check_triple_letter_paragraph_list(index, item):
     """Guard for added-paragraph lists of tripled letters ("Adding paragraphs (nnn), (ooo), ... and (xxx)", S7-P1-77). `positive`: the grammar
     names every listed path, single- and triple-letter members alike, and, where the acquired index holds the document, delta support for a
     later member comes from the instruments that name it (others stay section context). `negative`: quoted replacement text, a
-    cross-reference and a malformed designator name nothing. `stored`: where the index holds the unit, its stored explicit_paragraphs equal
-    the expected paths. Textual evidence only."""
+    cross-reference and a malformed designator name nothing. `stored`: for each unit whose document the index holds, the locator row must
+    exist ("document indexed but locator not found" otherwise) and its stored explicit_paragraphs equal the expected paths; units of
+    documents absent from the index are counted as skipped (S7-P1-78), never silently passed. Textual evidence only."""
     if item["kind"] in ("positive", "negative"):
         return {**check_lowercase_paragraph_clause(index, item), "id": item["id"], "kind": item["kind"]}
-    failures = []
+    failures, checked, skipped = [], 0, 0
     for u in item["units"]:
+        if index.conn.execute("SELECT 1 FROM source_document WHERE doc_key=?", (u["doc_key"],)).fetchone() is None:
+            skipped += 1  # the document is not in this index
+            continue
+        checked += 1
         row = index.conn.execute(
             """SELECT p.explicit_paragraphs FROM provision p JOIN source_document d ON d.id=p.doc_id
                WHERE d.doc_key=? AND p.locator=? AND p.kind='amendment'""", (u["doc_key"], u["locator"])).fetchone()
         if row is None:
-            continue  # the document is not in this index
+            failures.append(f"{u['locator']}: document indexed but locator not found")
+            continue
         got = json.loads(row[0] or "{}")
         if (got.get("status"), got.get("paths")) != ("attributed", u["paths"]):
             failures.append(f"{u['locator']}: stored {got.get('status')} {got.get('paths')} != attributed {u['paths']}")
-    return {"id": item["id"], "kind": item["kind"], "passed": not failures, "failures": failures[:10]}
+    return {"id": item["id"], "kind": item["kind"], "passed": not failures, "failures": failures[:10],
+            "units_checked": checked, "units_skipped": skipped}
 
 def run_regressions(index, path):
     spec = json.loads(Path(path).read_text())
@@ -2475,7 +2488,9 @@ def render(report):
         for c in reg["citation_scope"]:
             lines.append(f"  {c['id']} {'PASS' if c['passed'] else 'FAIL'} citation scope '{c['query']}' {'; '.join(c['failures'])}")
         for x in reg.get("triple_letter_paragraph_list", []):
-            lines.append(f"  {x['id']} {'PASS' if x['passed'] else 'FAIL'} triple-letter paragraph list [{x['kind']}] {'; '.join(x['failures'])}")
+            counts = (f"units checked={x['units_checked']} skipped={x['units_skipped']}" if "units_checked" in x else
+                      f"deltas checked={x.get('deltas_checked', 0)} skipped={x.get('deltas_skipped', 0)}")
+            lines.append(f"  {x['id']} {'PASS' if x['passed'] else 'FAIL'} triple-letter paragraph list [{x['kind']}] {counts} {'; '.join(x['failures'])}")
         for x in reg.get("parenthesized_paragraph_list", []):
             lines.append(f"  {x['id']} {'PASS' if x['passed'] else 'FAIL'} parenthesized paragraph list [{x['kind']}] {'; '.join(x['failures'])}")
         for x in reg.get("enumerated_paragraph_location", []):
