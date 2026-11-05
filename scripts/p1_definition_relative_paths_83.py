@@ -52,6 +52,21 @@ A5 (0.4, S7-P1-86, C3 F-85-1..F-85-5). Every 0.1-0.3 field keeps its name and me
     group 2 "redesignation_target", elsewhere "operand" (several distinct roles in one item: "multiple"). Each anchor row has `role`
     (of the item its path was found in); definition_anchor has `path_role` over all containing items; target rows add
     `present_refers_to: "current_baseline_text"`. baseline() and term_anchored_present are unchanged.
+A6 (0.5, S7-P1-87, C3 F-86-1, F-86-2). Every 0.1-0.4 field keeps its name and meaning except two that are REMOVED: the
+    definition_anchor list `sibling_blocked` and the parent_status value "sibling_boundary". (F-86-1) Sibling skip: walking back from a
+    containing item, an earlier item is a sibling when enumerator_class(its token) & the containing item's class is non-empty; a sibling
+    is skipped (never a parent) and listed in definition_anchor `sibling_skipped` as {item_index, item_enumerator, skipped_index,
+    skipped_enumerator}; the walk continues to the nearest earlier non-sibling item whose parsing view ends with ":" (the parent), or to
+    no parent. Candidate items use the full fedreg.designator_classes set ("i", "v", "x" are {letter, roman}). The containing item's own
+    class is the single class fedreg._enum_class resolves for its token ("i" opens a roman list, "v" and "x" read as letters), so an
+    "i." item is not the sibling of the lettered item that introduces it; with the full set on both sides an "i." item would skip its
+    own parent ("a.", "ee."). fedreg.designator_classes and fedreg._enum_class are used read-only and unchanged. With no term found,
+    parent_status is "no_single_parent_term" or "no_item_contains_path" as in 0.3. (F-86-2) REDESIGNATION matches only the verb
+    redesignate / redesignates / redesignated / redesignating as a word, not after "newly "; groups 1 and 2 are designator lists only
+    (runs of `(x)` designators joined by ",", "and", "or", "through", each optionally after "paragraph(s)"), with no ";" or ":" inside.
+    definition_anchor also gains `item_walks`: one entry per containing item, with its `direct_terms`, or with the `parent_index`,
+    `parent_enumerator` and `inherited_terms` its walk reached, so that a term reached through a later item (anchor rows keep only the
+    first occurrence) stays visible.
 The index is opened through regintel_p1.search.Index (sqlite3 mode=ro, regintel_p1/search.py:505); the CLI hashes it before and after and
 exits 1 only if it changed.
 
@@ -73,7 +88,7 @@ if str(REPO) not in sys.path:
 from regintel_p1 import fedreg  # noqa: E402
 from regintel_p1.search import Index  # noqa: E402
 
-SCHEMA = "p1-definition-relative-paths-0.4"  # 0.4 (S7-P1-86): plural terms, sibling guard, redesignation roles, one view
+SCHEMA = "p1-definition-relative-paths-0.5"  # 0.5 (S7-P1-87): sibling skip, designator-list redesignation
 DECISION_RECORD = "2026-11-04_s7-regintel-p1-founder-decisions_accepted.md"
 CLASSES = ("letter", "digit", "roman", "other_or_ambiguous")
 
@@ -145,7 +160,9 @@ def baseline(conn, title, part, section, path):
 QUOTED_TERM = r"[“\"]([^”\"]+)[”\"]"
 _Q = r"[“\"][^”\"]+[”\"]"
 TERM = re.compile(r"(definitions?)\s+(?:of|for)\s+(" + _Q + r"(?:(?:\s*,\s*(?:and\s+|or\s+)?|\s+(?:and|or)\s+)" + _Q + r")*)")  # S7-P1-86
-REDESIGNATION = re.compile(r"redesignat\w*\s+(?:paragraphs?|the\s+paragraphs?)\s+(.+?)\s+as\s+(?:paragraphs?\s+)?(.+?)[.;:]", re.I)
+_RUN = r"(?:paragraphs?\s+)?(?:\([^();:]+\))+"  # S7-P1-87 (F-86-2): one designator run, e.g. (d)(20)
+_LIST = _RUN + r"(?:(?:\s*,\s*(?:and\s+|or\s+|through\s+)?|\s+(?:and|or|through)\s+)" + _RUN + r")*"
+REDESIGNATION = re.compile(r"(?<!newly\s)\bredesignat(?:e|es|ed|ing)\b\s+(?:the\s+)?(" + _LIST + r")\s+as\s+(" + _LIST + r")", re.I)
 TERM_SEGMENT = re.compile(r"^\d+\.\d+\([^()]*[A-Za-z ][^()]*\)")
 DESIGNATOR_SHAPE = re.compile(r"^(?:[a-z]{1,3}|[ivxl]+|\d+|[A-Z]{1,2})$")
 
@@ -168,6 +185,11 @@ def items(instruction):
 
 def enumerator_class(token):
     return frozenset(fedreg.designator_classes(f"({token})")) if token else frozenset()
+
+
+def containing_class(token):
+    """S7-P1-87: the single list class fedreg._enum_class resolves for the containing item's token."""
+    return frozenset({fedreg._enum_class(token)}) if token else frozenset()
 
 
 def capture_terms(view):
@@ -215,7 +237,7 @@ def anchor_terms(instruction, path):
     parent_status when nothing was found."""
     its = enumerated_items(instruction)
     views = [fedreg.parsing_view(text) for text, _ in its]
-    found, roles, forms, blocked, attempted = [], [], [], [], False
+    found, roles, forms, skipped, walks, attempted = [], [], [], [], [], False
     for k, (text, token) in enumerate(its):
         if not contains(text, path):
             continue
@@ -226,16 +248,21 @@ def anchor_terms(instruction, path):
         forms += [f for _, f in caps]
         parent = None
         if not caps:
-            cls = enumerator_class(token)
+            cls = containing_class(token)
             for j in range(k - 1, -1, -1):
-                if enumerator_class(its[j][1]) == cls:
-                    blocked.append({"item_index": k, "item_enumerator": token, "stopped_at_index": j, "stopped_at_enumerator": its[j][1]})
-                    break
+                if enumerator_class(its[j][1]) & cls:  # a sibling: skipped, never a parent (S7-P1-87, F-86-1)
+                    skipped.append({"item_index": k, "item_enumerator": token, "skipped_index": j, "skipped_enumerator": its[j][1]})
+                    continue
                 if views[j].rstrip().endswith(":"):
                     parent = j
                     break
             raw = capture_terms(views[parent]) if parent is not None else []
             caps = raw if len({normalise(t) for t, _ in raw}) == 1 else []
+            walks.append({"item_index": k, "item_enumerator": token, "parent_index": parent,
+                          "parent_enumerator": its[parent][1] if parent is not None else None,
+                          "inherited_terms": [normalise(t) for t, _ in caps]})
+        else:
+            walks.append({"item_index": k, "item_enumerator": token, "direct_terms": [normalise(t) for t, _ in caps]})
         for t, form in caps:
             if normalise(t) and normalise(t) not in [f["term"] for f in found]:
                 row = {"term": normalise(t), "term_raw": t, "term_phrase_form": form, "role": role, "inherited_from_parent": parent is not None}
@@ -243,11 +270,11 @@ def anchor_terms(instruction, path):
                     row.update({"parent_item_head": views[parent].strip()[:120], "item_enumerator": token,
                                 "parent_enumerator": its[parent][1], "parent_item_index": parent})
                 found.append(row)
-    status = None if found else ("sibling_boundary" if blocked else "no_single_parent_term" if attempted else "no_item_contains_path")
+    status = None if found else ("no_single_parent_term" if attempted else "no_item_contains_path")
     distinct = sorted({r for r in roles if r})
     path_role = distinct[0] if len(distinct) == 1 else ("multiple" if distinct else None)
     form = {frozenset(): "none", frozenset({"singular"}): "singular", frozenset({"plural"}): "plural"}.get(frozenset(forms), "mixed")
-    return found, status, {"path_role": path_role, "term_phrase_form": form, "sibling_blocked": blocked}
+    return found, status, {"path_role": path_role, "term_phrase_form": form, "sibling_skipped": skipped, "item_walks": walks}
 
 
 def definition_anchor(conn, title, part, section, path, instruction):

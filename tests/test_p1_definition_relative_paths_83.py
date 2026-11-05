@@ -64,7 +64,7 @@ class FixtureOnlyTests(unittest.TestCase):
             self.assertEqual(paths.main(["--index", str(db), "--out", str(out)]), 0)
         self.assertEqual(hashlib.sha256(db.read_bytes()).hexdigest(), before)
         report = json.loads(out.read_text())
-        self.assertEqual(report["schema"], "p1-definition-relative-paths-0.4")  # S7-P1-86 schema bump
+        self.assertEqual(report["schema"], "p1-definition-relative-paths-0.5")  # S7-P1-87 schema bump
         self.assertEqual(report["decision_record"], "2026-11-04_s7-regintel-p1-founder-decisions_accepted.md")
         self.assertEqual((report["legal_validity"], report["applicability_status"]), ("not_determined", "not_assessed"))
         self.assertEqual(report["status"], "proposal; producer-reported; no gate approved; nothing authorised")
@@ -99,8 +99,10 @@ class DefinitionRelativeTests(unittest.TestCase):
                          [{"term": "Term", "term_anchored_locator": "9.2(Term)(3)", "term_anchored_citation": "12 CFR 9.2 \u201cTerm\u201d (3)",
                            "baseline_status": "baseline part not in index", "term_raw": "Term", "inherited_from_parent": False,
                            "term_phrase_form": "singular", "role": "operand"}])
-        self.assertEqual({k: obs["definition_anchor"][k] for k in ("path_role", "term_phrase_form", "sibling_blocked")},
-                         {"path_role": "operand", "term_phrase_form": "singular", "sibling_blocked": []})
+        self.assertEqual({k: obs["definition_anchor"][k] for k in ("path_role", "term_phrase_form", "sibling_skipped")},
+                         {"path_role": "operand", "term_phrase_form": "singular", "sibling_skipped": []})  # S7-P1-87: sibling_skipped
+        self.assertEqual(obs["definition_anchor"]["item_walks"], [{"item_index": 2, "item_enumerator": "b", "direct_terms": ["Term"]}])
+        self.assertNotIn("sibling_blocked", obs["definition_anchor"])  # removed in 0.5
         self.assertEqual(obs["citation"], "12 CFR 9.2(3)")
         self.assertEqual(obs["baseline"], {"baseline_doc_key": "ecfr:12:9", "status": "baseline part not in index"})
         self.assertEqual((obs["resolve_future"]["resolved"], obs["resolve_future"]["achieved"]), (True, "paragraph"))
@@ -191,26 +193,41 @@ class DefinitionRelativeTests(unittest.TestCase):
                                         "1. In § 9.9: a. Revise paragraph (2) of the definitions of “A”, “B” and the definition of “C”.")
         self.assertEqual((mixed["terms"], mixed["term_phrase_form"]), (["A", "B", "C"], "mixed"))
 
-    def test_the_sibling_guard_stops_inheritance_at_an_item_of_the_same_class(self):
-        # S7-P1-86 (F-85-1)
+    def test_siblings_are_skipped_and_never_parents(self):
+        # S7-P1-87 (F-86-1; replaces the S7-P1-86 stop-at-sibling literals)
         text = "1. In § 9.7: ee. In the definition of “Gamma”: i. Remove paragraph (2); ii. Revise paragraph (4); ff. Revise paragraph (3)."
         anchor = lambda p: paths.definition_anchor(self.ix.conn, "12", "9", "9.7", p, text)
         three = anchor("(3)")
-        self.assertEqual((three["terms"], three["parent_status"]), ([], "sibling_boundary"))
-        self.assertEqual(three["sibling_blocked"],
-                         [{"item_index": 4, "item_enumerator": "ff", "stopped_at_index": 1, "stopped_at_enumerator": "ee"}])
-        for path, enumerator in (("(2)", "i"), ("(4)", "ii")):
+        self.assertEqual((three["terms"], three["parent_status"]), ([], "no_single_parent_term"))  # parent: "1. In § 9.7:", no term
+        self.assertEqual(three["sibling_skipped"],
+                         [{"item_index": 4, "item_enumerator": "ff", "skipped_index": 2, "skipped_enumerator": "i"},
+                          {"item_index": 4, "item_enumerator": "ff", "skipped_index": 1, "skipped_enumerator": "ee"}])
+        for path, enumerator, skipped in (("(2)", "i", []),
+                                          ("(4)", "ii", [{"item_index": 3, "item_enumerator": "ii", "skipped_index": 2, "skipped_enumerator": "i"}])):
             a = anchor(path)
             self.assertEqual(a["terms"], ["Gamma"])
             self.assertEqual([(x["inherited_from_parent"], x["item_enumerator"], x["parent_enumerator"], x["parent_item_index"])
                               for x in a["anchors"]], [(True, enumerator, "ee", 1)])
+            self.assertEqual(a["sibling_skipped"], skipped)
             self.assertNotIn("parent_status", a)
-        # measured limit: designator_classes gives "ii" and "iii" the same class {roman}, so "iii." stops at "ii."
-        limit = paths.definition_anchor(self.ix.conn, "12", "9", "9.7", "(5)", "1. In § 9.7: ee. In the definition of “Gamma”: "
-                                        "i. Remove paragraph (2); ii. Revise paragraph (4); iii. Revise paragraph (5).")
-        self.assertEqual((limit["terms"], limit["parent_status"], limit["sibling_blocked"]),
-                         ([], "sibling_boundary", [{"item_index": 4, "item_enumerator": "iii", "stopped_at_index": 3,
-                                                    "stopped_at_enumerator": "ii"}]))
+        for a in (three, anchor("(2)")):
+            self.assertNotIn("sibling_blocked", a)
+        # the task-86 iii -> ii limit: "iii." now skips "ii." and "i." and inherits from "ee."
+        five = paths.definition_anchor(self.ix.conn, "12", "9", "9.7", "(5)", "1. In § 9.7: ee. In the definition of “Gamma”: "
+                                       "i. Remove paragraph (2); ii. Revise paragraph (4); iii. Revise paragraph (5).")
+        self.assertEqual(five["terms"], ["Gamma"])
+        self.assertEqual([(x["inherited_from_parent"], x["parent_enumerator"]) for x in five["anchors"]], [(True, "ee")])
+        self.assertEqual(five["sibling_skipped"],
+                         [{"item_index": 4, "item_enumerator": "iii", "skipped_index": 3, "skipped_enumerator": "ii"},
+                          {"item_index": 4, "item_enumerator": "iii", "skipped_index": 2, "skipped_enumerator": "i"}])
+        self.assertNotIn("parent_status", five)
+        self.assertEqual(five["item_walks"], [{"item_index": 4, "item_enumerator": "iii", "parent_index": 1, "parent_enumerator": "ee",
+                                               "inherited_terms": ["Gamma"]}])
+        self.assertEqual(three["item_walks"], [{"item_index": 4, "item_enumerator": "ff", "parent_index": 0, "parent_enumerator": None,
+                                                "inherited_terms": []}])
+        # the containing class is fedreg._enum_class's single class; candidates keep the full designator_classes set
+        self.assertEqual((paths.containing_class("i"), paths.containing_class("ee"), paths.enumerator_class("i")),
+                         (frozenset({"roman"}), frozenset({"letter"}), frozenset({"letter", "roman"})))
 
     def test_redesignation_source_and_target_roles(self):
         # S7-P1-86 (F-85-3)
@@ -227,6 +244,21 @@ class DefinitionRelativeTests(unittest.TestCase):
         self.assertEqual(paths.item_role("ii. Redesignate paragraphs (1)(i) and (1)(ii) as paragraphs (1) and (2); and iii. In paragraph (2)",
                                          "(2)"), "multiple")  # one item (no boundary before "and iii."): target and operand
         self.assertEqual(paths.item_role("i. Remove paragraph (2); ii. Redesignate paragraph (1) as paragraph (2).", "(2)"), "multiple")
+
+    def test_redesignation_is_a_verb_over_designator_lists(self):
+        # S7-P1-87 (F-86-2)
+        text = ("1. In § 9.8: a. In the definition of “Delta”: i. Redesignate paragraph (4) as paragraph (3) and revise newly "
+                "redesignated paragraph (3).")
+        three = paths.definition_anchor(self.ix.conn, "12", "9", "9.8", "(3)", text)
+        four = paths.definition_anchor(self.ix.conn, "12", "9", "9.8", "(4)", text)
+        self.assertEqual((three["path_role"], four["path_role"]), ("multiple", "redesignation_source"))
+        item = ("f. In newly redesignated paragraph (g), removing “(e)” and adding in its place “(f)”; and g. Adding paragraphs (i) and (j). "
+                "The additions read as follows:")
+        self.assertEqual(paths.item_role(item, "(i)"), "operand")
+        self.assertEqual(paths.REDESIGNATION.search("a. Redesignate paragraphs (d)(20) through (21) as (d)(21) through (22), "
+                                                    "respectively;").groups(), ("paragraphs (d)(20) through (21)", "(d)(21) through (22)"))
+        self.assertIsNone(paths.REDESIGNATION.search("Revise newly redesignated paragraph (3) as follows: (a)"))
+        self.assertIsNone(paths.REDESIGNATION.search("the redesignation of paragraph (4) as paragraph (3)"))
 
     def test_terms_and_containment_read_the_same_parsing_view(self):
         # S7-P1-86 (F-85-4): whitespace inside a designator is removed by fedreg.parsing_view for both the path and the term
